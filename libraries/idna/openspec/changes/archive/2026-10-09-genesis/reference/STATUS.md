@@ -117,3 +117,8 @@ Stated in the sources, not seen by me:
 `idn-hostname` and `idn-email`), and the `idna::error` values it returns as its rules' reasons
 (`contexto`, `hyphen_at_start_or_end`, `bidi`). A wrong verdict found there becomes a red test in
 idna, never a workaround in lexical.
+
+## Since this was written (2026-10-13)
+
+- MSVC 14.3 and 14.5: green since webcpp `2f20f4d` (CI run 38437880165). The vectors' generator escapes a digit that follows an octal escape (idna `bd8d0d5`), and the allocation and nfc tests count through the program's own heap and measure a container's bookkeeping first.
+- The former name: idna's `AGENTS.md`, `doc/testing.adoc` and `meta/include-boundaries.json` name webcpp::lexical (idna `bd8d0d5`).

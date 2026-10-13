@@ -66,3 +66,7 @@ its documentation and its history. What the sources themselves state as measured
    interop lanes, the page.
 5. The next change in line is `shared-connection`, which modifies the capability this genesis
    creates.
+
+## Since this was written (2026-10-13)
+
+- The interop scenario of a mesh of three counts the peers present, so that a handshake Trystero JS retries after 10 s no longer fails it (trystero `957eae5`).

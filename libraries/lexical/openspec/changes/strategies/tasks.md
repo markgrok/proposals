@@ -5,7 +5,7 @@ group 4 releases them. `reference/design.md` holds the detail each task needs.
 
 ## 0. Before: what 0.1.0 left open
 
-- [ ] 0.1 MSVC 14.3 and 14.5 green. The superproject now loads every Jamfile on Windows (`path.exists` given native paths, `1e33cbc` and `c53f3f9`), and CI run 38365413330 then ran lexical on MSVC for the first time: `allocation` fails, its replaced global `operator new` counting 0 where the test expects 1 or 2 (`the_instrument_counts`, `every_alignment_is_counted_and_honoured`, `iris_and_templates_allocate_within_their_bounds`). To fix and see green
+- [x] 0.1 MSVC 14.3 and 14.5 green: the superproject loads every Jamfile on Windows (`path.exists` given native paths) and the allocation test counts through the program's own heap; seen green on 2026-10-13 in CI run 38437880165
 - [ ] 0.2 `AGENTS.md`'s bullet on the regex bounds still names `max_regex_alternatives`, which the validator no longer has: reword it
 - [ ] 0.3 Measure the stack `is_regex` needs at `max_regex_nesting` on wasm32-wasip2 at `-O0` for the current validator, and state it in `AGENTS.md` and the page
 

@@ -71,3 +71,7 @@ repository's history 34 commits, all as `R`, from `094b228` ("the library's skel
 functions (the entry point of the change `strategies` when it lands), and its regex policy (its task 1.4, to
 redo) needs the matching interface of the change `strategies`, group 3: compile an ECMA-262 pattern for Boost.Regex and
 search with a step budget. That task 1.4 waits for that group.
+
+## Since this was written (2026-10-13)
+
+- MSVC 14.3 and 14.5: green since webcpp `2f20f4d` (CI run 38437880165); the allocation test counts through the program's own heap (lexical `18ef878`, `3ac7997`).

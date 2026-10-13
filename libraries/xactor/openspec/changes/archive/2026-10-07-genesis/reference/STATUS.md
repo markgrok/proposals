@@ -89,3 +89,7 @@ CI, and I know no CI run number for `62f3e77`.
 5. Before saying a task is done: the superproject's lint, `b2 -a libs/xactor/test libs/xactor/example`
    natively and for `toolset=clang-wasip2` and `toolset=clang-wasip3` with `testing.launcher=wasmtime`,
    `b2 -a libs/xactor/doc`, then CI on every lane.
+
+## Since this was written (2026-10-13)
+
+- Tests pin the error category's name and messages, `sequence_number::next()` and `envelope_log`'s equality, and the page's table lists the three `config` tests (xactor `50a43fb`).

@@ -133,3 +133,7 @@ the JavaScript lane, the npm package, the page and the lint; and any CI.
    or modifying requirements of the capability `document`; it does not edit `reference/`.
 5. Before saying a task is done: the lint, the tests and examples on every target, the lanes
    `oracle` and `js`, the page, and then the CI on every lane.
+
+## Since this was written (2026-10-13)
+
+- `doc/js-module.adoc` documents the module's `reserve` and `capacity`; `README.md` and `doc/introduction.adoc` name Boost.Charconv; the example `document_stream_js` exists, driven by Node in the own lane `js` (document `7f16566`). The npm package's core directory is made before the link that writes its declarations (document `3667adc`).
