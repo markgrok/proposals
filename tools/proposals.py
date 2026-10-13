@@ -108,8 +108,9 @@ def has_code(path: Path) -> bool:
     for file in reference.rglob('*'):
         if file.is_file() and file.suffix in CODE_SUFFIXES:
             return True
-    plan = reference / 'plan.md'
-    return plan.exists() and re.search(r'^```(cpp|c\+\+|python|jam|sh)', plan.read_text(), re.M) is not None
+    # A document of the reference whose fenced blocks hold the code: a plan's tasks, a spike's probes.
+    fence = re.compile(r'^```(cpp|c\+\+|c|python|jam|sh|js|mjs)\b', re.M)
+    return any(fence.search(document.read_text()) for document in reference.rglob('*.md'))
 
 
 def faults(proposal: Proposal) -> list[str]:

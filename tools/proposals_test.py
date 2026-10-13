@@ -113,6 +113,20 @@ class Faults(Scratch):
         (change / 'reference/plan.md').write_text('# Plan\n\n```cpp\nint main() {}\n```\n')
         self.assertEqual(self.problems(), [])
 
+    def test_a_spike_with_code_is_reference_code(self) -> None:
+        change = self.proposal('libraries/demo/openspec/changes/genesis',
+                               metadata(status='accepted', decided='2026-10-13'))
+        (change / 'reference').mkdir()
+        (change / 'reference/spike.md').write_text('# Spike\n\n```cpp\nint main() {}\n```\n')
+        self.assertEqual(self.problems(), [])
+
+    def test_prose_without_code_is_no_reference_code(self) -> None:
+        change = self.proposal('libraries/demo/openspec/changes/genesis',
+                               metadata(status='accepted', decided='2026-10-13'))
+        (change / 'reference').mkdir()
+        (change / 'reference/notes.md').write_text('# Notes\n\nNo code here.\n')
+        self.assertTrue(any('reference code' in p for p in self.problems()), self.problems())
+
     def test_an_implemented_proposal_is_archived_with_its_release(self) -> None:
         self.proposal('libraries/demo/openspec/changes/genesis',
                       metadata(status='implemented', decided='2026-10-13'), code=True)

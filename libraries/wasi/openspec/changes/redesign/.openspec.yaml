@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-08
+webcpp:
+  library: wasi
+  title: "wasi: one namespace per WASI version, one entry point, target features and run scripts"
+  kind: own
+  port_of: null
+  status: accepted
+  release: null
+  implementation: null
+  decided: 2026-10-09
