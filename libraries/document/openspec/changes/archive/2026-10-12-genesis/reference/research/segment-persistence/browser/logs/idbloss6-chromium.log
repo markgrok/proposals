@@ -1,0 +1,489 @@
+sigkill 0 4 pids {}
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":17.759999990463257,"durability":"strict"} 73
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":15.964999914169312,"durability":"relaxed"} 74
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":14.955000162124634,"durability":"default"} 97
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 11112
+112959451 -rw-------@ 1 rodrigo  staff   619590 Oct 11 23:46 000003.ldb
+112959396 -rw-------@ 1 rodrigo  staff  4016847 Oct 11 23:46 000004.log
+112959118 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112959115 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112959689 -rw-------@ 1 rodrigo  staff      457 Oct 11 23:46 LOG
+112959448 -rw-------@ 1 rodrigo  staff      729 Oct 11 23:46 LOG.old
+112959116 -rw-------@ 1 rodrigo  staff       80 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:11.416 5b32bc8 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:11.416 5b32bc8 Recovering log #4
+2026/10/11-23:46:11.418 5b32bc8 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:10.705 5b32ac9 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:10.705 5b32ac9 Recovering log #3
+2026/10/11-23:46:10.708 5b32ac9 Level-0 table #3: started
+2026/10/11-23:46:10.745 5b32ac9 Level-0 table #3: 619590 bytes OK
+2026/10/11-23:46:10.745 5b32ac9 Recovering log #4
+2026/10/11-23:46:10.745 5b32ac9 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+2026/10/11-23:46:10.746 5b32ac9 Delete type=0 #3
+2026/10/11-23:46:10.746 5b32ac9 Delete type=2 #5
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 640
+112959745 -rw-------@ 1 rodrigo  staff  311413 Oct 11 23:46 000003.log
+112959744 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112959742 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112959741 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112959743 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:12.049 5b32d0c Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:12.053 5b32d0c Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":15.950000047683716,"durability":"strict"} 66
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":16.240000009536743,"durability":"relaxed"} 66
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":13.914999961853027,"durability":"default"} 121
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 9752
+112959995 -rw-------@ 1 rodrigo  staff  4052789 Oct 11 23:46 000004.log
+112959996 -rw-------@ 1 rodrigo  staff   634049 Oct 11 23:46 000005.ldb
+112960237 -rw-------@ 1 rodrigo  staff   196608 Oct 11 23:46 000007.log
+112960238 -rw-------@ 1 rodrigo  staff    89961 Oct 11 23:46 000008.ldb
+112959744 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112959742 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112960232 -rw-------@ 1 rodrigo  staff      564 Oct 11 23:46 LOG
+112959991 -rw-------@ 1 rodrigo  staff      581 Oct 11 23:46 LOG.old
+112959743 -rw-------@ 1 rodrigo  staff       80 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:13.594 5b32fa1 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:13.595 5b32fa1 Recovering log #4
+2026/10/11-23:46:13.595 5b32fa1 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+2026/10/11-23:46:13.595 5b32fa1 Delete type=0 #3
+2026/10/11-23:46:13.803 5b32f9f Level-0 table #8: started
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:12.811 5b32e22 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:12.811 5b32e22 Recovering log #3
+2026/10/11-23:46:12.813 5b32e22 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+2026/10/11-23:46:12.889 5b32e20 Level-0 table #5: started
+2026/10/11-23:46:13.061 5b32e20 Level-0 table #5: 634049 bytes OK
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 704
+112960303 -rw-------@ 1 rodrigo  staff  345761 Oct 11 23:46 000003.log
+112960302 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112960300 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112960299 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112960301 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:14.339 5b330a1 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:14.343 5b330a1 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":14.214999914169312,"durability":"strict"} 72
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":12.934999942779541,"durability":"relaxed"} 71
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":12.229999780654907,"durability":"default"} 85
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 7968
+112960601 -rw-------@ 1 rodrigo  staff   620848 Oct 11 23:46 000003.ldb
+112960540 -rw-------@ 1 rodrigo  staff  3437741 Oct 11 23:46 000004.log
+112960302 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112960300 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112960598 -rw-------@ 1 rodrigo  staff      729 Oct 11 23:46 LOG
+112960537 -rw-------@ 1 rodrigo  staff      515 Oct 11 23:46 LOG.old
+112960301 -rw-------@ 1 rodrigo  staff       80 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:15.779 5b33328 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:15.779 5b33328 Recovering log #3
+2026/10/11-23:46:15.782 5b33328 Level-0 table #3: started
+2026/10/11-23:46:15.830 5b33328 Level-0 table #3: 620848 bytes OK
+2026/10/11-23:46:15.830 5b33328 Recovering log #4
+2026/10/11-23:46:15.830 5b33328 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+2026/10/11-23:46:15.831 5b33328 Delete type=0 #3
+2026/10/11-23:46:15.832 5b33328 Delete type=2 #5
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:15.111 5b33221 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:15.111 5b33221 Recovering log #3
+2026/10/11-23:46:15.113 5b33221 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+2026/10/11-23:46:15.161 5b3321f Level-0 table #5: started
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 768
+112960850 -rw-------@ 1 rodrigo  staff  380663 Oct 11 23:46 000003.log
+112960849 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112960847 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112960846 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112960848 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:16.584 5b33499 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:16.587 5b33499 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+sigkill 10 4 pids {"opfs-s0":{"consistent":10,"torn":0,"lost":0,"hang":0},"opfs-s1":{"consistent":10,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":10,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":7,"torn":0,"lost":3,"hang":0},"idb-relaxed":{"consistent":7,"torn":0,"lost":3,"hang":0},"idb-default":{"consistent":7,"torn":0,"lost":3,"hang":0}}
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":17.764999866485596,"durability":"strict"} 60
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":16.94000005722046,"durability":"relaxed"} 61
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":15.474999904632568,"durability":"default"} 77
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 5328
+112961146 -rw-------@ 1 rodrigo  staff   622141 Oct 11 23:46 000003.ldb
+112960903 -rw-------@ 1 rodrigo  staff  2088739 Oct 11 23:46 000004.log
+112960849 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112960847 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112961143 -rw-------@ 1 rodrigo  staff      729 Oct 11 23:46 LOG
+112960900 -rw-------@ 1 rodrigo  staff      515 Oct 11 23:46 LOG.old
+112960848 -rw-------@ 1 rodrigo  staff       80 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:18.000 5b33720 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:18.000 5b33720 Recovering log #3
+2026/10/11-23:46:18.003 5b33720 Level-0 table #3: started
+2026/10/11-23:46:18.046 5b33720 Level-0 table #3: 622141 bytes OK
+2026/10/11-23:46:18.047 5b33720 Recovering log #4
+2026/10/11-23:46:18.047 5b33720 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+2026/10/11-23:46:18.049 5b33720 Delete type=0 #3
+2026/10/11-23:46:18.049 5b33720 Delete type=2 #5
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:17.268 5b335a0 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:17.268 5b335a0 Recovering log #3
+2026/10/11-23:46:17.270 5b335a0 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+2026/10/11-23:46:17.430 5b3359a Level-0 table #5: started
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 776
+112961208 -rw-------@ 1 rodrigo  staff  381033 Oct 11 23:46 000003.log
+112961207 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112961205 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112961204 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112961206 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:18.777 5b33850 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:18.779 5b33850 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":22.08999991416931,"durability":"strict"} 78
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":21.194999933242798,"durability":"relaxed"} 78
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":20.694999933242798,"durability":"default"} 116
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 11920
+112961460 -rw-------@ 1 rodrigo  staff  4051812 Oct 11 23:46 000004.log
+112961461 -rw-------@ 1 rodrigo  staff   622766 Oct 11 23:46 000005.ldb
+112961509 -rw-------@ 1 rodrigo  staff   943668 Oct 11 23:46 000007.log
+112961510 -rw-------@ 1 rodrigo  staff   458728 Oct 11 23:46 000008.ldb
+112961207 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112961205 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112961506 -rw-------@ 1 rodrigo  staff      515 Oct 11 23:46 LOG
+112961457 -rw-------@ 1 rodrigo  staff      630 Oct 11 23:46 LOG.old
+112961206 -rw-------@ 1 rodrigo  staff       80 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:20.404 5b33b00 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:20.404 5b33b00 Recovering log #4
+2026/10/11-23:46:20.406 5b33b00 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+2026/10/11-23:46:20.472 5b33af0 Level-0 table #8: started
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:19.622 5b339ab Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:19.622 5b339ab Recovering log #3
+2026/10/11-23:46:19.624 5b339ab Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+2026/10/11-23:46:19.663 5b339ab Level-0 table #5: started
+2026/10/11-23:46:19.781 5b339ab Level-0 table #5: 622766 bytes OK
+2026/10/11-23:46:19.784 5b339ab Delete type=0 #3
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 776
+112961765 -rw-------@ 1 rodrigo  staff  381014 Oct 11 23:46 000003.log
+112961764 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112961762 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112961761 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112961763 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:21.142 5b33c24 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:21.147 5b33c24 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":16.390000104904175,"durability":"strict"} 66
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":14.680000066757202,"durability":"relaxed"} 67
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":13.355000019073486,"durability":"default"} 93
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 7360
+112962060 -rw-------@ 1 rodrigo  staff   622243 Oct 11 23:46 000003.ldb
+112961823 -rw-------@ 1 rodrigo  staff  3126976 Oct 11 23:46 000004.log
+112961764 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112961762 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112962059 -rw-------@ 1 rodrigo  staff      729 Oct 11 23:46 LOG
+112961815 -rw-------@ 1 rodrigo  staff      515 Oct 11 23:46 LOG.old
+112961763 -rw-------@ 1 rodrigo  staff       80 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:22.535 5b33e9c Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:22.535 5b33e9c Recovering log #3
+2026/10/11-23:46:22.538 5b33e9c Level-0 table #3: started
+2026/10/11-23:46:22.548 5b33e9c Level-0 table #3: 622243 bytes OK
+2026/10/11-23:46:22.548 5b33e9c Recovering log #4
+2026/10/11-23:46:22.548 5b33e9c Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+2026/10/11-23:46:22.551 5b33e9c Delete type=0 #3
+2026/10/11-23:46:22.551 5b33e9c Delete type=2 #5
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:21.912 5b33d95 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:21.912 5b33d95 Recovering log #3
+2026/10/11-23:46:21.915 5b33d95 Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+2026/10/11-23:46:21.973 5b33d90 Level-0 table #5: started
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 840
+112962129 -rw-------@ 1 rodrigo  staff  416131 Oct 11 23:46 000003.log
+112962128 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112962126 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112962125 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112962127 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:23.241 5b34001 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:23.244 5b34001 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+sigkill 20 4 pids {"opfs-s0":{"consistent":20,"torn":0,"lost":0,"hang":0},"opfs-s1":{"consistent":20,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":20,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":14,"torn":0,"lost":6,"hang":0},"idb-relaxed":{"consistent":14,"torn":0,"lost":6,"hang":0},"idb-default":{"consistent":14,"torn":0,"lost":6,"hang":0}}
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":18.884999990463257,"durability":"strict"} 44
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":16.835000038146973,"durability":"relaxed"} 43
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":15.555000066757202,"durability":"default"} 56
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 7792
+112962129 -rw-------@ 1 rodrigo  staff  3971560 Oct 11 23:46 000003.log
+112962128 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112962126 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112962367 -rw-------@ 1 rodrigo  staff      457 Oct 11 23:46 LOG
+112962125 -rw-------@ 1 rodrigo  staff      413 Oct 11 23:46 LOG.old
+112962127 -rw-------@ 1 rodrigo  staff       23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:23.861 5b340fe Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:23.861 5b340fe Recovering log #3
+2026/10/11-23:46:23.862 5b340fe Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:23.241 5b34001 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:23.244 5b34001 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 640
+112962613 -rw-------@ 1 rodrigo  staff  311412 Oct 11 23:46 000003.log
+112962612 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112962610 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112962609 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112962611 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:24.620 5b34285 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:24.624 5b34285 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":17.240000009536743,"durability":"strict"} 65
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":16.044999837875366,"durability":"relaxed"} 67
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":15.34000015258789,"durability":"default"} 75
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 6016
+112962909 -rw-------@ 1 rodrigo  staff   622196 Oct 11 23:46 000003.ldb
+112962673 -rw-------@ 1 rodrigo  staff  2438442 Oct 11 23:46 000004.log
+112962612 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112962610 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112962906 -rw-------@ 1 rodrigo  staff      729 Oct 11 23:46 LOG
+112962669 -rw-------@ 1 rodrigo  staff      515 Oct 11 23:46 LOG.old
+112962611 -rw-------@ 1 rodrigo  staff       80 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:26.004 5b344ef Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:26.004 5b344ef Recovering log #3
+2026/10/11-23:46:26.007 5b344ef Level-0 table #3: started
+2026/10/11-23:46:26.035 5b344ef Level-0 table #3: 622196 bytes OK
+2026/10/11-23:46:26.035 5b344ef Recovering log #4
+2026/10/11-23:46:26.035 5b344ef Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+2026/10/11-23:46:26.036 5b344ef Delete type=0 #3
+2026/10/11-23:46:26.036 5b344ef Delete type=2 #5
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:25.313 5b3437d Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:25.313 5b3437d Recovering log #3
+2026/10/11-23:46:25.314 5b3437d Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+2026/10/11-23:46:25.480 5b3437b Level-0 table #5: started
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 792
+112962976 -rw-------@ 1 rodrigo  staff  389673 Oct 11 23:46 000003.log
+112962975 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112962973 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112962972 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112962974 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:26.782 5b345e4 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:26.786 5b345e4 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":18.475000143051147,"durability":"strict"} 59
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":17.630000114440918,"durability":"relaxed"} 59
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":16.429999828338623,"durability":"default"} 105
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 7216
+112963273 -rw-------@ 1 rodrigo  staff   626225 Oct 11 23:46 000003.ldb
+112963219 -rw-------@ 1 rodrigo  staff  3049965 Oct 11 23:46 000004.log
+112962975 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112962973 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112963270 -rw-------@ 1 rodrigo  staff      729 Oct 11 23:46 LOG
+112963211 -rw-------@ 1 rodrigo  staff      515 Oct 11 23:46 LOG.old
+112962974 -rw-------@ 1 rodrigo  staff       80 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:28.224 5b3486d Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:28.224 5b3486d Recovering log #3
+2026/10/11-23:46:28.226 5b3486d Level-0 table #3: started
+2026/10/11-23:46:28.234 5b3486d Level-0 table #3: 626225 bytes OK
+2026/10/11-23:46:28.234 5b3486d Recovering log #4
+2026/10/11-23:46:28.234 5b3486d Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000004.log 
+2026/10/11-23:46:28.235 5b3486d Delete type=0 #3
+2026/10/11-23:46:28.235 5b3486d Delete type=2 #5
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:27.530 5b3475f Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:27.530 5b3475f Recovering log #3
+2026/10/11-23:46:27.532 5b3475f Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+2026/10/11-23:46:27.592 5b3475b Level-0 table #5: started
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 808
+112963521 -rw-------@ 1 rodrigo  staff  398688 Oct 11 23:46 000003.log
+112963520 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112963518 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112963517 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112963519 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:28.877 5b349c1 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:28.881 5b349c1 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+anomaly idb-strict lost {"s":"idb-strict","t":"r","status":"fresh","replay":null,"reset":true,"ms":18.78000020980835,"durability":"strict"} 50
+anomaly idb-relaxed lost {"s":"idb-relaxed","t":"r","status":"fresh","replay":null,"reset":true,"ms":18.605000019073486,"durability":"relaxed"} 52
+anomaly idb-default lost {"s":"idb-default","t":"r","status":"fresh","replay":null,"reset":true,"ms":16.580000162124634,"durability":"default"} 66
+DIAG before relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 10488
+112963521 -rw-------@ 1 rodrigo  staff  4026044 Oct 11 23:46 000003.log
+112963573 -rw-------@ 1 rodrigo  staff   912600 Oct 11 23:46 000004.log
+112963574 -rw-------@ 1 rodrigo  staff   411363 Oct 11 23:46 000005.ldb
+112963520 -rw-------@ 1 rodrigo  staff       16 Oct 11 23:46 CURRENT
+112963518 -rw-------@ 1 rodrigo  staff        0 Oct 11 23:46 LOCK
+112963570 -rw-------@ 1 rodrigo  staff      515 Oct 11 23:46 LOG
+112963517 -rw-------@ 1 rodrigo  staff      413 Oct 11 23:46 LOG.old
+112963519 -rw-------@ 1 rodrigo  staff       23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:29.661 5b34afe Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+2026/10/11-23:46:29.661 5b34afe Recovering log #3
+2026/10/11-23:46:29.663 5b34afe Reusing old log ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/000003.log 
+2026/10/11-23:46:29.768 5b34b00 Level-0 table #5: started
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG.old
+2026/10/11-23:46:28.877 5b349c1 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:28.881 5b349c1 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+
+DIAG after relaunch:
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb:
+total 672
+112963829 -rw-------@ 1 rodrigo  staff  328304 Oct 11 23:46 000003.log
+112963828 -rw-------@ 1 rodrigo  staff      16 Oct 11 23:46 CURRENT
+112963826 -rw-------@ 1 rodrigo  staff       0 Oct 11 23:46 LOCK
+112963825 -rw-------@ 1 rodrigo  staff     413 Oct 11 23:46 LOG
+112963827 -rw-------@ 1 rodrigo  staff      23 Oct 11 23:46 MANIFEST-000001
+
+~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/WebStorage:
+total 128
+112959100 -rw-------@ 1 rodrigo  staff  40960 Oct 11 23:46 QuotaManager
+112959101 -rw-------@ 1 rodrigo  staff  21032 Oct 11 23:46 QuotaManager-journal
+== ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/LOG
+2026/10/11-23:46:30.428 5b34c70 Creating DB ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb since it was missing.
+2026/10/11-23:46:30.432 5b34c70 Reusing MANIFEST ~/.buzz/RESEARCH/segment-persistence/browser/profiles/chromium-idbloss6/Default/IndexedDB/http_127.0.0.1_8742.indexeddb.leveldb/MANIFEST-000001
+

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>Trystero JS peer</title>
+<script type="importmap">{"imports": {"trystero": "https://esm.sh/trystero@0.26.0"}}</script>
+</head>
+<body>
+<pre id="log"></pre>
+<script type="module">
+import {joinRoom, selfId, getRelaySockets} from 'trystero';
+const params = new URLSearchParams(location.search);
+const log = (category, text) => {
+    const line = `[${(performance.now() / 1000).toFixed(2)}s] ${category}: ${text}`;
+    console.log(line);
+    document.getElementById('log').append(line + '\n');
+};
+const room = joinRoom({appId: params.get('app') ?? 'trystero-cpp-probe', password: params.get('password') ?? undefined}, params.get('room') ?? 'lobby');
+log('room', 'self id ' + selfId);
+setTimeout(() => log('nostr', 'relays:' + Object.keys(getRelaySockets()).map(u => ' ' + u).join('')), 1500);
+const chat = room.makeAction('chat');
+const drink = room.makeAction('drink');
+chat.onMessage = (text, {peerId}) => {
+    log('action', `received chat from ${peerId}: ${text}`);
+    if (!text.startsWith('echo:')) chat.send('echo: ' + text, {target: peerId});
+};
+drink.onMessage = (data, {peerId}) => log('action', `received drink from ${peerId}: ${JSON.stringify(data)}`);
+room.onPeerJoin = peerId => {
+    log('room', 'peer joined: ' + peerId);
+    chat.send('hello from Trystero JS', {target: peerId});
+    drink.send({drink: 'negroni', withIce: true, from: 'js'}, {target: peerId});
+};
+room.onPeerLeave = peerId => log('room', 'peer left: ' + peerId);
+</script>
+</body>
+</html>

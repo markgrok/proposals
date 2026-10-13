@@ -1,0 +1,12 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Hello World"
+msgstr "Olá Mundo"
+
+msgid "{1} file"
+msgid_plural "{1} files"
+msgstr[0] "{1} arquivo"
+msgstr[1] "{1} arquivos"

@@ -1,0 +1,55 @@
+{"engine":"firefox","kill":"terminate","s":"opfs-s0","n":200,"consistent":140,"torn":60,"lost":0,"hang":0,"commitsTotal":15841}
+{"engine":"firefox","kill":"terminate","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":6202}
+{"engine":"firefox","kill":"terminate","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":7761}
+{"engine":"firefox","kill":"terminate","s":"idb-strict","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":4744}
+{"engine":"firefox","kill":"terminate","s":"idb-relaxed","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":6639}
+{"engine":"firefox","kill":"terminate","s":"idb-default","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":6896}
+{"engine":"chromium","kill":"terminate","s":"opfs-s0","n":200,"consistent":113,"torn":87,"lost":0,"hang":0,"commitsTotal":18934}
+{"engine":"chromium","kill":"terminate","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":6079}
+{"engine":"chromium","kill":"terminate","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":16401}
+{"engine":"chromium","kill":"terminate","s":"idb-strict","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":1561}
+{"engine":"chromium","kill":"terminate","s":"idb-relaxed","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":1257}
+{"engine":"chromium","kill":"terminate","s":"idb-default","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"commitsTotal":1678}
+{"engine":"firefox","kill":"reload","s":"opfs-s0","n":200,"consistent":172,"torn":28,"lost":0,"hang":0}
+{"engine":"firefox","kill":"reload","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"firefox","kill":"reload","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"firefox","kill":"reload","s":"idb-strict","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"firefox","kill":"reload","s":"idb-relaxed","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"firefox","kill":"reload","s":"idb-default","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"chromium","kill":"reload","s":"opfs-s0","n":200,"consistent":139,"torn":61,"lost":0,"hang":0}
+{"engine":"chromium","kill":"reload","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"chromium","kill":"reload","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"chromium","kill":"reload","s":"idb-strict","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"chromium","kill":"reload","s":"idb-relaxed","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"chromium","kill":"reload","s":"idb-default","n":200,"consistent":200,"torn":0,"lost":0,"hang":0}
+{"engine":"chromium","kill":"sigkill","s":"opfs-s0","n":200,"consistent":194,"torn":6,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"chromium","kill":"sigkill","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"chromium","kill":"sigkill","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"chromium","kill":"sigkill","s":"idb-strict","n":200,"consistent":142,"torn":0,"lost":58,"hang":0,"profile":"sigkill"}
+{"engine":"chromium","kill":"sigkill","s":"idb-relaxed","n":200,"consistent":142,"torn":0,"lost":58,"hang":0,"profile":"sigkill"}
+{"engine":"chromium","kill":"sigkill","s":"idb-default","n":200,"consistent":142,"torn":0,"lost":58,"hang":0,"profile":"sigkill"}
+{"engine":"chromium","kill":"sigkill","s":"idb-strict","n":40,"consistent":40,"torn":0,"lost":0,"hang":0,"profile":"idbloss"}
+{"engine":"firefox","kill":"sigkill","s":"opfs-s0","n":200,"consistent":129,"torn":71,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"firefox","kill":"sigkill","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"firefox","kill":"sigkill","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"firefox","kill":"sigkill","s":"idb-strict","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"firefox","kill":"sigkill","s":"idb-relaxed","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"firefox","kill":"sigkill","s":"idb-default","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"webkit","kill":"terminate","s":"opfs-s0","n":200,"consistent":178,"torn":22,"lost":0,"hang":0,"derived":"run stopped while idb-default was wedged; counts from anomalies.jsonl"}
+{"engine":"webkit","kill":"terminate","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"derived":"no anomaly logged"}
+{"engine":"webkit","kill":"terminate","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"derived":"no anomaly logged"}
+{"engine":"webkit","kill":"terminate","s":"idb-strict","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"derived":"no anomaly logged"}
+{"engine":"webkit","kill":"terminate","s":"idb-relaxed","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"derived":"no anomaly logged"}
+{"engine":"webkit","kill":"terminate","s":"idb-default","n":185,"consistent":118,"torn":0,"lost":0,"hang":67,"derived":"wedged from kill 119 on; stopped at 185"}
+{"engine":"webkit","kill":"reload","s":"opfs-s0","n":200,"consistent":149,"torn":51,"lost":0,"hang":0,"profile":"reload"}
+{"engine":"webkit","kill":"reload","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"reload"}
+{"engine":"webkit","kill":"reload","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"reload"}
+{"engine":"webkit","kill":"reload","s":"idb-strict","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"reload"}
+{"engine":"webkit","kill":"reload","s":"idb-relaxed","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"reload"}
+{"engine":"webkit","kill":"reload","s":"idb-default","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"reload"}
+{"engine":"webkit","kill":"sigkill","s":"opfs-s0","n":200,"consistent":157,"torn":43,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"webkit","kill":"sigkill","s":"opfs-s1","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"webkit","kill":"sigkill","s":"opfs-s2","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"webkit","kill":"sigkill","s":"idb-strict","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"webkit","kill":"sigkill","s":"idb-relaxed","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}
+{"engine":"webkit","kill":"sigkill","s":"idb-default","n":200,"consistent":200,"torn":0,"lost":0,"hang":0,"profile":"sigkill"}

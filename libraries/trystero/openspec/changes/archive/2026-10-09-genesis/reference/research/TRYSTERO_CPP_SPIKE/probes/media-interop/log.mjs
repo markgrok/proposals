@@ -1,0 +1,10 @@
+const target = await (await fetch("http://127.0.0.1:9336/json/new?about:blank", { method: "PUT" })).json();
+const ws = new WebSocket(target.webSocketDebuggerUrl);
+let id = 0; const pending = new Map();
+const send = (method, params = {}) => new Promise(r => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+ws.onmessage = m => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { pending.get(d.id)(d.result); pending.delete(d.id); } };
+await new Promise(r => (ws.onopen = r));
+await send("Page.navigate", { url: "http://127.0.0.1:8771/index.html" });
+await new Promise(r => setTimeout(r, 5000));
+console.log((await send("Runtime.evaluate", { expression: "document.getElementById('log').innerText", returnByValue: true })).result.value);
+ws.close(); process.exit(0);

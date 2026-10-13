@@ -1,0 +1,15 @@
+<!doctype html>
+<script>
+(async () => {
+    const out = { ua: navigator.userAgent, isSecureContext, crossOriginIsolated };
+    out.persistedBefore = await navigator.storage.persisted();
+    out.persist = await Promise.race([navigator.storage.persist().then(String, (e) => 'error ' + e), new Promise((r) => setTimeout(() => r('no answer in 5 s'), 5000))]);
+    out.persistedAfter = await navigator.storage.persisted();
+    const est = await navigator.storage.estimate();
+    out.quotaGB = (est.quota / 2 ** 30).toFixed(1);
+    const w = new Worker('probe-worker.js');
+    w.onmessage = (e) => console.log('PROBE ' + JSON.stringify({ ...out, ...e.data }));
+    w.onerror = (e) => console.log('PROBE ' + JSON.stringify({ ...out, workerError: e.message }));
+    w.postMessage(0);
+})();
+</script>

@@ -1,0 +1,13 @@
+<!doctype html>
+<script>
+(async () => {
+    const w = new Worker('zombie-worker.js');
+    await new Promise((r) => { w.onmessage = r; w.postMessage('writer'); });
+    await new Promise((r) => setTimeout(r, 300));
+    const tTerm = performance.now();
+    w.terminate();
+    const r = new Worker('zombie-worker.js');
+    r.onmessage = (e) => console.log('ZOMBIE ' + JSON.stringify({ sinceTerminate: performance.now() - tTerm, ...e.data }));
+    r.postMessage('reader');
+})();
+</script>

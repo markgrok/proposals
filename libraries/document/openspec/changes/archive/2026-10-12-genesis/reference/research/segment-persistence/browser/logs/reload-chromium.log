@@ -1,0 +1,77 @@
+reload 0 {}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1782,"replay":0,"reset":true,"ms":1998.784999847412} 155
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2867,"replay":0,"reset":true,"ms":2023.1849999427795} 1567
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1569,"replay":0,"reset":true,"ms":2018.125} 102
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2549,"replay":0,"reset":true,"ms":2005.2599999904633} 1274
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2785,"replay":0,"reset":true,"ms":1996.9750001430511} 1374
+reload 20 {"opfs-s0":{"consistent":15,"torn":5,"lost":0,"hang":0},"opfs-s1":{"consistent":20,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":20,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":20,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":20,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":20,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1250,"replay":0,"reset":true,"ms":2003.3550000190735} 16
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1487,"replay":0,"reset":true,"ms":1999.5950000286102} 172
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1442,"replay":0,"reset":true,"ms":2002.6200001239777} 98
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1647,"replay":0,"reset":true,"ms":1993.0599999427795} 153
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2841,"replay":0,"reset":true,"ms":2015.4100000858307} 1516
+reload 40 {"opfs-s0":{"consistent":30,"torn":10,"lost":0,"hang":0},"opfs-s1":{"consistent":40,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":40,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":40,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":40,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":40,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1507,"replay":0,"reset":true,"ms":2000.534999847412} 175
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1372,"replay":0,"reset":true,"ms":2028.585000038147} 155
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1408,"replay":0,"reset":true,"ms":1994.1549999713898} 43
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1231,"replay":0,"reset":true,"ms":2018.5099999904633} 78
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1614,"replay":0,"reset":true,"ms":2000.2249999046326} 10
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1597,"replay":0,"reset":true,"ms":2006.2450001239777} 49
+reload 60 {"opfs-s0":{"consistent":44,"torn":16,"lost":0,"hang":0},"opfs-s1":{"consistent":60,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":60,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":60,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":60,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":60,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":928,"replay":0,"reset":true,"ms":2023.8900001049042} 22
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1296,"replay":0,"reset":true,"ms":1997.835000038147} 51
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1035,"replay":0,"reset":true,"ms":2029.6050000190735} 26
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":924,"replay":0,"reset":true,"ms":1996.7400000095367} 68
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2050,"replay":0,"reset":true,"ms":2021.835000038147} 1275
+reload 80 {"opfs-s0":{"consistent":59,"torn":21,"lost":0,"hang":0},"opfs-s1":{"consistent":80,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":80,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":80,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":80,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":80,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1782,"replay":0,"reset":true,"ms":2007.6999998092651} 896
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1176,"replay":0,"reset":true,"ms":2008.420000076294} 70
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2141,"replay":0,"reset":true,"ms":2006.5649998188019} 1158
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1490,"replay":0,"reset":true,"ms":2014.2400000095367} 791
+reload 100 {"opfs-s0":{"consistent":75,"torn":25,"lost":0,"hang":0},"opfs-s1":{"consistent":100,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":100,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":100,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":100,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":100,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":664,"replay":0,"reset":true,"ms":2000.4900000095367} 12
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":887,"replay":0,"reset":true,"ms":2013.454999923706} 62
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":773,"replay":0,"reset":true,"ms":2019.7200000286102} 74
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1009,"replay":0,"reset":true,"ms":2004.3650000095367} 69
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1512,"replay":0,"reset":true,"ms":2007.289999961853} 829
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1248,"replay":0,"reset":true,"ms":2006.0750000476837} 7
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":3128,"replay":0,"reset":true,"ms":2003.585000038147} 1489
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1486,"replay":0,"reset":true,"ms":2019.5249998569489} 169
+reload 120 {"opfs-s0":{"consistent":87,"torn":33,"lost":0,"hang":0},"opfs-s1":{"consistent":120,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":120,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":120,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":120,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":120,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1523,"replay":0,"reset":true,"ms":2009.5899999141693} 184
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2854,"replay":0,"reset":true,"ms":2020.4800000190735} 1580
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1460,"replay":0,"reset":true,"ms":2001.9100000858307} 105
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1455,"replay":0,"reset":true,"ms":2004.9450001716614} 40
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1336,"replay":0,"reset":true,"ms":2006.0049998760223} 44
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":3026,"replay":0,"reset":true,"ms":1993.6600000858307} 1564
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1358,"replay":0,"reset":true,"ms":2011.119999885559} 54
+reload 140 {"opfs-s0":{"consistent":100,"torn":40,"lost":0,"hang":0},"opfs-s1":{"consistent":140,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":140,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":140,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":140,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":140,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1305,"replay":0,"reset":true,"ms":2005.2649998664856} 29
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2687,"replay":0,"reset":true,"ms":1994.755000114441} 1426
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1324,"replay":0,"reset":true,"ms":1993.6949999332428} 67
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2793,"replay":0,"reset":true,"ms":1998.9700000286102} 1514
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1948,"replay":0,"reset":true,"ms":2012.2400000095367} 49
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1385,"replay":0,"reset":true,"ms":2002.9100000858307} 108
+reload 160 {"opfs-s0":{"consistent":114,"torn":46,"lost":0,"hang":0},"opfs-s1":{"consistent":160,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":160,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":160,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":160,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":160,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1228,"replay":0,"reset":true,"ms":1999.4150002002716} 125
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":3097,"replay":0,"reset":true,"ms":2000.9950001239777} 1440
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1450,"replay":0,"reset":true,"ms":1996.914999961853} 69
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1406,"replay":0,"reset":true,"ms":2017.914999961853} 110
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1379,"replay":0,"reset":true,"ms":2015.6349999904633} 61
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1402,"replay":0,"reset":true,"ms":2017.5999999046326} 68
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1415,"replay":0,"reset":true,"ms":2014.2699999809265} 137
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1501,"replay":0,"reset":true,"ms":2006.8650000095367} 104
+reload 180 {"opfs-s0":{"consistent":126,"torn":54,"lost":0,"hang":0},"opfs-s1":{"consistent":180,"torn":0,"lost":0,"hang":0},"opfs-s2":{"consistent":180,"torn":0,"lost":0,"hang":0},"idb-strict":{"consistent":180,"torn":0,"lost":0,"hang":0},"idb-relaxed":{"consistent":180,"torn":0,"lost":0,"hang":0},"idb-default":{"consistent":180,"torn":0,"lost":0,"hang":0}}
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2733,"replay":0,"reset":true,"ms":2003.1750001907349} 1353
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2879,"replay":0,"reset":true,"ms":2018.0499999523163} 1569
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1443,"replay":0,"reset":true,"ms":1995.1950001716614} 151
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2578,"replay":0,"reset":true,"ms":2025.8599998950958} 1325
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1411,"replay":0,"reset":true,"ms":1993.1399998664856} 47
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":1635,"replay":0,"reset":true,"ms":1994.375} 131
+anomaly opfs-s0 torn {"s":"opfs-s0","t":"r","status":"ok","g":2936,"replay":0,"reset":true,"ms":2015.414999961853} 1449
+opfs-s0 {"consistent":139,"torn":61,"lost":0,"hang":0}
+opfs-s1 {"consistent":200,"torn":0,"lost":0,"hang":0}
+opfs-s2 {"consistent":200,"torn":0,"lost":0,"hang":0}
+idb-strict {"consistent":200,"torn":0,"lost":0,"hang":0}
+idb-relaxed {"consistent":200,"torn":0,"lost":0,"hang":0}
+idb-default {"consistent":200,"torn":0,"lost":0,"hang":0}

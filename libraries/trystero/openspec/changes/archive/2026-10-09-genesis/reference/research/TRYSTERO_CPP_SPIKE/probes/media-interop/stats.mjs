@@ -1,0 +1,15 @@
+const target = await (await fetch("http://127.0.0.1:9336/json/new?about:blank", { method: "PUT" })).json();
+const ws = new WebSocket(target.webSocketDebuggerUrl);
+let id = 0; const pending = new Map();
+const send = (method, params = {}) => new Promise(r => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+ws.onmessage = m => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { pending.get(d.id)(d.result); pending.delete(d.id); } };
+await new Promise(r => (ws.onopen = r));
+await send("Runtime.enable"); await send("Page.navigate", { url: "http://127.0.0.1:8771/index.html" });
+const js = async e => (await send("Runtime.evaluate", { expression: e, returnByValue: true, awaitPromise: true })).result.value;
+await new Promise(r => setTimeout(r, 8000));
+console.log(await js(`(async () => { const s = await probePeer.getStats(); const out = []; s.forEach(r => { if (r.type === 'outbound-rtp') out.push(r.kind + ' sent ' + r.packetsSent + ' packets, codec ' + (s.get(r.codecId)?.mimeType ?? '?')); if (r.type === 'inbound-rtp') out.push(r.kind + ' received ' + r.packetsReceived + ' packets, ' + (r.kind === 'video' ? r.framesDecoded + ' frames decoded ' + r.frameWidth + 'x' + r.frameHeight : r.totalSamplesReceived + ' samples') + ', codec ' + (s.get(r.codecId)?.mimeType ?? '?')); if (r.type === 'transport') out.push('transport dtls ' + r.dtlsState + ' srtp ' + r.srtpCipher); }); return out.join('\\n'); })()`));
+console.log(await js(`(async () => { const s = await probePeer.getStats(); const t = {}; s.forEach(r => t[r.type] = (t[r.type] ?? 0) + 1); return JSON.stringify(t); })()`));
+console.log(await js(`probePeer.getTransceivers().map(t => t.mid + ' dir=' + t.direction + ' current=' + t.currentDirection + ' sender.track=' + (t.sender.track?.kind ?? 'none') + ' readyState=' + t.sender.track?.readyState).join('\\n')`));
+console.log(await js(`probePeer.currentRemoteDescription.sdp.split('\\r\\n').filter(l => /^(m=|a=mid|a=rtpmap|a=sendrecv|a=recvonly|a=sendonly|a=inactive|a=ssrc|a=msid)/.test(l)).join('\\n')`));
+console.log((await js("document.getElementById('log').innerText")).split('\n').filter(l => /native counts/.test(l)).slice(-1)[0]);
+ws.close(); process.exit(0);

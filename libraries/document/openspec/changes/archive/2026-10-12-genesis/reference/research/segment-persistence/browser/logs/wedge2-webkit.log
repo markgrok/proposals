@@ -1,0 +1,7 @@
+KILL {"s":"idb-relaxed","i":10,"wedged":true}
+TERM {"s":"idb-relaxed","n":11,"consistent":5,"torn":0,"lost":0,"hang":5,"commitsTotal":1272,"wedgedAt":6}
+loop ended after 151 s
+same page, now: timeout (5 s)
+after page reload: timeout (5 s)
+new page, same context: timeout (5 s)
+browser relaunched, same profile: read ok, g=1276

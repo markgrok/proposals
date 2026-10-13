@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>C++ Trystero peer</title></head>
+<body>
+<pre id="log"></pre>
+<script>
+const params = new URLSearchParams(location.search);
+var Module = {
+    onRuntimeInitialized() {
+        Module.start(params.get('app') ?? 'trystero-cpp-probe', params.get('room') ?? 'lobby', params.get('password') ?? '', params.get('self') ?? '');
+    }
+};
+</script>
+<script src="peer.js"></script>
+</body>
+</html>

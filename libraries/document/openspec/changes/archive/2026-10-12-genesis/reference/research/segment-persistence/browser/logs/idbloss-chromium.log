@@ -1,0 +1,5 @@
+sigkill 0 4 pids {}
+sigkill 10 4 pids {"idb-strict":{"consistent":10,"torn":0,"lost":0,"hang":0}}
+sigkill 20 4 pids {"idb-strict":{"consistent":20,"torn":0,"lost":0,"hang":0}}
+sigkill 30 4 pids {"idb-strict":{"consistent":30,"torn":0,"lost":0,"hang":0}}
+idb-strict {"consistent":40,"torn":0,"lost":0,"hang":0}
