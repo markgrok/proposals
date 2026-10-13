@@ -1,0 +1,111 @@
+From f0090d248db3043d2bc44f7a65f252bd307f76f4 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 16:35:26 -0400
+Subject: [PATCH 5/8] b2 site: the PWA's precache list, written last
+
+---
+ AGENTS.md           | 14 ++++++++++----
+ site                |  2 +-
+ tools/site/site.jam | 17 +++++++++++------
+ 3 files changed, 22 insertions(+), 11 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index e8a545d..a9ccdf2 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1730,9 +1730,11 @@ site's header, each library's page with the head the catalogue gives it, and
+ every page with noindex on the preview, then checks that every page carries
+ the robots of its channel; the `build` script writes the indexing files
+ (`site/tools/indexing.mjs`); `assemble.py --check` checks every link; the
+-build moves into `bin/site.builds/`, and `bin/site`, a link, is renamed onto
+-it in one step (the `swap` script), so that a server on `bin/site` reads one
+-build or the other whole and a failed step leaves the last good build; last,
++`build` script writes the PWA's `precache.json`, every file with its SHA-256,
++written last so that it lists the final files; the build moves into
++`bin/site.builds/`, and `bin/site`, a link, is renamed onto it in one step
++(the `swap` script), so that a server on `bin/site` reads one build or the
++other whole and a failed step leaves the last good build; last,
+ `/webcpp/site//valid-html` runs html-validate over every page. `bin/site/`:
+ 
+ ```
+@@ -1743,6 +1745,10 @@ assets/             the styles, the logo, the icons and the client bundle, site.
+ assets/app/         the site's wasm, site-app.mjs and site-app.wasm, which runs its machines
+ cards/              each page's and each library's social card, 1200 by 630
+ favicon.ico
++manifest.webmanifest
++                    the PWA's manifest, its scope the site's root
++sw.js               the site's own service worker, which serves the installed site offline
++precache.json       every other file, with its SHA-256 and size: what the service worker caches
+ docs/               the index page, built with -sWEBCPP_INDEX=site
+ libs/<name>/        each library's page
+ report/             the test matrix
+@@ -1762,7 +1768,7 @@ tools under `tools/`, its tests under `test/`, its `Jamfile`, and its own
+ `main`, then the superproject commits the submodule's new commit, as for a
+ library. What the superproject holds of the site is `tools/site/` and
+ `tools/ci/assemble.py`. Its tests are `b2 /webcpp/site//test`, the site's own
+-(the native test of `app/`, then its npm `test`, `test:wasm`, the tests of
++(the native tests of `app/`, then its npm `test`, `test:wasm`, the tests of
+ its wasm, once it is built, and `typecheck`), and `tools/site/*_test.py` with
+ `tools/ci/assemble_test.py`, among the tools' tests.
+ 
+diff --git a/site b/site
+index b2bf227..b17766b 160000
+--- a/site
++++ b/site
+@@ -1 +1 @@
+-Subproject commit b2bf227849a6adb955fb61cf4f83f3b5cc3fb689
++Subproject commit b17766bd835ff66ff0a3c5d9e096b665bc23a6a5
+diff --git a/tools/site/site.jam b/tools/site/site.jam
+index 66bc417..702582b 100644
+--- a/tools/site/site.jam
++++ b/tools/site/site.jam
+@@ -16,8 +16,10 @@
+ #                      Jamfile), the docs index and every library's page, the
+ #                      report, laid out into bin/site.tmp/ by
+ #                      tools/ci/assemble.py, then the indexing files, then
+-#                      every link checked, then moved into bin/site.builds/
+-#                      and bin/site, a link, swapped onto it in one rename
++#                      every link checked, then the PWA's precache.json,
++#                      which lists every file, then moved into
++#                      bin/site.builds/ and bin/site, a link, swapped onto
++#                      it in one rename
+ #                      (the site's npm script swap, tools/swap.mjs), so that
+ #                      bin/site stays the last build that passed every step
+ #                      and a server on it never sees one half gone;
+@@ -249,6 +251,7 @@ rule assemble ( targets * : sources * : properties * )
+     SWAP on $(targets) = [ npm swap : $(.out) $build ] ;
+     INDEX on $(targets) = [ npm build : --index $(.tmp) --base $(base) --catalogue $catalogue
+         --channel $(channel[1]) --superproject [ path.native $(.root) ] ] ;
++    PWA on $(targets) = [ npm build : --pwa $(.tmp) ] ;
+ }
+ 
+ # The site's pages and the docs' header are where the target pages wrote them,
+@@ -266,12 +269,13 @@ rule assemble ( targets * : sources * : properties * )
+ # other whole. b2 site once removed bin/site and moved the new build there,
+ # a window in which a running server answered 404 and 503
+ # (tools/site/site_test.py).
+-# The steps after the check of the links, each a check of the whole site,
+-# come here in this order: the check that every page is valid HTML
++# The list the PWA precaches, precache.json (the site's build --pwa), is
++# written last, once the links are checked, so that it lists the final files
++# with their hashes; still in bin/site.tmp, so that no build is ever served
++# without its list. The check that every page is valid HTML
+ # (/webcpp/site//valid-html, declared in site/Jamfile, depends on this
+ # target, site-pages at the superproject's root, so it only reads bin/site
+-# once this action has moved it there), then the list the PWA precaches,
+-# written last so that it lists the final files.
++# once this action has moved it there) writes nothing.
+ actions assemble
+ {
+     set -e
+@@ -290,6 +294,7 @@ actions assemble
+     "$(PYTHON)" "$(ASSEMBLE)" --pages "$pages/pages" --docs "$(DOCS)" --report "$(REPORT)" --chrome "$pages/docs-header.html" --site-chrome "$pages/site-header.html" --catalogue "$catalogue" --base "$(BASE)" --channel "$(CHANNEL)" --out "$(TMP)"
+     $(INDEX)
+     "$(PYTHON)" "$(ASSEMBLE)" --check "$(TMP)"
++    $(PWA)
+     mkdir -p "$(BUILDS)"
+     build=`mktemp -d "$(BUILDS)/build-XXXXXX"`
+     rmdir "$build"
+-- 
+2.55.0
+

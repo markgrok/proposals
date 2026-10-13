@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+# An example's standard input is committed byte for byte, which text=auto would not keep: a line
+# that ends in "\r\n" would become one that ends in "\n".
+*.input -text
+# The official meta-schemas are committed byte for byte as fetched, so that the SHA-256 recorded of
+# each holds on every checkout.
+meta_schemas/**/*.json -text

@@ -1,0 +1,28 @@
+From 1a15a886957733cea5cb80bc9a1110eb2ac3c602 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 11:13:02 -0400
+Subject: [PATCH 16/25] trystero: a test's comment says which connection it
+ ends, and why either would do
+
+---
+ test/room_test.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/test/room_test.cpp b/test/room_test.cpp
+index bd19e6d..fa1f43a 100644
+--- a/test/room_test.cpp
++++ b/test/room_test.cpp
+@@ -1323,8 +1323,8 @@ void a_connections_end_is_seen_and_the_peers_meet_again() {
+         webcpp::test::require(BOOST_TEST(run_until(f, [&] { return joins == 1; })));
+         const auto open_pc = f.net.live_connections();  // the pair, both ends
+         BOOST_TEST_EQ(open_pc, 2U);
+-        // A's end of the pair: the first connection made after A's room existed is A's offer, or
+-        // the peer of B's; peer_of finds the other.
++        // The first connection made once A's room exists: A's offer in practice, A's id being the
++        // lower; an end of either side ends the pair, so every way holds for either.
+         const std::size_t a_end = a_pcs.front();
+         if (way == 0) {
+             f.net.fail(a_end);
+-- 
+2.55.0
+

@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-11
+webcpp:
+  library: organization
+  title: "organization: the site, increments 4 and 5 (trystero's JavaScript API and the cursors; the state machine, on the server, C++ calls the browser)"
+  kind: organization
+  port_of: null
+  status: accepted
+  release: null
+  implementation: null
+  decided: 2026-10-10

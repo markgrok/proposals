@@ -1,0 +1,148 @@
+From e1f60cb4162113850ce58fdf5c9ba192f8fc902e Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 08:52:26 -0400
+Subject: [PATCH 07/10] tools: a page program's variants asked for with
+ JavaScript exceptions are refused
+
+---
+ AGENTS.md                     |  2 +-
+ doc/releases/0.1.0.adoc       |  2 ++
+ tools/test/emscripten_test.py | 18 ++++++++++++++++--
+ tools/webcpp.jam              | 34 +++++++++++++++++++++++++++++++---
+ 4 files changed, 50 insertions(+), 6 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index e912e10..f89fe28 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1617,7 +1617,7 @@ webcpp.size-table <name> : <variants> + ;
+ 
+ | Rule | Builds | Notes |
+ | --- | --- | --- |
+-| `webcpp.variants` | the explicit executable `<name>` and the explicit `<name>.variants.json` | on emscripten alone (`<build>no` elsewhere), linked with `-sMODULARIZE -sEXPORT_ES6`, an ES module whose factory a page calls, and never with `-sNODERAWFS=1`: node never runs it, so it is no test, and neither counted on a page nor listed by `declared-targets`. The manifest, beside the `jspi` artifact, builds the program as `<name>/<webcpp-suspend>jspi` and `<name>/<webcpp-suspend>asyncify` and names, for each variant, its `script` relative to itself, with `/`, and the `bytes` of the `.wasm` beside it, in sorted keys and four spaces (`tools/variants/variants.py manifest`), which a page's loader reads |
++| `webcpp.variants` | the explicit executable `<name>` and the explicit `<name>.variants.json` | on emscripten alone (`<build>no` elsewhere), linked with `-sMODULARIZE -sEXPORT_ES6`, an ES module whose factory a page calls, and never with `-sNODERAWFS=1`: node never runs it, so it is no test, and neither counted on a page nor listed by `declared-targets`. The manifest, beside the `jspi` artifact, builds the program as `<name>/<webcpp-suspend>jspi` and `<name>/<webcpp-suspend>asyncify` and names, for each variant, its `script` relative to itself, with `/`, and the `bytes` of the `.wasm` beside it, in sorted keys and four spaces (`tools/variants/variants.py manifest`), which a page's loader reads. A build on emscripten that asks for JavaScript exceptions, `webcpp-suspend=asyncify` or `exception-handling=on-js`, is refused, naming the program: b2 cannot take an optional property back from a request, so the `jspi` variant would be linked with them and given as `jspi`'s |
+ | `webcpp.size-table` | the explicit `<name>.sizes.md` | on emscripten alone; a Markdown table of the manifest of each `<variants>` program of the Jamfile, one row per program, sorted, with its `jspi` and `asyncify` sizes and their ratio, which the build also prints (`tools/variants/variants.py table`), and which the CI keeps from an own lane's job as the artifact `sizes-<id>` (CI, below) |
+ 
+ A manifest, `page.variants.json`:
+diff --git a/doc/releases/0.1.0.adoc b/doc/releases/0.1.0.adoc
+index 4039417..f867a4c 100644
+--- a/doc/releases/0.1.0.adoc
++++ b/doc/releases/0.1.0.adoc
+@@ -159,6 +159,8 @@ suspension variants, its manifest for the page's loader, and its sizes,
+ kept by the CI.
+ * Added the tag rule `webcpp.suspend-tag`, which names an emscripten program
+ Boost's way, with its suspension variant.
++* Changed `webcpp.variants` to refuse a build that asks for JavaScript
++exceptions, which would link the `jspi` variant with them.
+ 
+ [#webcpp-0-1-0-compilers-tested]
+ == Compilers tested
+diff --git a/tools/test/emscripten_test.py b/tools/test/emscripten_test.py
+index 6364a82..61ab157 100644
+--- a/tools/test/emscripten_test.py
++++ b/tools/test/emscripten_test.py
+@@ -21,8 +21,9 @@ ends the test at once and is kept, and a test past its bound is stopped; a progr
+ links -sMODULARIZE or -sEXPORT_ES6, which node would load without running, is refused. A program a
+ page loads (webcpp.variants) is named Boost's way in each variant, debug and release, with its
+ manifest beside its jspi artifact and its size table (webcpp.size-table), and none of them is built
+-natively. Each case builds a scratch superproject with browser_demo and node_test_demo, whose path
+-holds a space, and the emsdk linked into its .local; Emscripten's cache is the one the harness
++natively; a build of them that asks for JavaScript exceptions, which their jspi variant would keep,
++is refused. Each case builds a scratch superproject with browser_demo and node_test_demo, whose
++path holds a space, and the emsdk linked into its .local; Emscripten's cache is the one the harness
+ gives every b2. Run with the names of some cases to run only those."""
+ 
+ from __future__ import annotations
+@@ -348,6 +349,18 @@ def test_variants_write_the_manifest_beside_the_jspi_artifact(root):
+     assert '-sEXPORT_ES6' in link_line(root, result, 'shell-60-d-asyncify')
+ 
+ 
++def test_variants_asked_for_with_javascript_exceptions_are_refused(root):
++    # b2 cannot take an optional property back from a request: the jspi variant would be linked
++    # with JavaScript exceptions, and the manifest and the size table would give it as jspi's.
++    for request, target in ((('webcpp-suspend=asyncify',), 'shell.variants.json'),
++                            (('exception-handling=on-js',), 'shell.sizes.md')):
++        result = harness.run_b2(root, '-a', *EMSCRIPTEN, *request,
++                                f'libs/browser_demo/test/variants//{target}')
++        harness.expect(result, False, 'webcpp.variants shell in libs/browser_demo/test/variants/'
++                       'Jamfile builds both suspension variants itself')
++        assert not built(root, 'shell*.js') and not built(root, target), request
++
++
+ def test_the_size_table_lists_every_variant(root):
+     result = harness.run_b2(root, '-a', *EMSCRIPTEN,
+                             'libs/browser_demo/test/variants//shell.sizes.md')
+@@ -508,6 +521,7 @@ CASES = [prepared(case) for case in (
+     test_link_only_unresolved_symbol_fails,
+     test_artifacts_are_named_boost_s_way,
+     test_variants_write_the_manifest_beside_the_jspi_artifact,
++    test_variants_asked_for_with_javascript_exceptions_are_refused,
+     test_the_size_table_lists_every_variant,
+     test_variants_are_not_built_natively,
+     test_drive_runs_its_program_on_each_target,
+diff --git a/tools/webcpp.jam b/tools/webcpp.jam
+index 77cdd96..024d453 100644
+--- a/tools/webcpp.jam
++++ b/tools/webcpp.jam
+@@ -104,6 +104,10 @@ feature.feature webcpp-include : : free incidental ;
+ # reads.
+ feature.feature webcpp-lane : : free incidental ;
+ 
++# The program a manifest of webcpp.variants is of, <directory>/<name>, which
++# variants-request reads.
++feature.feature webcpp-variants : : free incidental ;
++
+ # webcpp-require-external=on: a library webcpp does not build that is not
+ # found stops the build (external-found), as the CI asks, rather than leave
+ # the library that needs it out. Incidental, so that it plays no part in a
+@@ -466,20 +470,44 @@ rule suspend-tag ( name : type ? : property-set )
+ # Boost's way; and the explicit <name>.variants.json, beside the jspi
+ # artifact, which names each variant's script relative to itself and the
+ # size of its .wasm, which webcpp-asio-loader.mjs reads. Never run by
+-# node: no -sNODERAWFS=1.
++# node: no -sNODERAWFS=1. The manifest builds both variants itself, so a
++# build that asks for one of them is refused (variants-request).
+ rule variants ( name : sources + : requirements * )
+ {
+     local only = <webcpp-targets>emscripten <conditional>@webcpp%filter ;
+     exe $(name) : $(sources)
+       : $(requirements) $(only) $(.handler) <tag>@webcpp%suspend-tag
+         <linkflags>-sMODULARIZE <linkflags>-sEXPORT_ES6 ;
++    local found = [ where ] ;
++    local key = $(found[3])/$(name) ;
++    .variants-shown.$(key) = "webcpp.variants $(name) in $(found[4])" ;
+     make $(name).variants.json
+       : $(name)/<webcpp-suspend>jspi $(name)/<webcpp-suspend>asyncify
+-      : @webcpp%write-variants : $(only) ;
+-    local found = [ where ] ;
++      : @webcpp%write-variants
++      : $(only) <webcpp-variants>$(key) <conditional>@webcpp%variants-request ;
+     $(found[1]).mark-target-as-explicit $(name) $(name).variants.json ;
+ }
+ 
++# The conditional requirement of a manifest of webcpp.variants: a build on
++# emscripten that asks for JavaScript exceptions, by webcpp-suspend=asyncify
++# or exception-handling=on-js, stops, naming the program. Its jspi
++# variant would keep them, since a property a source names replaces a
++# request's value but cannot take back an optional one such as
++# exception-handling-method, and the manifest and the size table would give
++# a JSPI program linked with JavaScript exceptions, in a directory of its
++# own, as the jspi artifact. The lanes ask for a manifest without either.
++rule variants-request ( properties * )
++{
++    if [ webcpp-target.target-of $(properties) ] = emscripten
++      && <exception-handling-method>js in $(properties)
++    {
++        local key = [ feature.get-values <webcpp-variants> : $(properties) ] ;
++        errors.user-error "$(.variants-shown.$(key)) builds both suspension variants itself, and"
++            "this build asks for JavaScript exceptions, which its jspi variant would be linked"
++            "with: give neither webcpp-suspend=asyncify nor exception-handling=on-js" ;
++    }
++}
++
+ rule write-variants ( targets * : sources * : properties * )
+ {
+     PYTHON on $(targets) = $(.python) ;
+-- 
+2.55.0
+

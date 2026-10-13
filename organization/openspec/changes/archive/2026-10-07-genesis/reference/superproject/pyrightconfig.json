@@ -1,0 +1,18 @@
+{
+    "extraPaths": [
+        "tools/ci",
+        "tools/component",
+        "tools/doc",
+        "tools/drive",
+        "tools/example",
+        "tools/lint",
+        "tools/release",
+        "tools/report",
+        "tools/test"
+    ],
+    "pythonVersion": "3.9",
+    "typeCheckingMode": "standard",
+    "reportUnusedFunction": "error",
+    "reportUnusedImport": "error",
+    "reportUnusedVariable": "error"
+}

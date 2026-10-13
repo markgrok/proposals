@@ -1,0 +1,43 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+# The oracle of trystero: Trystero 0.26.0 itself, pinned by package.json and
+# package-lock.json, run by Node. It computes the protocol's values that the
+# protocol test must reproduce, and meets the C++ peers in the interop tests.
+
+import webcpp ;
+
+webcpp.targets native emscripten ;
+
+# tag::oracle[]
+webcpp.original node ;
+webcpp.cases protocol : oracle.mjs : ../fixtures/cases : ../fixtures/expected ;
+webcpp.lane oracle : cases-protocol ;
+# end::oracle[]
+
+# Trystero JS meets each C++ peer over a relay of its own on 127.0.0.1: the
+# browser's peer in headless Chrome, and the native peer as a process. The
+# native peer needs exceptions whatever the build asks: native::backend
+# exists only with them, since libdatachannel reports errors by throwing. It
+# is built with the standard libraries' own checks, so that a completion
+# that touches a container its socket cleared fails at once. Each driver has
+# 900 s, beyond its scenarios' own limits (878 s on native: one wait of
+# 45 s, nineteen of 30 s, two flood calls of 20 s, fourteen of 10 s, twelve
+# of 5 s, one of 15 s and one of 8 s) and Chrome's start, so that a scenario
+# that does not complete fails by name, with what each peer saw, before the
+# bound stops it; a run where every page also hangs, each of its DevTools
+# calls waiting 10 s, may still meet the bound. They pass in about 30 s.
+# tag::interop[]
+webcpp.drive interop_browser : interop/peer.cpp
+  : <linkflags>-sENVIRONMENT=web <linkflags>-sALLOW_MEMORY_GROWTH <webcpp-drive-timeout>900
+  : interop/run.mjs : --browser : emscripten ;
+webcpp.drive interop_native : interop/native_peer.cpp
+  : <library>/webcpp/trystero//native <exception-handling>on <webcpp-drive-timeout>900
+    <define>_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
+    <define>_GLIBCXX_ASSERTIONS
+  : interop/run.mjs : --native : native ;
+webcpp.lane interop : interop_browser interop_native : native emscripten ;
+# end::interop[]

@@ -1,0 +1,926 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 8aa237c..b3cd482 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -155,6 +155,23 @@ holds only what is specific to trystero.
+     flight. A page's `WebSocket` cannot ping, so the browser has no idle
+     timeout. Each drop reports one close, and the room reconnects with its
+     backoff.
++  - What a room parses for the protocol, with `protocol::json::parse`, is
++    bounded before it is read: a relay's text at 67 KiB
++    (`protocol::nostr::max_parsed_relay_text_bytes`), a signal at 65 KiB
++    (`protocol::max_parsed_signal_bytes`, what the bounds of its fields
++    admit; the longest measured in the interop lanes are 1,244 and 762
++    bytes), a handshake message at 1 KiB, and every object in them at 18
++    members (`protocol::json::max_object_members`). Above 18 members a
++    `boost::json::object` indexes its keys by a hash seeded with its own
++    address, which holds no secret, and keys exist that collide under every
++    seed: a parse of them is quadratic in the text (4 MB took 9.2 s against
++    4 ms). A `static_assert` ties the bound to Boost.JSON's
++    `detail::small_object_size_`, so a Boost that moves it fails the build.
++    The parser (`boost::json::basic_parser` with a handler of trystero's)
++    stops at the 19th member, before reading its key, and no object is
++    built. A text refused is logged and dropped, and the connection goes
++    on. An application's JSON payload (`protocol::json::parse_payload`) is
++    not bounded so, since its objects may have any number of members.
+   - What a flood still does: joined peers, memory and connections stay
+     safe, but a flooder who keeps sending new ids takes each place, or each
+     connection of the window, as it frees, so new peers can be kept out for
+diff --git a/doc/changelog.adoc b/doc/changelog.adoc
+index 7ef4c85..8f903b9 100644
+--- a/doc/changelog.adoc
++++ b/doc/changelog.adoc
+@@ -17,4 +17,5 @@ of every version are on webcpp's index page.
+ 
+ // tag::unreleased[]
+ * Added a changelog, the page's last appendix, with each version's changes.
++* Fixed a relay stalling a room with JSON objects of colliding keys.
+ // end::unreleased[]
+diff --git a/doc/guarantees.adoc b/doc/guarantees.adoc
+index fca4fa0..95790d5 100644
+--- a/doc/guarantees.adoc
++++ b/doc/guarantees.adoc
+@@ -68,3 +68,13 @@ does to any relay that closes. _Held by_ `native_websocket`
+ on emscripten, with exceptions and without them, which also checks that the
+ socket never holds more than 4 MiB; the reconnection by `room`
+ (`a_relay_that_closes_at_once_is_tried_less_and_less_often`).
++. [[trystero-invariant-9]]*No text of a relay costs a room more than its
++length to read.* A relay's text longer than 67 KiB, a signal longer than
++65 KiB, and an object of either with more than 18 members are refused before
++they are read, logged, and dropped, and the connection goes on: no object a
++room parses for the protocol is large enough for Boost.JSON to hash its keys,
++so keys crafted to share one hash cost nothing more than others
++(<<trystero-protocol-bounds>>). _Held by_ `protocol` (`json_bounds`) and
++`room` (`hostile_relay_texts_are_refused_and_the_room_goes_on`, 256 keys of
++one hash in an event and in a signal, then a peer joins through the same
++relay), natively and on emscripten.
+diff --git a/doc/protocol.adoc b/doc/protocol.adoc
+index c2c13bb..390b116 100644
+--- a/doc/protocol.adoc
++++ b/doc/protocol.adoc
+@@ -141,6 +141,18 @@ what each costs a room.
+ * A relay is a third party too: its texts are bounded at 1 MiB, what the room
+   holds unsent for it at 4 MiB, and, natively, its silence at 30 s
+   (<<trystero-native-relays>>).
++* What a room parses for the protocol is bounded before it is read: a relay's
++  text at 67 KiB (`protocol::nostr::max_parsed_relay_text_bytes`) and a signal
++  at 65 KiB (`protocol::max_parsed_signal_bytes`), the longest the bounds of a
++  signal's fields admit, where the longest measured are 1,244 and 762 bytes,
++  and a handshake message at 1 KiB. An object in any of them holds at most 18 members
++  (`protocol::json::max_object_members`), where a `boost::json::object` starts
++  to index its keys by a hash that holds no secret, so that keys crafted to
++  share one hash, which make a parse quadratic in the text, are refused at
++  the 19th member, before the object is built. The largest object of the
++  protocol has 7 members. Each text refused is logged and dropped, and the
++  connection goes on. An application's JSON payload is not bounded so: its
++  objects may have any number of members.
+ 
+ [#trystero-protocol-replay]
+ === Replayed offers and answers
+diff --git a/doc/testing.adoc b/doc/testing.adoc
+index 0657953..3fdefb6 100644
+--- a/doc/testing.adoc
++++ b/doc/testing.adoc
+@@ -59,15 +59,17 @@ include::{library-root}/test/Jamfile[tag=allocation]
+ | `protocol`
+ | The protocol against values Trystero JS 0.26.0 computed itself: topics,
+   room tokens, the relay shuffle, sealed text, Nostr event ids, inline and
+-  chunked action frames, control frames, envelopes and presence, and the
+-  bounds of a signal's fields.
++  chunked action frames, control frames, envelopes and presence, the
++  bounds of a signal's fields, and those of a text a room parses, its length
++  and its objects' members.
+ 
+ | `room`
+ | Whole rooms in one process, over the memory relays: every payload format,
+   100 KB transfers both ways, ping, passwords right and wrong, leaving and
+   returning, a room moved over a joined one, ICE servers checked as WebRTC
+   checks them, floods of announcements and of forged, replayed and reflected
+-  signals, a relay that closes at once or rate-limits, a three-peer mesh,
++  signals, a relay that closes at once or rate-limits, a relay that sends
++  texts too long or objects of keys that share one hash, a three-peer mesh,
+   coroutines and view handlers.
+ 
+ | `allocation`
+diff --git a/include/webcpp/trystero/detail/nostr_strategy.hpp b/include/webcpp/trystero/detail/nostr_strategy.hpp
+index 1f01dc1..54a6eb9 100644
+--- a/include/webcpp/trystero/detail/nostr_strategy.hpp
++++ b/include/webcpp/trystero/detail/nostr_strategy.hpp
+@@ -362,8 +362,10 @@ private:
+ 
+     void on_relay_message(std::size_t index, std::string_view text) {
+         boost::system::error_code ec;
+-        const auto document = protocol::json::parse(text, json_, ec);
++        const auto document =
++            protocol::json::parse(text, protocol::nostr::max_parsed_relay_text_bytes, json_, ec);
+         if (ec) {
++            log_("nostr", "dropped a text from ", relays_[index].url, ": ", ec);
+             return;
+         }
+         const auto message = protocol::nostr::read_relay_message(document);
+diff --git a/include/webcpp/trystero/detail/signaling.hpp b/include/webcpp/trystero/detail/signaling.hpp
+index 6dc0d6d..d336a62 100644
+--- a/include/webcpp/trystero/detail/signaling.hpp
++++ b/include/webcpp/trystero/detail/signaling.hpp
+@@ -167,8 +167,13 @@ public:
+             return;
+         }
+         boost::system::error_code ec;
+-        const auto document = protocol::json::parse(content, json_, ec);
+-        const auto message = ec ? std::nullopt : protocol::read_signal(document);
++        const auto document =
++            protocol::json::parse(content, protocol::max_parsed_signal_bytes, json_, ec);
++        if (ec) {
++            log_("signal", "dropped a signal: ", ec);
++            return;
++        }
++        const auto message = protocol::read_signal(document);
+         if (!message || message->peer_id == self_id_) {
+             return;
+         }
+diff --git a/include/webcpp/trystero/native/peer_connection.hpp b/include/webcpp/trystero/native/peer_connection.hpp
+index b8e6de3..8d0040b 100644
+--- a/include/webcpp/trystero/native/peer_connection.hpp
++++ b/include/webcpp/trystero/native/peer_connection.hpp
+@@ -21,6 +21,7 @@
+ #include <webcpp/trystero/json_resource.hpp>
+ #include <webcpp/trystero/native/data_channel.hpp>
+ #include <webcpp/trystero/protocol/json.hpp>
++#include <webcpp/trystero/protocol/signal.hpp>
+ 
+ #include <boost/asio/any_io_executor.hpp>  // lint-world: posts handlers only
+ #include <boost/asio/post.hpp>             // lint-world: posts handlers only
+@@ -212,8 +213,10 @@ public:
+                            handler<void(backend::error_code)> done) override {
+         backend::error_code ec;
+         boost::system::error_code parse_error;
++        // An opened candidate is shorter than its sealed form, which a signal bounds.
+         const auto document =
+-            protocol::json::parse(candidate_json, boost::json::storage_ptr(&json_), parse_error);
++            protocol::json::parse(candidate_json, protocol::max_sealed_candidate_bytes,
++                                  boost::json::storage_ptr(&json_), parse_error);
+         const auto* object = parse_error ? nullptr : document.if_object();
+         const auto* candidate = object != nullptr ? object->if_contains("candidate") : nullptr;
+         const auto* mid = object != nullptr ? object->if_contains("sdpMid") : nullptr;
+diff --git a/include/webcpp/trystero/protocol/json.hpp b/include/webcpp/trystero/protocol/json.hpp
+index 7c54cb2..ed46d7c 100644
+--- a/include/webcpp/trystero/protocol/json.hpp
++++ b/include/webcpp/trystero/protocol/json.hpp
+@@ -11,13 +11,23 @@
+ 
+ #include <webcpp/trystero/json_resource.hpp>
+ 
++#include <boost/json/array.hpp>
++#include <boost/json/basic_parser_impl.hpp>
++#include <boost/json/error.hpp>
++#include <boost/json/object.hpp>
++#include <boost/json/parse_options.hpp>
+ #include <boost/json/parser.hpp>
+ #include <boost/json/serializer.hpp>
+ #include <boost/json/storage_ptr.hpp>
++#include <boost/json/string.hpp>
+ #include <boost/json/value.hpp>
++#include <boost/json/value_stack.hpp>
++#include <boost/system/errc.hpp>
++#include <boost/system/error_code.hpp>
+ 
+ #include <array>
+ #include <charconv>
++#include <cstddef>
+ #include <cstdint>
+ #include <memory_resource>
+ #include <string>
+@@ -35,8 +45,124 @@
+  */
+ namespace webcpp::trystero::protocol::json {
+ 
++/**
++ * The most members an object of a protocol text may hold: the most a `boost::json::object` holds
++ * without its hash index, so that no object a room parses for the protocol is ever hashed.
++ *
++ * Above it, Boost.JSON indexes an object's keys by a hash seeded with the object's own address,
++ * which holds no secret, and sets of keys exist that collide under every seed (32,768 keys of 240
++ * bytes share one digest): each key inserted is compared with every one before it, so one text of
++ * them costs a parse quadratic in its members, 9.2 s for 4 MB against 4 ms for random keys of the
++ * same size. The largest object a room reads has 7 members: a Nostr event (`id`, `pubkey`,
++ * `created_at`, `kind`, `tags`, `content`, `sig`), and a signal (`peerId`, `offerId`, `offer`,
++ * `answer`, `candidate`, `passive`, and the C++ room's `nonce`).
++ */
++inline constexpr std::size_t max_object_members = 18;
++static_assert(max_object_members == boost::json::detail::small_object_size_,
++              "Boost.JSON moved the size above which an object hashes its keys: "
++              "set max_object_members to it, or below it");
++
+ namespace detail {
+ 
++/**
++ * The handler of a protocol text's parser: what `boost::json::parser` uses, a `value_stack` that
++ * builds the value, with objects bounded at @ref max_object_members.
++ *
++ * Tip: `boost::json::basic_parser` checks `max_object_size` as it meets each member, before it
++ * reads the member's key, so an object with one member too many stops the parse there, with
++ * `boost::json::error::object_too_large`, and is never built.
++ */
++struct bounded_handler {
++    static constexpr std::size_t max_object_size = max_object_members;
++    static constexpr std::size_t max_array_size = boost::json::array::max_size();
++    static constexpr std::size_t max_key_size = boost::json::string::max_size();
++    static constexpr std::size_t max_string_size = boost::json::string::max_size();
++
++    explicit bounded_handler(const boost::json::storage_ptr& storage) : stack(storage) {}
++
++    static bool on_document_begin(boost::system::error_code& /*ec*/) { return true; }
++
++    static bool on_document_end(boost::system::error_code& /*ec*/) { return true; }
++
++    static bool on_object_begin(boost::system::error_code& /*ec*/) { return true; }
++
++    bool on_object_end(std::size_t n, boost::system::error_code& /*ec*/) {
++        stack.push_object(n);
++        return true;
++    }
++
++    static bool on_array_begin(boost::system::error_code& /*ec*/) { return true; }
++
++    bool on_array_end(std::size_t n, boost::system::error_code& /*ec*/) {
++        stack.push_array(n);
++        return true;
++    }
++
++    bool on_key_part(boost::json::string_view s, std::size_t /*n*/,
++                     boost::system::error_code& /*ec*/) {
++        stack.push_chars(s);
++        return true;
++    }
++
++    bool on_key(boost::json::string_view s, std::size_t /*n*/, boost::system::error_code& /*ec*/) {
++        stack.push_key(s);
++        return true;
++    }
++
++    bool on_string_part(boost::json::string_view s, std::size_t /*n*/,
++                        boost::system::error_code& /*ec*/) {
++        stack.push_chars(s);
++        return true;
++    }
++
++    bool on_string(boost::json::string_view s, std::size_t /*n*/,
++                   boost::system::error_code& /*ec*/) {
++        stack.push_string(s);
++        return true;
++    }
++
++    static bool on_number_part(boost::json::string_view /*s*/, boost::system::error_code& /*ec*/) {
++        return true;
++    }
++
++    bool on_int64(std::int64_t i, boost::json::string_view /*s*/,
++                  boost::system::error_code& /*ec*/) {
++        stack.push_int64(i);
++        return true;
++    }
++
++    bool on_uint64(std::uint64_t u, boost::json::string_view /*s*/,
++                   boost::system::error_code& /*ec*/) {
++        stack.push_uint64(u);
++        return true;
++    }
++
++    bool on_double(double d, boost::json::string_view /*s*/, boost::system::error_code& /*ec*/) {
++        stack.push_double(d);
++        return true;
++    }
++
++    bool on_bool(bool b, boost::system::error_code& /*ec*/) {
++        stack.push_bool(b);
++        return true;
++    }
++
++    bool on_null(boost::system::error_code& /*ec*/) {
++        stack.push_null();
++        return true;
++    }
++
++    static bool on_comment_part(boost::json::string_view /*s*/, boost::system::error_code& /*ec*/) {
++        return true;
++    }
++
++    static bool on_comment(boost::json::string_view /*s*/, boost::system::error_code& /*ec*/) {
++        return true;
++    }
++
++    boost::json::value_stack stack;
++};
++
+ /** Drains a serializer into `out`, in pieces of a buffer on the stack. */
+ inline void drain(boost::json::serializer& serializer, std::pmr::string& out) {
+     std::array<char, 512> buffer{};
+@@ -104,18 +230,60 @@ inline void append_key(std::pmr::string& out, std::string_view key) {
+ }
+ 
+ /**
+- * Parses `text` into a value of `storage`, or sets `ec`.
++ * Parses a text of the protocol into a value of `storage`, or sets `ec`: a relay's message, a
++ * signal, a handshake message, a candidate.
++ *
++ * A text from a relay or a peer may be made to cost its reader: it is refused when it is longer
++ * than `max_bytes`, before it is read, and when one of its objects has more than
++ * @ref max_object_members members, as the parser meets the first member too many, before that
++ * object is built.
+  *
+  * Tip: `boost::json::parse` keeps its temporaries in the default resource once they outgrow a
+  * buffer on the stack; this parser keeps them in `storage` too.
+  *
+  * @param text The JSON text.
++ * @param max_bytes The longest text the caller reads, in bytes.
+  * @param storage The storage the value and the parser's temporaries are allocated in.
+- * @param ec Set when the text is not one JSON value.
++ * @param ec Set when the text is not one JSON value; to `boost::system::errc::message_size` when it
++ * is longer than `max_bytes`, and to `boost::json::error::object_too_large` when an object of it
++ * has more than @ref max_object_members members.
+  * @return The value, or a null value of `storage` when `ec` is set.
+  */
+-inline boost::json::value parse(std::string_view text, const boost::json::storage_ptr& storage,
++inline boost::json::value parse(std::string_view text, std::size_t max_bytes,
++                                const boost::json::storage_ptr& storage,
+                                 boost::system::error_code& ec) {
++    if (text.size() > max_bytes) {
++        ec = make_error_code(boost::system::errc::message_size);
++        return boost::json::value(storage);
++    }
++    boost::json::basic_parser<detail::bounded_handler> parser(boost::json::parse_options{},
++                                                              storage);
++    parser.handler().stack.reset(storage);
++    const auto read = parser.write_some(false, text.data(), text.size(), ec);
++    if (!ec && read < text.size()) {
++        ec = boost::json::error::extra_data;
++    }
++    if (ec) {
++        return boost::json::value(storage);
++    }
++    return parser.handler().stack.release();
++}
++
++/**
++ * Parses a JSON payload an application sent into a value of `storage`, or sets `ec`: any JSON
++ * text, as Trystero's `JSON.parse` reads it.
++ *
++ * Tip: an application's objects may have any number of members, so the protocol's bound on them
++ * (@ref max_object_members) is not applied here.
++ *
++ * @param text The JSON text.
++ * @param storage The storage the value and the parser's temporaries are allocated in.
++ * @param ec Set when the text is not one JSON value.
++ * @return The value, or a null value of `storage` when `ec` is set.
++ */
++inline boost::json::value parse_payload(std::string_view text,
++                                        const boost::json::storage_ptr& storage,
++                                        boost::system::error_code& ec) {
+     boost::json::parser parser(storage);
+     parser.reset(storage);
+     parser.write(text.data(), text.size(), ec);
+diff --git a/include/webcpp/trystero/protocol/nostr.hpp b/include/webcpp/trystero/protocol/nostr.hpp
+index 4d4f4a1..0763f08 100644
+--- a/include/webcpp/trystero/protocol/nostr.hpp
++++ b/include/webcpp/trystero/protocol/nostr.hpp
+@@ -10,6 +10,8 @@
+ #include <webcpp/trystero/config.hpp>
+ 
+ #include <webcpp/trystero/protocol/json.hpp>
++#include <webcpp/trystero/protocol/relays.hpp>
++#include <webcpp/trystero/protocol/signal.hpp>
+ #include <webcpp/trystero/protocol/topics.hpp>
+ 
+ #include <secp256k1.h>
+@@ -36,6 +38,19 @@
+ 
+ namespace webcpp::trystero::protocol::nostr {
+ 
++/**
++ * The longest text of a relay a room parses, in bytes: a longer one is dropped, and logged, before
++ * it is read (json::parse), and the connection goes on. One longer than
++ * @ref max_relay_message_bytes closes the connection instead.
++ *
++ * The longest text measured is an event that carries an answer: 1,244 bytes, among Trystero JS in
++ * Chrome and both backends. The bound is an event that carries the longest signal a room
++ * parses (@ref max_parsed_signal_bytes), with 2 KiB for the event's other fields, the subscription
++ * id and the escaping of the signal's quotes, which take some 600 bytes.
++ */
++inline constexpr std::size_t max_parsed_relay_text_bytes = max_parsed_signal_bytes + 2048;
++static_assert(max_parsed_relay_text_bytes < max_relay_message_bytes);
++
+ /** The tag a Trystero event carries its topic in, its `tag`: "x". */
+ inline constexpr std::string_view topic_tag = "x";
+ 
+diff --git a/include/webcpp/trystero/protocol/signal.hpp b/include/webcpp/trystero/protocol/signal.hpp
+index 04161f0..656df05 100644
+--- a/include/webcpp/trystero/protocol/signal.hpp
++++ b/include/webcpp/trystero/protocol/signal.hpp
+@@ -69,6 +69,23 @@ inline constexpr std::size_t max_sealed_description_bytes = std::size_t{64} * 10
+ inline constexpr std::size_t max_sealed_candidate_bytes = std::size_t{16} * 1024;
+ static_assert(sealed_size(8192) <= max_sealed_candidate_bytes);
+ 
++/**
++ * The longest signal a room parses, in bytes: a longer one is dropped, and logged, before it is
++ * read (json::parse).
++ *
++ * The longest signal measured is an answer: 762 bytes, among Trystero JS in Chrome and both
++ * backends, which trickle their candidates; Chrome's offer for a data channel with every candidate
++ * it gathers is 716 bytes of SDP, about 1.1 KB sealed in a signal. The bound is the longest signal
++ * the bounds of its fields admit, a sealed offer or answer of @ref max_sealed_description_bytes
++ * with the longest ids, and 1 KiB to spare, so that it refuses no signal they accept: 65 KiB, some
++ * sixty times Chrome's offer with its candidates.
++ */
++inline constexpr std::size_t max_parsed_signal_bytes = max_sealed_description_bytes + 1024;
++// The 64 bytes hold the 53 of the keys and the punctuation of an answer from a passive room.
++static_assert(max_sealed_description_bytes + max_peer_id_bytes + max_offer_id_bytes + 64 <=
++                  max_parsed_signal_bytes,
++              "the longest signal the bounds of its fields admit is parsed");
++
+ /**
+  * The raw AES-GCM key of a room, what Trystero's `genKey` imports: the SHA-256 of
+  * "<password>:<app>:<room>".
+@@ -270,6 +287,15 @@ inline std::pmr::string write_signal(
+     return out;
+ }
+ 
++/**
++ * The longest message of the password handshake a room parses, in bytes: a longer one fails the
++ * handshake, as a message of the wrong shape does.
++ *
++ * Trystero's are at most 99 bytes, `{"__trystero_pw":"response","h":"<64 hexadecimal digits>"}`;
++ * the bound is ten times that.
++ */
++inline constexpr std::size_t max_handshake_bytes = 1024;
++
+ /**
+  * The password handshake's proof, Trystero's `hashChallenge`: the hexadecimal SHA-256 of
+  * "<challenge>:<password>:<app>:<room>".
+diff --git a/include/webcpp/trystero/room.hpp b/include/webcpp/trystero/room.hpp
+index 19e063f..d328f6f 100644
+--- a/include/webcpp/trystero/room.hpp
++++ b/include/webcpp/trystero/room.hpp
+@@ -383,7 +383,7 @@ struct payload_traits<boost::json::value> {
+             return std::nullopt;
+         }
+         boost::system::error_code ec;
+-        auto v = protocol::json::parse(as_text(m.payload()), m.json, ec);
++        auto v = protocol::json::parse_payload(as_text(m.payload()), m.json, ec);
+         if (ec) {
+             return std::nullopt;
+         }
+@@ -1147,7 +1147,7 @@ private:
+             return;
+         }
+         boost::system::error_code ec;
+-        const auto value = protocol::json::parse(data, json_, ec);
++        const auto value = protocol::json::parse(data, protocol::max_handshake_bytes, json_, ec);
+         const auto* o = ec ? nullptr : value.if_object();
+         const auto field = [o](std::string_view key) -> std::string_view {
+             const auto* v = o != nullptr ? o->if_contains(key) : nullptr;
+diff --git a/test/protocol_test.cpp b/test/protocol_test.cpp
+index e16f221..bb8a296 100644
+--- a/test/protocol_test.cpp
++++ b/test/protocol_test.cpp
+@@ -8,8 +8,10 @@
+ // oracle wrote into fixtures/expected/expected.json. The fixture's path is the test's one argument,
+ // as webcpp.run passes its input file.
+ 
++#include <webcpp/trystero/json_resource.hpp>
+ #include <webcpp/trystero/protocol/action_wire.hpp>
+ #include <webcpp/trystero/protocol/envelope.hpp>
++#include <webcpp/trystero/protocol/json.hpp>
+ #include <webcpp/trystero/protocol/nostr.hpp>
+ #include <webcpp/trystero/protocol/relays.hpp>
+ #include <webcpp/trystero/protocol/signal.hpp>
+@@ -23,11 +25,13 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <fstream>
++#include <memory_resource>
+ #include <random>
+ #include <span>
+ #include <sstream>
+ #include <string>
+ #include <string_view>
++#include <utility>
+ #include <variant>
+ #include <vector>
+ 
+@@ -333,6 +337,98 @@ void signal_bounds() {
+     BOOST_TEST(!read({.peer_id = "p", .offer_id = offer_id + "a", .offer = "x"}));
+ }
+ 
++/** The text of an object of `members` members, "k0" to "k<members - 1>", each holding `value`. */
++std::string object_of(std::size_t members, std::string_view value = "0") {
++    std::string text = "{";
++    for (std::size_t i = 0; i < members; ++i) {
++        text += i == 0 ? "\"k" : ",\"k";
++        text += std::to_string(i);
++        text += "\":";
++        text += value;
++    }
++    return text + "}";
++}
++
++// A protocol text's objects hold at most json::max_object_members members, the most Boost.JSON's
++// object holds without hashing its keys, each object counted on its own, and the parse stops at
++// the first member too many, before it reads its key; a text longer than the caller reads is
++// refused before it is read.
++void json_bounds() {
++    constexpr std::size_t limit = tp::json::max_object_members;
++    BOOST_TEST_EQ(limit, 18U);
++    std::pmr::monotonic_buffer_resource memory;
++    webcpp::trystero::json_resource resource(&memory);
++    const json::storage_ptr storage(&resource);
++    const auto parse = [&storage](std::string_view text, std::size_t max_bytes = 1U << 20U) {
++        boost::system::error_code ec;
++        auto value = tp::json::parse(text, max_bytes, storage, ec);
++        return std::pair(std::move(value), ec);
++    };
++
++    const auto [at_limit, at_limit_ec] = parse(object_of(limit));
++    BOOST_TEST(!at_limit_ec);
++    BOOST_TEST_EQ(at_limit.as_object().size(), limit);
++    BOOST_TEST(at_limit.storage().get() == storage.get());
++    const auto [above, above_ec] = parse(object_of(limit + 1));
++    BOOST_TEST(above_ec == json::error::object_too_large);
++    BOOST_TEST(above.is_null());
++
++    // The parse stops as it meets the 19th member: what follows is never read, so a text malformed
++    // there still reports the member too many.
++    auto stopped = object_of(limit + 1);
++    stopped.insert(stopped.size() - 1, R"(,"k19":{,,,)");
++    BOOST_TEST(parse(stopped).second == json::error::object_too_large);
++
++    // Counted per object: an object of 18 objects of 18 members each, 342 members in all, and
++    // arrays of any length.
++    const auto [whole, whole_ec] = parse(object_of(limit, object_of(limit)));
++    BOOST_TEST(!whole_ec);
++    BOOST_TEST_EQ(whole.at("k17").as_object().size(), limit);
++    BOOST_TEST(parse(object_of(limit, object_of(limit + 1))).second ==
++               json::error::object_too_large);
++    BOOST_TEST(parse(object_of(1, object_of(1, object_of(limit + 1)))).second ==
++               json::error::object_too_large);
++    std::string many = "[";
++    for (std::size_t i = 0; i < 100; ++i) {
++        many += (i == 0 ? "" : ",") + object_of(limit);
++    }
++    many += "]";
++    const auto [array, array_ec] = parse(many);
++    BOOST_TEST(!array_ec);
++    BOOST_TEST_EQ(array.as_array().size(), 100U);
++
++    // The size, before anything is read, and what boost::json::parser refuses as well.
++    const auto text = object_of(limit);
++    BOOST_TEST(!parse(text, text.size()).second);
++    BOOST_TEST(parse(text, text.size() - 1).second == boost::system::errc::message_size);
++    BOOST_TEST(parse(text + "x", text.size() + 1).second == json::error::extra_data);
++    BOOST_TEST(parse("{").second == json::error::incomplete);
++
++    // At the bounds a room parses with: the longest signal and relay text are read, one byte more
++    // is not.
++    const auto signal_of = [](std::size_t size) {
++        std::string signal = R"({"peerId":"p","offer":")";
++        signal += std::string(size - signal.size() - 2, 'a');
++        return signal + "\"}";
++    };
++    BOOST_TEST(!parse(signal_of(tp::max_parsed_signal_bytes), tp::max_parsed_signal_bytes).second);
++    BOOST_TEST(
++        parse(signal_of(tp::max_parsed_signal_bytes + 1), tp::max_parsed_signal_bytes).second ==
++        boost::system::errc::message_size);
++    std::string notice = R"(["NOTICE",")";
++    notice += std::string(tp::nostr::max_parsed_relay_text_bytes - notice.size() - 2, 'n');
++    notice += "\"]";
++    BOOST_TEST(!parse(notice, tp::nostr::max_parsed_relay_text_bytes).second);
++    BOOST_TEST(parse(notice + " ", tp::nostr::max_parsed_relay_text_bytes).second ==
++               boost::system::errc::message_size);
++
++    // An application's payload is any JSON: its objects are not bounded.
++    boost::system::error_code ec;
++    const auto payload = tp::json::parse_payload(object_of(100), storage, ec);
++    BOOST_TEST(!ec);
++    BOOST_TEST_EQ(payload.as_object().size(), 100U);
++}
++
+ void text() {
+     BOOST_TEST_EQ(tp::base64_encode(tp::bytes{}), "");
+     BOOST_TEST_EQ(tp::base64_encode(tp::bytes{'f'}), "Zg==");
+@@ -363,6 +459,7 @@ int main(int argc, char* argv[]) {
+     envelopes(fixture);
+     signals();
+     signal_bounds();
++    json_bounds();
+     text();
+     return boost::report_errors();
+ }
+diff --git a/test/room_test.cpp b/test/room_test.cpp
+index eb434b2..e3cf6ba 100644
+--- a/test/room_test.cpp
++++ b/test/room_test.cpp
+@@ -16,8 +16,11 @@
+ #include <boost/asio/io_context.hpp>
+ #include <boost/asio/use_awaitable.hpp>
+ #include <boost/core/lightweight_test.hpp>
++#include <boost/json/detail/digest.hpp>
++#include <boost/json/error.hpp>
+ #include <boost/json/parse.hpp>
+ #include <boost/json/serialize.hpp>
++#include <boost/system/errc.hpp>
+ 
+ #include <algorithm>
+ #include <array>
+@@ -25,12 +28,14 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstdlib>
++#include <cstring>
+ #include <functional>
+ #include <iostream>
+ #include <map>
+ #include <memory>
+ #include <memory_resource>
+ #include <optional>
++#include <random>
+ #include <span>
+ #include <string>
+ #include <string_view>
+@@ -365,15 +370,18 @@ void a_refused_peer_connection_is_reported_and_tried_again() {
+     }
+ }
+ 
+-/** A resource that counts the bytes it has out, and the most it had out at once. */
++/** A resource that counts the bytes it has out, the most it had out at once, and every byte it
++ * handed out. */
+ class counting_resource final : public std::pmr::memory_resource {
+ public:
+     std::size_t in_use = 0;
+     std::size_t peak = 0;
++    std::size_t allocated = 0;
+ 
+ private:
+     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+         in_use += bytes;
++        allocated += bytes;
+         peak = std::max(peak, in_use);
+         return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+     }
+@@ -1240,6 +1248,201 @@ void a_rate_limited_relay_does_not_stop_discovery() {
+     BOOST_TEST_LT(1000 - f.net.relay(relay_a).rate_limit_next, 12);
+ }
+ 
++static_assert(BOOST_JSON_ARCH == 8 * sizeof(std::size_t), "Boost.JSON hashes words of a size_t");
++
++/**
++ * `count` keys of `length` bytes that share one digest of Boost.JSON's object, whatever its seed,
++ * as a hostile relay crafts them.
++ *
++ * Boost.JSON's MurmurHash folds each word w of a key into its state with xor and a multiplication
++ * by an odd number, after mixing it by an invertible f; flipping the top bit of f(w) flips only the
++ * top bit of the state, whatever it was, and flipping it again in the next word cancels it. So the
++ * two-word units w1 w2 and w1' w2', with f(w') = f(w) ^ top, leave the state as the other does, and
++ * n units make 2^n keys of one digest. The words are printable ASCII, so a key is a JSON string as
++ * it is. 64-bit Boost.JSON hashes 8-byte words, 32-bit Boost.JSON (wasm32) 4-byte ones.
++ */
++template <class Word>
++std::vector<std::string> colliding_keys(std::size_t count, std::size_t length) {
++    constexpr bool wide = sizeof(Word) == 8;
++    constexpr Word m =
++        wide ? static_cast<Word>(0xc6a4a7935bd1e995ULL) : static_cast<Word>(0x5bd1e995U);
++    constexpr int r = wide ? 47 : 24;
++    constexpr Word top = Word{1} << ((8 * sizeof(Word)) - 1);
++    const auto mix = [](Word x) {
++        x *= m;
++        x ^= x >> r;
++        return x * m;
++    };
++    Word inverse = m;  // Newton's iteration doubles the correct low bits of m's inverse each time
++    for (int i = 0; i < 6; ++i) {
++        inverse *= 2 - (m * inverse);
++    }
++    const auto unmix = [inverse](Word y) {
++        y *= inverse;
++        y ^= y >> r;  // its own inverse, since 2 r is at least the word's width
++        return y * inverse;
++    };
++    const auto printable = [](Word x) {
++        for (std::size_t i = 0; i < sizeof(Word); ++i) {
++            const auto c = static_cast<unsigned char>(x >> (8 * i));
++            if (c < 0x20 || c > 0x7e || c == '"' || c == '\\') {
++                return false;
++            }
++        }
++        return true;
++    };
++    // A fixed seed: the keys are the same on every run.
++    // NOLINTNEXTLINE(bugprone-random-generator-seed,cert-msc32-c,cert-msc51-cpp)
++    std::mt19937_64 random(20261011);
++    const auto pair = [&] {
++        for (;;) {
++            Word x = 0;
++            for (std::size_t i = 0; i < sizeof(Word); ++i) {
++                x |= static_cast<Word>(0x20 + (random() % 0x5f)) << (8 * i);
++            }
++            const Word partner = unmix(mix(x) ^ top);
++            if (printable(x) && printable(partner)) {
++                return std::array<Word, 2>{x, partner};
++            }
++        }
++    };
++    const auto first = pair();
++    const auto second = pair();
++    const auto bytes = [](Word w) {
++        std::string out(sizeof(Word), '\0');
++        std::memcpy(out.data(), &w, sizeof(Word));  // in the host's order, as the digest reads it
++        return out;
++    };
++    const std::array<std::string, 2> units{bytes(first[0]) + bytes(second[0]),
++                                           bytes(first[1]) + bytes(second[1])};
++    const std::size_t per_key = length / units[0].size();
++    webcpp::test::require(BOOST_TEST_EQ(per_key * units[0].size(), length));
++    webcpp::test::require(BOOST_TEST_LE(count, std::size_t{1} << per_key));
++    std::vector<std::string> keys;
++    for (std::size_t i = 0; i < count; ++i) {
++        std::string key;
++        for (std::size_t unit = 0; unit < per_key; ++unit) {
++            key += units[(i >> unit) & 1U];
++        }
++        keys.push_back(std::move(key));
++    }
++    return keys;
++}
++
++// A relay can send a room any text. Before the bound on an object's members, an object of keys
++// that share one digest of Boost.JSON's object made each key cost a comparison with every one
++// before it, all in one bucket of its hash index: 256 of them, 32,640 comparisons of 128-byte keys
++// for a text of 35 KB, quadratic in the text a relay may send, and the room acted on the message.
++// Now the room stops reading an object at its 19th member, before any object is built, logs the
++// text it dropped and goes on, as it does with a text or a signal longer than it parses: the
++// relay's connection stays open, and a peer joins through it afterwards.
++void hostile_relay_texts_are_refused_and_the_room_goes_on() {
++    constexpr std::size_t key_length = 128;
++    constexpr std::size_t hostile_keys = 256;
++    const auto keys = colliding_keys<std::size_t>(hostile_keys, key_length);
++    for (const std::size_t seed : {std::size_t{0x1000}, std::size_t{0x7ffe1234}, ~std::size_t{0}}) {
++        const auto digest = [seed](const std::string& key) {
++            return boost::json::detail::digest(key.begin(), key.end(), seed);
++        };
++        const auto one = digest(keys.front());
++        BOOST_TEST(
++            std::ranges::all_of(keys, [&](const std::string& key) { return digest(key) == one; }));
++    }
++    std::string members;
++    for (const auto& key : keys) {
++        members += ",\"" + key + "\":0";
++    }
++
++    counting_resource memory;  // first: the io_context's pending operations free into it
++    fixture f;
++    const std::string_view a_id = "00000000000000000000";  // lower than every other: it offers
++    auto c = config(a_id);
++    c.relay_urls = {relay_a};
++    c.memory = &memory;
++    std::vector<std::string> log;
++    c.log = [&log](std::string_view category, std::string_view text) {
++        log.push_back(std::string(category) + ": " + std::string(text));
++    };
++    trystero::room a(f.io.get_executor(), f.net, std::move(c), "hostile");
++    std::vector<std::string> joined;
++    a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
++    const auto logged = [&log](const std::string& line) { return std::ranges::count(log, line); };
++    const auto starts = [&log](std::string_view prefix) {
++        return std::ranges::any_of(
++            log, [prefix](const std::string& l) { return l.starts_with(prefix); });
++    };
++    const std::string connected = std::string("nostr: connected to ") + relay_a;
++    webcpp::test::require(BOOST_TEST(run_until(f.io, [&] { return starts(connected); })));
++    f.io.poll();  // the subscription reaches the relay
++
++    std::array<std::uint8_t, 32> secret{};
++    secret.fill(7);
++    const auto signer = *trystero::protocol::nostr::signer::from_secret(secret);
++    const auto topic = trystero::protocol::root_topic(app_id, "hostile");
++    // The relay's text of an event signed by `signer` that carries `content`, with `extra` members
++    // after its own: ["EVENT",<subscription>,{...}].
++    const auto relayed = [&](std::string_view content, std::string_view extra) {
++        const std::array<std::uint8_t, 32> aux{};
++        const auto sent = trystero::protocol::nostr::event_message(signer, f.net.unix_seconds(),
++                                                                   topic, content, aux);
++        const std::size_t head = std::string_view(R"(["EVENT",)").size();
++        std::string event(std::string_view(sent).substr(head, sent.size() - head - 1));
++        event.insert(event.size() - 1, extra);
++        return [event](std::string_view subscription) {
++            std::pmr::string text(R"(["EVENT",)");
++            trystero::protocol::json::append_string(text, subscription);
++            text += ',';
++            text += event;
++            text += ']';
++            return std::string(text);
++        };
++    };
++    // What the room's resource hands out while the room reads what the relay sends: the parse
++    // holds each member it reads.
++    const auto read = [&](const auto& text_for) {
++        f.net.relay(relay_a).inject(topic, text_for);
++        const std::size_t before = memory.allocated;
++        f.io.poll();
++        return memory.allocated - before;
++    };
++
++    // An announcement whose event has the colliding members besides its own seven, and one whose
++    // signal has them besides its peer id.
++    const auto in_event = read(relayed(R"({"peerId":"1hostile"})", members));
++    const auto in_signal = read(relayed(R"({"peerId":"1hostile2")" + members + "}", ""));
++    const std::string dropped_text = std::string("nostr: dropped a text from ") + relay_a + ": ";
++    const std::string dropped_signal = "signal: dropped a signal: ";
++    const auto too_many = make_error_code(boost::json::error::object_too_large).message();
++    BOOST_TEST_EQ(logged(dropped_text + too_many), 1);
++    BOOST_TEST_EQ(logged(dropped_signal + too_many), 1);
++    BOOST_TEST_LT(in_event, hostile_keys * key_length / 4);
++    BOOST_TEST_LT(in_signal, hostile_keys * key_length / 4);
++
++    // A relay text, and a signal, one byte longer than the room parses.
++    read([](std::string_view /*subscription*/) {
++        std::string notice = R"(["NOTICE",")";
++        notice += std::string(
++            trystero::protocol::nostr::max_parsed_relay_text_bytes + 1 - notice.size() - 2, 'n');
++        return notice + "\"]";
++    });
++    std::string long_signal = R"({"peerId":"1long","offer":")";
++    long_signal +=
++        std::string(trystero::protocol::max_parsed_signal_bytes + 1 - long_signal.size() - 2, 'o');
++    long_signal += "\"}";
++    read(relayed(long_signal, ""));
++    const auto too_long = make_error_code(boost::system::errc::message_size).message();
++    BOOST_TEST_EQ(logged(dropped_text + too_long), 1);
++    BOOST_TEST_EQ(logged(dropped_signal + too_long), 1);
++
++    // None was acted on, the relay's connection is the one it had, and a peer joins through it.
++    BOOST_TEST_EQ(f.net.made_connections, 0U);
++    auto config_b = config("BBBBBBBBBBBBBBBBBBBB");
++    config_b.relay_urls = {relay_a};
++    const trystero::room b(f.io.get_executor(), f.net, std::move(config_b), "hostile");
++    BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1; }));
++    BOOST_TEST(!starts("nostr: lost "));
++}
++
+ }  // namespace
+ 
+ int main() {
+@@ -1272,5 +1475,6 @@ int main() {
+     async_receive_works_in_a_coroutine();
+     view_handlers_read_the_frame_without_copying();
+     a_rate_limited_relay_does_not_stop_discovery();
++    hostile_relay_texts_are_refused_and_the_room_goes_on();
+     return boost::report_errors();
+ }
+diff --git a/test/support/memory_backend.hpp b/test/support/memory_backend.hpp
+index 9c3f594..11fe7c9 100644
+--- a/test/support/memory_backend.hpp
++++ b/test/support/memory_backend.hpp
+@@ -13,6 +13,7 @@
+ #include <webcpp/trystero/json_resource.hpp>
+ #include <webcpp/trystero/protocol/json.hpp>
+ #include <webcpp/trystero/protocol/nostr.hpp>
++#include <webcpp/trystero/protocol/relays.hpp>
+ #include <webcpp/trystero/protocol/signal.hpp>
+ #include <webcpp/trystero/protocol/text.hpp>
+ 
+@@ -127,6 +128,13 @@ public:
+     /** Closes every connection that has a subscription, as a relay that goes away does. */
+     void close_all();
+ 
++    /**
++     * Sends each subscription to `topic` the text `text_for` makes of its subscription id, as it
++     * is: a relay that forwards anything, or makes its own texts.
++     */
++    template <class TextFor>
++    void inject(std::string_view topic, const TextFor& text_for);
++
+     std::size_t events_seen = 0;
+     /** Answers this many EVENTs with "rate-limited:", to exercise the strategy's backoff. */
+     int rate_limit_next = 0;
+@@ -230,10 +238,22 @@ inline void memory_relay::close_all() {
+     }
+ }
+ 
++template <class TextFor>
++void memory_relay::inject(std::string_view topic, const TextFor& text_for) {
++    for (const auto& [subscribed, s] : subscriptions_) {
++        const auto socket = s.socket.lock();
++        if (socket && s.topics.contains(topic)) {
++            const auto text = text_for(std::string_view(subscribed.second));
++            socket->deliver(std::pmr::string(std::string_view(text), socket->memory()));
++        }
++    }
++}
++
+ inline void memory_relay::receive(const std::shared_ptr<memory_websocket>& from,
+                                   std::string_view text) {
+     boost::system::error_code ec;
+-    const auto value = protocol::json::parse(text, from->json(), ec);
++    const auto value =
++        protocol::json::parse(text, protocol::max_relay_message_bytes, from->json(), ec);
+     const auto* message = ec ? nullptr : value.if_array();
+     if (message == nullptr || message->empty() || !message->at(0).is_string()) {
+         return;

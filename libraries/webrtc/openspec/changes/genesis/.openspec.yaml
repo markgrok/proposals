@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-10
+webcpp:
+  library: webrtc
+  title: "webrtc: the W3C WebRTC API in Asio's model, native and in the browser"
+  kind: own
+  port_of: null
+  status: draft
+  release: null
+  implementation: null
+  decided: null

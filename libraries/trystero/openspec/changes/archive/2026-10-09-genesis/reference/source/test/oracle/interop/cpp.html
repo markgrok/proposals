@@ -1,0 +1,54 @@
+<!--
+Copyright (c) 2026 WebCpp.org
+
+Distributed under the Boost Software License, Version 1.0. (See
+accompanying file LICENSE_1_0.txt or copy at
+https://www.boost.org/LICENSE_1_0.txt)
+
+The C++ peer of the interop test (peer.cpp, built with Emscripten), which run.mjs opens in headless
+Chrome.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>webcpp trystero peer</title>
+</head>
+<body>
+<pre id="log"></pre>
+<script>
+window.events = []
+window.trysteroLog = (category, text) => {
+    const line = `[${(performance.now() / 1000).toFixed(2)}s] ${category}: ${text}`
+    console.log(line)
+    document.getElementById('log').append(line + '\n')
+}
+// Counts the page's RTCPeerConnections, for the scenarios that bound them: every one made, as Chromium counts them
+// until a garbage collection, the live ones, and the most there were at once.
+window.madePeerConnections = 0
+window.livePeerConnections = 0
+window.peakPeerConnections = 0
+const PeerConnection = window.RTCPeerConnection
+window.RTCPeerConnection = class extends PeerConnection {
+    constructor(...args) {
+        super(...args)
+        ++window.madePeerConnections
+        window.peakPeerConnections = Math.max(window.peakPeerConnections, ++window.livePeerConnections)
+    }
+    close() {
+        if (!this.counted) {
+            this.counted = true
+            --window.livePeerConnections
+        }
+        return super.close()
+    }
+}
+var Module = {onRuntimeInitialized: () => Module.start()}
+window.leave = () => Module.leave()
+// The program run.mjs serves under /build/, as b2 linked it: interop_browser.js, beside its wasm.
+const program = document.createElement('script')
+program.src = '/build/' + new URLSearchParams(location.search).get('program')
+document.body.append(program)
+</script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+From 32a2636f0423de0bb98fb34b78d75a107ebc9103 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 11:13:02 -0400
+Subject: [PATCH 15/25] trystero: a room's own leave lets its bindings go
+ through the one place a binding's end is decided
+
+end_kind::room_end was declared and never used: close_everything detached each binding itself. Both it and remove_peer now call let_go, which maps every kind of end to what the connection does.
+---
+ include/webcpp/trystero/room.hpp | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/include/webcpp/trystero/room.hpp b/include/webcpp/trystero/room.hpp
+index d83335f..e90bbb0 100644
+--- a/include/webcpp/trystero/room.hpp
++++ b/include/webcpp/trystero/room.hpp
+@@ -1236,6 +1236,16 @@ private:
+         remove_peer(it->first, reason, end_kind::kick);
+     }
+ 
++    /** Detaches a peer's binding as its end says: the connection idles after a departure, this
++     * room's own leave among them, and ends after a kick of its last room; at the connection's
++     * end, the connection has let the binding go already. */
++    void let_go(peer_state& state, end_kind kind) {
++        if (kind == end_kind::connection_end) {
++            return;
++        }
++        state.link->detach(kind == end_kind::kick, app_->idle_timeout());
++    }
++
+     void remove_peer(std::string_view peer_view, std::string_view reason, end_kind kind) {
+         const auto it = peers_.find(peer_view);
+         if (it == peers_.end()) {
+@@ -1246,10 +1256,7 @@ private:
+         std::pmr::string peer = std::move(node.key());
+         auto& state = node.mapped();
+         log_("room", "peer ", peer, " gone: ", reason);
+-        if (kind != end_kind::connection_end) {
+-            // The connection idles after a departure and ends after a kick of its last room.
+-            state.link->detach(kind == end_kind::kick, app_->idle_timeout());
+-        }
++        let_go(state, kind);
+         for (auto& ping : state.pings) {
+             complete(std::move(ping.handler), make_error_code(error::peer_disconnected),
+                      std::chrono::milliseconds{});
+@@ -1282,7 +1289,7 @@ private:
+         auto peers = std::move(peers_);
+         peers_.clear();
+         for (auto& [id, state] : peers) {
+-            state.link->detach(false, app_->idle_timeout());
++            let_go(state, end_kind::room_end);
+             for (auto& ping : state.pings) {
+                 complete(std::move(ping.handler), make_error_code(error::room_left),
+                          std::chrono::milliseconds{});
+-- 
+2.55.0
+

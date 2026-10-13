@@ -1,0 +1,58 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[#wasi-response]
+== The response
+
+`webcpp::wasi::http::response`, in `<webcpp/wasi/http/response.hpp>`, is
+what a main returns: an aggregate of three members, each with a default, so
+that a designated initializer names only what differs from it, as
+`{.status = 404}` does.
+
+[cols="1,1,3",options="header"]
+|===
+| Member | Type | What it holds
+
+| `status`
+| `unsigned`, 200 by default
+| The status, sent as it is when it lies within 100 to 599, the five
+  classes of HTTP. Outside them the handler answers an internal error
+  instead of the main's response (<<wasi-invariant-9,guarantee 9>>).
+
+| `content_type`
+| `std::string_view`, empty by default
+| The `content-type` header, sent only when it is not empty. It is read
+  after the main has returned, so it views a string literal, such as
+  `"application/json"`, or the method or the target, never a string of the
+  main's own. A value the host refuses as a field value, one that holds a
+  CR, an LF or a NUL for example, answers an internal error instead
+  (<<wasi-invariant-9,guarantee 9>>).
+
+| `body`
+| `std::string`, empty by default
+| The body, sent whole, however long.
+|===
+
+The handler sends no other header (<<wasi-invariant-7,guarantee 7>>).
+
+A response the handler cannot send as the main wrote it, with a status
+outside 100 to 599 or a content type the host refuses, is not sent at all:
+the handler answers an internal error, before it has committed anything, and
+wasmtime 47 sends that as its own `500 Internal Server Error`, an HTML page
+that names it. Without the check, wasmtime would send some of those statuses
+as `200 OK`, and the status of `wasi:http`, 16 bits wide, would read 65736 as
+200, so a main's bug would reach the client as a success; and a content type
+the host refused would be left out without a word.
+
+A `content_type` is a view rather than a string because it is nearly always
+a literal: a view of one costs nothing, where a `std::string` of
+`"application/json"`, 16 characters, would allocate on wasm32, where
+`libc++` keeps at most 10 in the string itself.
+
+`response.hpp` includes nothing of the component ABI, and compiles natively
+too: the rest of a program builds responses, holds them and passes them
+around, as messages between actors for example, and is tested natively,
+without a WASI toolchain.

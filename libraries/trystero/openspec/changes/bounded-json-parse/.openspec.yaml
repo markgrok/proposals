@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-11
+webcpp:
+  library: trystero
+  title: "trystero: bound the text and the objects a room parses"
+  kind: port
+  port_of: "Trystero 0.26.0"
+  status: draft
+  release: null
+  implementation: null
+  decided: null

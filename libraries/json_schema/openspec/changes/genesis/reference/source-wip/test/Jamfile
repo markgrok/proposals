@@ -1,0 +1,101 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+project : requirements <library>/webcpp/json_schema//json_schema ;
+
+import regex ;
+import webcpp ;
+
+webcpp.targets native wasip2 wasip3 emscripten ;
+
+# Every public header compiles alone, one call per directory.
+webcpp.headers-alone json_schema : ../include : json_schema.hpp json_schema/*.hpp ;
+webcpp.headers-alone json_schema : ../include : json_schema/detail/memory/*.hpp ;
+
+# config.hpp defines WEBCPP_JSON_SCHEMA_NO_EXCEPTIONS exactly when the build
+# has no exceptions, and keeps it when a developer defines it in a build
+# that has them.
+webcpp.compile config : config_test.cpp ;
+webcpp.compile config_developer_defined : config_test.cpp
+  : <define>WEBCPP_JSON_SCHEMA_NO_EXCEPTIONS <define>WEBCPP_TEST_JSON_SCHEMA_DEVELOPER_DEFINED ;
+
+webcpp.run errors : errors_test.cpp ;
+# result::value() of an error raises it, which this test catches.
+webcpp.run errors_throw : errors_throw_test.cpp : <exception-handling>on ;
+webcpp.run memory : memory_test.cpp ;
+# A size that would overflow is refused with std::bad_alloc, which this test
+# catches.
+webcpp.run memory_throw : memory_throw_test.cpp : <exception-handling>on ;
+# The adapter refuses an allocator whose pointer is not a raw pointer, with
+# its own message.
+webcpp.compile-diagnostic fancy_pointer_refused : fancy_pointer_test.cpp ;
+
+webcpp.headers-alone json_schema : ../include
+  : json_schema/numbers/*.hpp json_schema/ir/number.hpp json_schema/detail/numbers/*.hpp ;
+webcpp.run numbers : numbers_test.cpp ;
+
+# The numbers against an exact oracle, numbers/oracle.txt, which
+# numbers/oracle.py writes from Python's decimal and fractions. The test
+# reads it at run time from the directory WEBCPP_TEST_JSON_SCHEMA_NUMBERS
+# names, and runs again when it changes. The own lane oracle checks that the
+# committed file is what the script writes.
+path-constant NUMBERS : numbers ;
+.numbers = [ regex.replace $(NUMBERS) "\\\\" "/" ] ;
+webcpp.run numbers_oracle : numbers_oracle_test.cpp
+  : <define>"\"WEBCPP_TEST_JSON_SCHEMA_NUMBERS=\\\"$(.numbers)\\\"\""
+    [ webcpp.data $(NUMBERS) ] <dependency>numbers/oracle.txt ;
+webcpp.generated numbers_oracle : numbers/oracle.py : : numbers/oracle.txt ;
+webcpp.lane oracle : generated-numbers_oracle ;
+
+webcpp.headers-alone json_schema : ../include : json_schema/detail/json/*.hpp ;
+# Values nested 10^6 levels deep need more memory than emscripten's fixed
+# 16 MiB.
+.deep = <toolset>emscripten:<linkflags>-sALLOW_MEMORY_GROWTH ;
+webcpp.run equality : equality_test.cpp : $(.deep) ;
+webcpp.run deep_copy : deep_copy_test.cpp : $(.deep) ;
+webcpp.run pointer : pointer_test.cpp : $(.deep) ;
+webcpp.run utf8 : utf8_test.cpp ;
+webcpp.run json_memory : json_memory_test.cpp ;
+# An allocation that scratch cannot make reaches the caller of equal and of
+# deep_copy as std::bad_alloc, which this test catches; built without
+# exceptions, it ends the program in both.
+webcpp.run json_throw : json_throw_test.cpp : <exception-handling>on ;
+webcpp.run-fail equal_without_exceptions : json_throw_test.cpp
+  : <exception-handling>off <define>WEBCPP_TEST_JSON_SCHEMA_CALL=1 ;
+webcpp.run-fail deep_copy_without_exceptions : json_throw_test.cpp
+  : <exception-handling>off <define>WEBCPP_TEST_JSON_SCHEMA_CALL=2 ;
+
+webcpp.headers-alone json_schema : ../include : json_schema/output/error.hpp ;
+webcpp.headers-alone json_schema : ../include : json_schema/detail/vm/*.hpp json_schema/detail/output/*.hpp ;
+webcpp.run sink : sink_test.cpp ;
+
+webcpp.headers-alone json_schema : ../include : json_schema/regex/*.hpp ;
+webcpp.run regex : regex_test.cpp ;
+
+webcpp.headers-alone json_schema : ../include : json_schema/dialects/*.hpp json_schema/json/*.hpp ;
+webcpp.run dialect : dialect_test.cpp ;
+webcpp.run parse : parse_test.cpp ;
+
+webcpp.headers-alone json_schema : ../include
+  : json_schema/ir/ids.hpp json_schema/ir/keyword.hpp json_schema/ir/node.hpp json_schema/ir/document.hpp ;
+webcpp.run ir : ir_test.cpp ;
+
+webcpp.headers-alone json_schema : ../include : json_schema/output/message_hook.hpp ;
+webcpp.headers-alone json_schema : ../include
+  : json_schema/validator/options.hpp json_schema/registry/*.hpp json_schema/formats/format_set.hpp
+    json_schema/vocabulary/*.hpp ;
+webcpp.run options : options_test.cpp ;
+
+webcpp.headers-alone json_schema : ../include : json_schema/validator/validator.hpp ;
+webcpp.headers-alone json_schema : ../include : json_schema/detail/dialects/*.hpp json_schema/detail/loader/*.hpp ;
+webcpp.run loader_draft2020_12 : loader_draft2020_12_test.cpp ;
+webcpp.run compile_errors : compile_errors_test.cpp ;
+# A dialect policy asked before the validator is included gives the same
+# answer after it.
+webcpp.run dialect_order : dialect_order_test.cpp ;
+
+webcpp.headers-alone json_schema : ../include : json_schema/detail/compiler/*.hpp ;
+webcpp.run compiler : compiler_test.cpp ;

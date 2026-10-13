@@ -1,0 +1,10 @@
+{
+    "key": "config",
+    "name": "config",
+    "authors": ["R"],
+    "description": "webcpp's configuration, which every webcpp library includes first: the target a program is built for, whether webcpp has exceptions, and webcpp's version.",
+    "category": ["Miscellaneous"],
+    "maintainers": ["R <github.overboard312@passmail.net>"],
+    "cxxstd": "20",
+    "port-of": null
+}

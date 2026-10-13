@@ -1,0 +1,207 @@
+From b2bf227849a6adb955fb61cf4f83f3b5cc3fb689 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 15:15:50 -0400
+Subject: [PATCH 3/7] A refused event leaves the snapshot where it was, and
+ send returns the refusal
+
+---
+ src/machine.ts        | 43 +++++++++++++++++++++++++++----------------
+ test/machine_test.mjs | 21 +++++++++++----------
+ test/wasm/machine.mjs | 24 ++++++++++++------------
+ 3 files changed, 50 insertions(+), 38 deletions(-)
+
+diff --git a/src/machine.ts b/src/machine.ts
+index 761adfc..4b37a32 100644
+--- a/src/machine.ts
++++ b/src/machine.ts
+@@ -40,23 +40,26 @@ export type MachineSnapshot = {
+ }
+ 
+ /**
+- * What useMachine gives: null while the wasm loads, then the machine's snapshot, or the error that
+- * says why there is none, which the page shows as text: a wasm that could not load, a refused
+- * config, or a refused event, after which the next event's snapshot follows from where the
+- * machine was.
++ * What useMachine gives: null while the wasm loads, then the machine's snapshot, or, when there is
++ * no machine, the error that says why, which the page shows as text: a wasm that could not load,
++ * or a refused config.
+  */
+ export type MachineState = MachineSnapshot | {error: string} | null
+ 
++/** Why the machine refused an event, which left it where it was. */
++export type MachineRefusal = {error: string}
++
+ /** XState's event: its type, and the members that travel with it. */
+ export type MachineEvent = {type: string; [member: string]: unknown}
+ 
+ /** A machine run by runMachine. */
+ export type MachineRun = {
+     /**
+-     * Sends the event once the machine runs, handing on its snapshot or, refused, its error; does
+-     * nothing before or once stopped.
++     * Sends the event once the machine runs and hands on the snapshot it leads to; returns the
++     * refusal of an event the machine refused, whose snapshot stays the last one, and nothing
++     * otherwise. Does nothing before the machine runs or once stopped.
+      */
+-    send(event: MachineEvent): void
++    send(event: MachineEvent): MachineRefusal | undefined
+     /** Deletes the machine's host; the run hands on nothing after. */
+     stop(): void
+ }
+@@ -65,9 +68,9 @@ function messageOf(error: unknown): string {
+     return error instanceof Error ? error.message : String(error)
+ }
+ 
+-/** The state a send's JSON gives: the snapshot, or the error of a refused event, which has no `value`. */
+-function stateOf(json: string): MachineState {
+-    const answer = JSON.parse(json) as MachineSnapshot | {error: string}
++/** A send's JSON read: the snapshot, or the refusal of an event, which has no `value`. */
++function answerOf(json: string): MachineSnapshot | MachineRefusal {
++    const answer = JSON.parse(json) as MachineSnapshot | MachineRefusal
+     return 'value' in answer ? answer : {error: answer.error}
+ }
+ 
+@@ -79,7 +82,7 @@ export async function loadSiteApp(url: string): Promise<SiteApp> {
+ 
+ /**
+  * Runs the machine of the JSON config on the app once it loads, handing on to changed its first
+- * snapshot and the one each send leads to, or the error that stops it.
++ * snapshot and the one each accepted event leads to, or the error that leaves no machine.
+  * Tip: useMachine's effect, apart from React, so that node tests it; a run stopped before the app
+  * loads never creates its host.
+  */
+@@ -92,7 +95,7 @@ export function runMachine(app: Promise<SiteApp>, config: string,
+             return
+         }
+         host = loaded.MachineHost.create(config)
+-        changed(stateOf(host.snapshot()))
++        changed(JSON.parse(host.snapshot()) as MachineSnapshot)
+     }).catch((error: unknown) => {
+         if (!stopped) {
+             changed({error: messageOf(error)})
+@@ -100,9 +103,15 @@ export function runMachine(app: Promise<SiteApp>, config: string,
+     })
+     return {
+         send(event) {
+-            if (host !== null) {
+-                changed(stateOf(host.send(JSON.stringify(event))))
++            if (host === null) {
++                return undefined
++            }
++            const answer = answerOf(host.send(JSON.stringify(event)))
++            if ('value' in answer) {
++                changed(answer)
++                return undefined
+             }
++            return answer
+         },
+         stop() {
+             stopped = true
+@@ -126,9 +135,11 @@ function siteApp(): Promise<SiteApp> {
+ 
+ /**
+  * Runs the machine of config, XState's JSON config, in the site's wasm: its state, re-rendered on
+- * each send, and the send. The host is deleted when the component unmounts or config changes.
++ * each accepted event, and the send, which returns the refusal of an event the machine refused
++ * while the snapshot stays. The host is deleted when the component unmounts or config changes.
+  */
+-export function useMachine(config: object): [MachineState, (event: MachineEvent) => void] {
++export function useMachine(config: object):
++    [MachineState, (event: MachineEvent) => MachineRefusal | undefined] {
+     const [state, setState] = useState<MachineState>(null)
+     const run = useRef<MachineRun | null>(null)
+     const source = JSON.stringify(config)
+diff --git a/test/machine_test.mjs b/test/machine_test.mjs
+index aa1ac85..e193ec8 100644
+--- a/test/machine_test.mjs
++++ b/test/machine_test.mjs
+@@ -6,8 +6,9 @@
+ 
+ // src/machine.ts without the site's wasm, which only the C++ build makes: loadSiteApp's refusal,
+ // and runMachine, what useMachine runs, on a fake SiteApp that answers as app/bindings.cpp does.
+-// The snapshots it hands on, the error it hands on in their place, for a wasm that could not load,
+-// a refused config or a refused event, and the host it deletes. test/wasm/machine.mjs runs the
++// The snapshots it hands on; the error it hands on in their place when there is no machine, for a
++// wasm that could not load or a refused config; a refused event's error, which send returns while
++// the snapshot stays; and the host it deletes. test/wasm/machine.mjs runs the
+ // same on the wasm itself.
+ 
+ import assert from 'node:assert/strict'
+@@ -83,19 +84,19 @@ test('runMachine hands on each snapshot, and stop deletes its host', async () =>
+     assert.ok(hosts[0].isDeleted())
+ })
+ 
+-test('runMachine hands on a refused event as {error}, and the next event goes on from where the machine was', async () => {
++test("runMachine's send returns a refused event's error and keeps the snapshot, which did not move", async () => {
+     const {app, hosts} = fakeApp()
+     const states = []
+     const run = runMachine(Promise.resolve(app), config, state => states.push(state))
+     await new Promise(setImmediate)
+-    run.send({type: 'PLAY'})
+-    assert.doesNotThrow(() => run.send({type: 42}))
+-    run.send({type: 'TICK'})
+-    assert.deepEqual(states.slice(1), [
++    assert.equal(run.send({type: 'PLAY'}), undefined, 'an accepted event returns nothing')
++    assert.deepEqual(run.send({type: 42}), {error: 'MachineHost.send refused the event: invalid_event'})
++    assert.deepEqual(states, [
++        {value: 'idle', context: {taken: 0}, status: 'active'},
+         {value: 'running', context: {taken: 1}, status: 'active'},
+-        {error: 'MachineHost.send refused the event: invalid_event'},
+-        {value: 'running', context: {taken: 2}, status: 'active'},
+-    ])
++    ], 'the refusal hands on no state: the last snapshot stays')
++    run.send({type: 'TICK'})
++    assert.deepEqual(states.at(-1), {value: 'running', context: {taken: 2}, status: 'active'})
+     assert.ok(!hosts[0].isDeleted(), 'a refused event keeps the host')
+     run.stop()
+ })
+diff --git a/test/wasm/machine.mjs b/test/wasm/machine.mjs
+index 003dbd3..e63a3ca 100644
+--- a/test/wasm/machine.mjs
++++ b/test/wasm/machine.mjs
+@@ -133,7 +133,7 @@ test('a refused event is a value, {"error": why}, and the machine stays where it
+     }
+ })
+ 
+-test('runMachine on the wasm: snapshots, a refused event as a value, and stop deleting the host', async () => {
++test("runMachine on the wasm: snapshots, a refused event returned by send with the snapshot kept, and stop deleting the host", async () => {
+     const app = await siteApp()
+     const hosts = []
+     const recording = {
+@@ -148,22 +148,22 @@ test('runMachine on the wasm: snapshots, a refused event as a value, and stop de
+     const states = []
+     const run = runMachine(Promise.resolve(recording), config, state => states.push(state))
+     await new Promise(setImmediate)
+-    run.send({type: 'PLAY'})
+-    run.send({type: 42})
++    assert.equal(run.send({type: 'PLAY'}), undefined)
++    const refused = run.send({type: 42})
++    assert.deepEqual(Object.keys(refused), ['error'])
++    assert.match(refused.error, /^MachineHost\.send refused the event: /)
++    assert.deepEqual(states.map(state => [state.value, state.context.played]),
++        [['idle', 0], ['running', 0]], 'the refusal hands on no state: the last snapshot stays')
+     run.send({type: 'TICK'})
+-    assert.deepEqual(states.slice(0, 2).map(state => [state.value, state.context.played]),
+-        [['idle', 0], ['running', 0]])
+-    assert.deepEqual(Object.keys(states[2]), ['error'])
+-    assert.match(states[2].error, /^MachineHost\.send refused the event: /)
+-    assert.deepEqual([states[3].value, states[3].context.played], ['running', 1])
++    assert.deepEqual([states[2].value, states[2].context.played], ['running', 1])
+     run.stop()
+     assert.equal(hosts.length, 1)
+     assert.ok(hosts[0].isDeleted())
+ 
+-    const refused = []
+-    runMachine(Promise.resolve(app), '{"initial": "nowhere", "states": {}}', state => refused.push(state))
++    const failed = []
++    runMachine(Promise.resolve(app), '{"initial": "nowhere", "states": {}}', state => failed.push(state))
+     await new Promise(setImmediate)
+-    assert.equal(refused.length, 1)
+-    assert.match(refused[0].error, /^MachineHost\.create refused the config: /)
++    assert.equal(failed.length, 1)
++    assert.match(failed[0].error, /^MachineHost\.create refused the config: /)
+ })
+ 
+-- 
+2.55.0
+

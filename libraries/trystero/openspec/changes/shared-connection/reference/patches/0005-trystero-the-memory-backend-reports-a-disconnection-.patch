@@ -1,0 +1,114 @@
+From f542383170025cd12dfdc10e05e9402a68e278ba Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 08:41:12 -0400
+Subject: [PATCH 05/25] trystero: the memory backend reports a disconnection
+ and a reconnection
+
+---
+ test/memory_backend_test.cpp    | 20 ++++++++++++++++++++
+ test/support/memory_backend.hpp | 30 ++++++++++++++++++++++++++++--
+ 2 files changed, 48 insertions(+), 2 deletions(-)
+
+diff --git a/test/memory_backend_test.cpp b/test/memory_backend_test.cpp
+index 6005a6a..c60fd1a 100644
+--- a/test/memory_backend_test.cpp
++++ b/test/memory_backend_test.cpp
+@@ -216,6 +216,25 @@ void a_failed_connection_reports_failed_then_closes() {
+     BOOST_TEST(!p.offer_end->is_open());
+ }
+ 
++// A disconnection and a reconnection are reported as states, and the channel stays open: only a
++// failure closes it.
++void a_disconnection_and_a_reconnection_are_reported() {
++    asio::io_context io;
++    memory_network net{io};
++    pair p;
++    connect(net, p);
++    webcpp::test::require(BOOST_TEST(run_until(io, [&] { return p.offer_end->is_open(); })));
++    p.offerer_states.clear();
++    net.disconnect(p.offerer_id);
++    net.reconnect(p.offerer_id);
++    BOOST_TEST(run_until(io, [&] { return p.offerer_states.size() == 2; }));
++    BOOST_TEST((p.offerer_states == std::vector<trystero::backend::connection_state>{
++                                        trystero::backend::connection_state::disconnected,
++                                        trystero::backend::connection_state::connected,
++                                    }));
++    BOOST_TEST(p.offer_end->is_open());
++}
++
+ // A frame larger than drain_per_post drains byte by byte and is delivered with its last byte.
+ void a_frame_is_delivered_once_its_last_byte_drained() {
+     asio::io_context io;
+@@ -493,6 +512,7 @@ int main() {
+     deferred_opens_open_one_end_at_a_time();
+     an_injected_frame_reaches_the_end_named();
+     a_failed_connection_reports_failed_then_closes();
++    a_disconnection_and_a_reconnection_are_reported();
+     a_buffering_channel_drains_and_says_so();
+     a_frame_is_delivered_once_its_last_byte_drained();
+     a_closed_channel_drains_nothing_more();
+diff --git a/test/support/memory_backend.hpp b/test/support/memory_backend.hpp
+index 9ace939..1fdb314 100644
+--- a/test/support/memory_backend.hpp
++++ b/test/support/memory_backend.hpp
+@@ -571,6 +571,16 @@ public:
+ 
+     void connect_to(memory_peer_connection& answerer);
+ 
++    /** Posts `state` to the state handler, and nothing else: the channel stays as it is, as
++     * through a disconnection and a reconnection. */
++    void report(backend::connection_state state) {
++        post_in(io_, memory_, [self = shared_from_this(), state] {
++            if (self->h_.state) {
++                self->h_.state(state);
++            }
++        });
++    }
++
+     /** Posts the state `failed`, then closes the channel, as a connection that fails does. */
+     void fail() {
+         post_in(io_, memory_, [self = shared_from_this()] {
+@@ -607,8 +617,8 @@ public:
+  * connections are in `memory`; everything it makes for a room is in the resource the room gives.
+  *
+  * Tip: its hooks let a test hold, drop or inject frames, open a pair's channels one end at a time,
+- * fail a connection, buffer what a channel sends, and run the timers on a virtual clock that moves
+- * only when the test advances it.
++ * fail, disconnect or reconnect a connection, buffer what a channel sends, and run the timers on a
++ * virtual clock that moves only when the test advances it.
+  */
+ class memory_network : public backend::factory {
+ public:
+@@ -748,6 +758,10 @@ public:
+     void inject(std::size_t pc, std::span<const std::uint8_t> frame);
+     /** Reports `failed` on `pc`, then closes its channel. */
+     void fail(std::size_t pc);
++    /** Reports `disconnected` on `pc`; its channel stays open. */
++    void disconnect(std::size_t pc);
++    /** Reports `connected` on `pc`, as after a disconnection. */
++    void reconnect(std::size_t pc);
+     /** 0: buffered_amount() stays 0, as today. Otherwise each channel holds what it was sent, up to
+      * no limit, and delivers `drain_per_post` bytes per post, firing buffered_amount_low at the
+      * threshold; buffered_amount() is the bytes sent and not yet delivered. */
+@@ -1017,6 +1031,18 @@ inline void memory_network::fail(std::size_t pc) {
+     }
+ }
+ 
++inline void memory_network::disconnect(std::size_t pc) {
++    if (const auto connection = find(pc)) {
++        connection->report(backend::connection_state::disconnected);
++    }
++}
++
++inline void memory_network::reconnect(std::size_t pc) {
++    if (const auto connection = find(pc)) {
++        connection->report(backend::connection_state::connected);
++    }
++}
++
+ inline std::size_t memory_network::peer_of(std::size_t pc) const {
+     const auto it = connections_->find(pc);
+     return it == connections_->end() ? pc : it->second->remote_id().value_or(pc);
+-- 
+2.55.0
+

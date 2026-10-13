@@ -1,0 +1,29 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[appendix]
+[#document-changelog]
+== Changelog
+
+What changed in document in each version of webcpp, newest first, one line
+per change. "Unreleased" is what the next version brings. The release notes
+of every version are on webcpp's index page.
+
+[#document-changelog-unreleased]
+=== Unreleased
+
+// tag::unreleased[]
+* Added the library: a JSON document that behaves as JavaScript does.
+* Added traits that choose the stored types, and JavaScript's key order.
+* Added handles, array methods and JavaScript-style sugar that throws, compiled only with exceptions.
+* Added object and array views that the standard algorithms read, with key-ordered queries.
+* Added stringify, parse, and selectors that stream in bounded memory.
+* Added streams of documents: NDJSON, JSON text sequences, concatenated JSON, Asio, Cobalt and xactor.
+* Added one relocatable binary image per document, with reserve, shrink_to_fit and compact.
+* Added sealed images, and Asio readers and writers that open them in place in pools of blocks.
+* Added shared documents, reference counted over shared memory, with copy on write.
+* Added a JavaScript module: exact decimals, key ranges, images, streams and Workers.
+// end::unreleased[]

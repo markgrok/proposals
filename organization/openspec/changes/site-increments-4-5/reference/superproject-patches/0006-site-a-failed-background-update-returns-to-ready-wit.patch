@@ -1,0 +1,20 @@
+From 0d0a00317d3a7812d08626b675a7e8e9a18785ec Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 17:52:56 -0400
+Subject: [PATCH 6/8] site/: a failed background update returns to ready with
+ its reason
+
+---
+ site | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/site b/site
+index b17766b..0b141eb 160000
+--- a/site
++++ b/site
+@@ -1 +1 @@
+-Subproject commit b17766bd835ff66ff0a3c5d9e096b665bc23a6a5
++Subproject commit 0b141eb6e6634ef1594687a0f855b52fb73f284e
+-- 
+2.55.0
+

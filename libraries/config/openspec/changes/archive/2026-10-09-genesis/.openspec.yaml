@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-09
+webcpp:
+  library: config
+  title: "config: webcpp's configuration, the target, exceptions and version every library includes first"
+  kind: own
+  port_of: null
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/config/tree/2fad162
+  decided: 2026-10-09

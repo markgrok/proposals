@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-11
+webcpp:
+  library: trystero
+  title: "trystero: one connection shared by the rooms of an app"
+  kind: port
+  port_of: "Trystero 0.26.0"
+  status: implementing
+  release: null
+  implementation: null
+  decided: 2026-10-11

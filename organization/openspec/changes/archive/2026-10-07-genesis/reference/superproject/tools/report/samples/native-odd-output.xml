@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?> 
+<build format="1.0" version="5.5.3"> 
+  <directory><![CDATA[$TMPDIR/webcpp scratch iu5dyz8z]]></directory> 
+  <command><![CDATA["b2" "--user-config=$TMPDIR/webcpp scratch iu5dyz8z/.local/user-config.jam" "-a" "--dump-tests" "--out-xml=native-odd-output.xml" "toolset=clang" "libs/odd/test//prints"]]></command> 
+  <targets> 
+    <target> 
+      <name><![CDATA[.//boost_version.o]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[.//tools/test/boost_version.cpp]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/clang-darwin-21/debug/cxxstd-20-iso]]></path> 
+      <jam-target><![CDATA[<pbin/clang-darwin-21/debug/cxxstd-20-iso>boost_version.o]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[libs/odd/test//prints.o]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[libs/odd/test//prints.cpp]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso]]></path> 
+      <jam-target><![CDATA[<pbin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso>prints.o]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[libs/odd/test//prints]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[libs/odd/test//prints.o]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso]]></path> 
+      <jam-target><![CDATA[<pbin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso>prints]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[libs/odd/test//prints.run]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[libs/odd/test//prints]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso]]></path> 
+      <jam-target><![CDATA[<pbin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso>prints.run]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[libs/odd/test//prints.test]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[libs/odd/test//prints.run]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso]]></path> 
+      <jam-target><![CDATA[<pbin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso>prints.test]]></jam-target> 
+    </target> 
+  </targets> 
+  <test type="RUN" name="odd/prints"> 
+    <target><![CDATA[libs/odd/test//prints.test]]></target> 
+    <source><![CDATA[libs/odd/test/prints.cpp]]></source> 
+  </test> 
+  <action status="0" start="2026-10-08 06:35:11.166348000 +0000" end="2026-10-08 06:35:11.427575000 +0000" user="0.221295" system="0.034769"> 
+    <name><![CDATA[clang-darwin%clang-darwin.compile.c++]]></name> 
+    <jam-target><![CDATA[<pbin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso>prints.o]]></jam-target> 
+    <path><![CDATA[bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.o]]></path> 
+    <command><![CDATA[
+    "clang++"   -std=c++20 -fPIC -O0 -fno-inline -Wall -Wextra -Werror -g --system-header-prefix="boost/" -DBOOST_ALL_NO_LIB   -I"/opt/homebrew/opt/boost/include"  -c -o "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.o" "libs/odd/test/prints.cpp"
+]]></command> 
+  </action> 
+  <action status="0" start="2026-10-08 06:35:11.427888000 +0000" end="2026-10-08 06:35:11.456549000 +0000" user="0.037229" system="0.022313"> 
+    <name><![CDATA[clang-darwin%clang-darwin.link]]></name> 
+    <jam-target><![CDATA[<pbin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso>prints]]></jam-target> 
+    <path><![CDATA[bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints]]></path> 
+    <command><![CDATA[
+    "clang++"    -o "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints"  "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.o"       -fPIC -std=c++20 -g 
+]]></command> 
+  </action> 
+  <action status="1" start="2026-10-08 06:35:11.456789000 +0000" end="2026-10-08 06:35:11.522630000 +0000" user="0.002368" system="0.004247"> 
+    <name><![CDATA[testing%testing.capture-output]]></name> 
+    <jam-target><![CDATA[<pbin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso>prints.run]]></jam-target> 
+    <path><![CDATA[bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.run]]></path> 
+    <command><![CDATA[
+    
+     "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints"   > "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.output" 2>&1 < /dev/null
+    status=$?
+    echo >> "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.output"
+    echo EXIT STATUS: $status >> "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.output"
+    if test $status -eq 0 ; then
+        cp "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.output" "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.run" >/dev/null
+    fi
+    verbose=0
+    if test $status -ne 0 ; then
+        verbose=1
+    fi
+    if test $verbose -eq 1 ; then
+        echo ====== BEGIN OUTPUT ======
+        cat "bin/libs/odd/test/prints.test/clang-darwin-21/debug/cxxstd-20-iso/prints.output"
+        echo ====== END OUTPUT ======
+    fi
+    exit $status
+]]></command> 
+    <output><![CDATA[====== BEGIN OUTPUT ======
+libs/odd/test/prints.cpp(6): test 'std::string("<b>]]>&amp;</b>") == std::string("\xff")' ('<b>]]>&amp;</b>' == 'ÿ') failed in function 'int main()'
+1 error detected.
+
+EXIT STATUS: 1
+====== END OUTPUT ======
+]]></output> 
+  </action> 
+</build>

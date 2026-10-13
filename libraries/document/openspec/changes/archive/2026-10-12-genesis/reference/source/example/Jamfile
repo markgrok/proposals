@@ -1,0 +1,47 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+# The programs' sources are UTF-8 (document_traits.cpp writes "é😀"): MSVC
+# reads a file without a byte order mark in the system's code page unless it
+# is told otherwise.
+project : requirements <library>/webcpp/document//document
+    <toolset>msvc:<cxxflags>/utf-8 ;
+
+import webcpp ;
+
+webcpp.targets native emscripten wasip2 wasip3 ;
+
+# The guide's programs, each shown on the page with the output it prints.
+webcpp.example document_quick_start.cpp ;
+# The sugar that throws stands beside the core here, so this program needs
+# exceptions.
+webcpp.example document_javascript.cpp : <exception-handling>on ;
+webcpp.example document_numbers.cpp ;
+webcpp.example document_arrays.cpp ;
+webcpp.example document_streaming.cpp ;
+webcpp.example document_selectors.cpp ;
+webcpp.example document_traits.cpp ;
+webcpp.example document_image.cpp ;
+# The core in a build without exceptions, whatever the build asks.
+webcpp.example document_no_exceptions.cpp : <exception-handling>off ;
+
+# The library's main uses: streams of documents read by hand, with Boost.Asio,
+# with Boost.Cobalt, with xactor's driver and after an HTTP header read with
+# Boost.Beast; images on the wire, between processes and between threads; what
+# an image refuses; the containers' interface; and what a document does that
+# Boost.JSON does not.
+webcpp.example document_stream_sync.cpp ;
+webcpp.example document_stream_asio.cpp : <exception-handling>on : native ;
+webcpp.example document_stream_cobalt.cpp
+  : <exception-handling>on <library>/webcpp//boost_cobalt : native ;
+webcpp.example document_stream_xactor.cpp : <library>/webcpp/xactor//xactor : native wasip2 wasip3 ;
+webcpp.example document_stream_beast.cpp : <exception-handling>on : native ;
+webcpp.example document_image_asio.cpp : <exception-handling>on : native ;
+webcpp.example document_image_interprocess.cpp : <exception-handling>on : native ;
+webcpp.example document_threads.cpp : : native ;
+webcpp.example document_image_errors.cpp ;
+webcpp.example document_containers.cpp ;
+webcpp.example document_vs_boost_json.cpp ;

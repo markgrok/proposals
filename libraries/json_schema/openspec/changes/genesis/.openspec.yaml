@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-08
+webcpp:
+  library: json_schema
+  title: "json_schema: a JSON Schema validator for every dialect"
+  kind: own
+  port_of: null
+  status: draft
+  release: null
+  implementation: null
+  decided: null

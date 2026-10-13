@@ -1,0 +1,1183 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+"""Checks tools/doc: `b2 libs/demo/doc` builds the fixture library's page with its reference from
+MrDocs; a public function without a Doc Comment, a template parameter without @tparam and a
+detail symbol without a brief each fail it, naming the symbol and the file; doc-check and the
+check of the rendered page run on it; MrDocs is found where the build looks for it, or named when
+it is not there; `b2 doc` builds the index page from every library's meta/libraries.json,
+linking each page in the tree, or, with -sWEBCPP_INDEX=site, where the site serves it, and fails
+on a library whose doc Jamfile declares no page, or one that is not there; a page
+shows the counts its build computes, of the programs b2 recorded and of the twins of the fixture
+library oracle_demo, whose divergent twin's output the page must show, and of the link-only
+program of the fixture library browser_demo, whose code the page must show, and of its driven
+test; and a page's link into another library's page, in either layout, is checked against that
+page, built first; the
+reference of the fixture library component_demo parses natively, with the requirements its doc
+Jamfile gives, the header of its world, which builds only for WASI, documents it and fails on an
+undocumented function of it, and without those requirements fails naming the header; the Doc
+Comments of the header's wasip3 branch, which that reference does not parse, are checked with
+the other requirements the doc Jamfile gives, and an undocumented function, a detail symbol
+without a brief and an undocumented macro there each fail it, the first the page too; the
+reference of browser_demo reads every header for Emscripten's target, as the em++ of the emsdk
+that /webcpp//emscripten-reference finds compiles (-sWEBCPP_EMSDK on the command line, never
+the shell's EMSDK, else .local/emsdk, else the build stops naming both; an emsdk of another
+version is refused), its header that builds only on emscripten, which holds only for wasm32's
+types and fails a native parse, naming its line, and its header that builds only against a
+dependency, and fails on an undocumented function of either; and MrDocs and clang++ given at
+paths that hold a space are found; and a page shows a tagged region of a file the
+superproject's git tracks, at {webcpp-root}, or of one its library's own git tracks, at
+{library-root}, and fails on one it does not track; and the reference of a library named config,
+which holds macros alone, lists every WEBCPP_* macro but the include guards and fails on an
+undocumented one, a macro of no family config reserves and a declaration, any other library's
+lists its own WEBCPP_<NAME>_* alone, and the index refuses a library named as config's macros or
+the tests', alone or followed by an underscore, such as target or test_x; and the index shows
+each version's release notes, which include a region of a library's changelog that the
+library's own git tracks, at {webcpp-root}/libs/<library>/, and fails on a region renamed, the
+file untracked, or notes it does not include.
+
+Each case builds a scratch superproject, at a path that holds a space, whose libs/demo is the
+fixture library demo, a git repository of its own as a library's submodule is; the cases of
+twins and links add oracle_demo beside it, the case of WASI component_demo, and the case of
+link-only and driven programs browser_demo. Run with the
+names of some cases to run only those.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+from html import unescape
+from pathlib import Path
+
+import harness
+
+HEADER = 'libs/demo/include/webcpp/demo/answer.hpp'
+
+PAGE = 'libs/demo/doc/html/index.html'
+
+COMPONENT_PAGE = 'libs/component_demo/doc/html/index.html'
+WORLD = 'libs/component_demo/include/webcpp/component_demo/world.hpp'
+
+ORACLE_PAGE = 'libs/oracle_demo/doc/html/index.html'
+ORACLE_SOURCE = 'libs/oracle_demo/doc/oracle_demo.adoc'
+ORACLE_HEADER = 'libs/oracle_demo/include/webcpp/oracle_demo.hpp'
+
+# U+2010, the hyphen MrDocs writes for -, written as an escape.
+HYPHEN = '\u2010'
+
+# The breaks postprocess.mjs marks in a name: after a ::, at every width, and between two other
+# parts, on a phone.
+SCOPE = '<span class="wbr"></span>'
+PART = '<span class="wbr part"></span>'
+
+
+def prepare(root: Path) -> None:
+    """Gives the scratch superproject root the MrDocs of this checkout, in its .local, and makes
+    its libs/demo a git repository, whose files doc-check reads."""
+    (root / '.local/mrdocs').symlink_to(harness.mrdocs_root())
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=root / 'libs/demo', check=True)
+
+
+def edit(root: Path, path: str, old: str, new: str) -> None:
+    """Replaces the one occurrence of old in the file path of the scratch superproject root."""
+    harness.replace(root / path, old, new)
+
+
+def at(root: Path, path: str, text: str) -> str:
+    """<path>:<line>, the line being the one of path where text is, which must be there once; the
+    path is the real one, which b2 and the tools it runs name, macOS's /var being /private/var."""
+    lines = [number for number, line in enumerate((root / path).read_text().splitlines(), 1)
+             if text in line]
+    assert len(lines) == 1, (path, text, lines)
+    return f'{(root / path).resolve()}:{lines[0]}'
+
+
+def add_oracle_demo(root: Path) -> None:
+    """Places the fixture library oracle_demo beside demo in the scratch superproject root, a git
+    repository of its own too."""
+    shutil.copytree(harness.FIXTURES / 'oracle_demo', root / 'libs/oracle_demo',
+                    ignore=harness.built)
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=root / 'libs/oracle_demo', check=True)
+
+
+def add_component_demo(root: Path) -> None:
+    """Places the fixture library component_demo beside demo in the scratch superproject root, a
+    git repository of its own too, with this checkout's wit-bindgen and WIT, which its bindings
+    need."""
+    shutil.copytree(harness.FIXTURES / 'component_demo', root / 'libs/component_demo',
+                    ignore=harness.built)
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=root / 'libs/component_demo',
+                   check=True)
+    harness.link_wasi_tools(root)
+
+
+def add_paged(root: Path, name: str) -> Path:
+    """Places a library name, with a page of its own whose one section is #only-<name> and a
+    header its tests compile alone, in the scratch superproject root, a git repository of its
+    own too, and returns its directory."""
+    library = root / 'libs' / name
+    guard = f'WEBCPP_{name.upper()}_HPP'
+    (library / 'include/webcpp').mkdir(parents=True)
+    (library / 'doc').mkdir()
+    (library / 'build.jam').write_text(f'project /webcpp/{name} ;\n\n'
+                                       f'alias {name} : : : : <include>include ;\n')
+    (library / 'README.md').write_text(f'# {name}\n')
+    (library / 'test').mkdir()
+    (library / 'test/Jamfile').write_text('import webcpp ;\n\n'
+                                          f'webcpp.headers-alone {name} : ../include ;\n')
+    (library / f'include/webcpp/{name}.hpp').write_text(
+        f'#ifndef {guard}\n#define {guard}\n\nnamespace webcpp::{name} {{\n\n'
+        '/** Returns three.\n\n    @return 3.\n*/\nconstexpr int three() noexcept {\n'
+        f'    return 3;\n}}\n\n}}  // namespace webcpp::{name}\n\n#endif\n')
+    (library / 'doc/Jamfile').write_text(f'import webcpp ;\n\nwebcpp.doc {name} : {name}.adoc ;\n'
+                                         f'webcpp.reference {name} ;\n')
+    (library / f'doc/{name}.adoc').write_text(f'= {name}\n\n[#only-{name}]\n== Only here\n\n'
+                                              f'{name} returns three.\n\n[#reference]\n'
+                                              '== Reference\n\ninclude::{reference}'
+                                              '[leveloffset=+1]\n')
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=library, check=True)
+    return library
+
+
+def add_third(root: Path) -> None:
+    """Places a third library, third, with a page of its own whose one section is #only-third, in
+    the scratch superproject root."""
+    add_paged(root, 'third')
+
+
+def page_text(root: Path, page: str = PAGE) -> str:
+    """The text of a page's content, the demo page's by default, without its markup, as a reader
+    sees it, its lines joined."""
+    html = (root / page).read_text()
+    content = html[html.index('<div id="content">'):]
+    return ' '.join(re.sub(r'<[^>]+>', '', content).split())
+
+
+def test_page_builds_with_its_reference(root):
+    prepare(root)
+    result = harness.run_b2(root, 'libs/demo/doc')
+    harness.expect(result, True)
+    html = (root / PAGE).read_text()
+    # The page, the example and its output, and the reference of every public symbol.
+    assert '<h1>demo: the fixture library</h1>' in html, html[:2000]
+    assert 'The answer is 42.' in html and 'caught: boom' in html, html
+    for anchor in ('webcpp-demo-answer', 'webcpp-demo-twice'):
+        assert f'id="{anchor}"' in html, (anchor, html)
+    text = page_text(root)
+    assert 'Returns a value added to itself.' in text, text
+    assert 'An arithmetic type.' in text and 'Twice the value.' in text, text
+    # The reference starts at the library's namespace: the sections of the global namespace
+    # and of webcpp, which hold one row each, are gone, and nothing links to them.
+    assert 'Global namespace' not in html and 'id="index"' not in html, html
+    assert 'id="webcpp"' not in html and 'href="#webcpp"' not in html, html
+    # A name of the reference may break after each :: (postprocess.mjs).
+    assert re.search(r'<h3 id="webcpp-demo">(<a class="anchor"[^>]*></a>)?webcpp::'
+                     rf'{SCOPE}demo</h3>', html), html
+    # Its source links to the library's repository, and detail is MrDocs's to hide.
+    assert 'https://github.com/webcpporg/demo/blob/main/include/webcpp/demo/answer.hpp#L' in html
+    assert 'id="webcpp-demo-detail-sum"' not in html, html
+    # The first row of MrDocs's tables, which names their columns, is their header; and the page
+    # has no footer, which would hold nothing.
+    assert re.search(r'<thead>\s*<tr>\s*<th\b[^>]*>Name</th>\s*<th\b[^>]*>Description</th>',
+                     html), html
+    assert 'id="footer"' not in html, html
+    # Each table is in a box of its own, which scrolls when the table is too wide for the page.
+    assert html.count('<div class="table-scroll">\n<table class="tableblock') == \
+        html.count('<table class="tableblock') > 0, html
+    # MrDocs's escapes are decoded: what MrDocs read as _ and - shows as _ and -.
+    assert 'fixture&apos;s' not in html and '&hyphen;' not in html and HYPHEN not in html, html
+    # An apostrophe of a brief reads as the guide's, curly, and one in code stays straight.
+    assert 'the fixture&#8217;s test expects, the value of <code class="whole">L\'*\'</code> and ' \
+        'never of <code class="whole">L\'x\'</code>.' in html, html
+    # A name too long for a phone's line breaks after each _, in its heading and in the table
+    # that links it, and never inside a listing or an attribute.
+    broken = 'a_|very_|long_|snake_|case_|name'.replace('|', PART)
+    assert re.search(r'<h3 id="webcpp-demo-a_very_long_snake_case_name">(<a class="anchor"[^>]*>'
+                     rf'</a>)?webcpp::{SCOPE}<a href="#webcpp-demo">demo</a>::{SCOPE}{broken}</h3>',
+                     html), html
+    assert (f'<a href="#webcpp-demo-a_very_long_snake_case_name"><code>{broken}</code></a>'
+            in html), html
+    listings = re.findall(r'<pre\b[^>]*>.*?</pre>', html, flags=re.S)
+    assert any('a_very_long_snake_case_name' in block for block in listings), listings
+    assert all('class="wbr' not in block for block in listings), listings
+    assert '<wbr' not in html, html
+    # The page lives in the library, and is built again from scratch the same.
+    assert (root / 'libs/demo/doc/html/index.html').is_file()
+    again = harness.run_b2(root, '-a', 'libs/demo/doc')
+    harness.expect(again, True)
+    assert (root / PAGE).read_text() == html
+
+
+def test_undocumented_function_fails_naming_it(root):
+    prepare(root)
+    edit(root, HEADER, '}  // namespace webcpp::demo',
+         'int undocumented(int value);\n\n}  // namespace webcpp::demo')
+    result = harness.run_b2(root, 'libs/demo/doc')
+    harness.expect(result, False, f'{at(root, HEADER, "int undocumented(")}:',
+                   'undocumented: function is undocumented')
+    # MrDocs's request for a bug report, which follows each warning, is not a bug.
+    assert 'please report it' not in result.stdout, result.stdout[-4000:]
+    assert not (root / PAGE).exists()
+
+
+def test_what_mrdocs_defaults_would_hide_fails(root):
+    # With its defaults, MrDocs documents a parameter with the brief of its type
+    # (auto-function-metadata), and counts a class that a documented function returns as
+    # documented (auto-relates).
+    prepare(root)
+    edit(root, HEADER, '}  // namespace webcpp::demo',
+         '/** A box of one value. */\n'
+         'struct box {\n'
+         '    /** The value. */\n'
+         '    int value;\n'
+         '};\n\n'
+         '/** Returns the value a box holds.\n\n'
+         '    @return The value.\n'
+         '*/\n'
+         'int unbox(box held);\n\n'
+         'struct widget {};\n\n'
+         '/** Makes a widget.\n\n'
+         '    @return The widget.\n'
+         '*/\n'
+         'widget make_widget();\n\n'
+         '}  // namespace webcpp::demo')
+    result = harness.run_b2(root, 'libs/demo/doc')
+    harness.expect(result, False,
+                   f'{at(root, HEADER, "int unbox(box held);")}:',
+                   "unbox: Missing documentation for parameter 'held'",
+                   f'{at(root, HEADER, "struct widget {};")}:', 'widget: record is undocumented')
+
+
+def test_declarator_sharing_a_comment_fails(root):
+    # clang gives green the comment of red, and MrDocs counts it as documented.
+    prepare(root)
+    edit(root, HEADER, '}  // namespace webcpp::demo',
+         '/** The colours. */\n'
+         'enum class colour {\n'
+         '    /** Red. */\n'
+         '    red, green,\n'
+         '};\n\n'
+         '}  // namespace webcpp::demo')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   f'{at(root, HEADER, "red, green,")}: webcpp::demo::colour::green: has no Doc '
+                   'Comment of its own; clang gives it the one of webcpp::demo::colour::red')
+
+
+def test_undocumented_enumerator_fails(root):
+    prepare(root)
+    edit(root, HEADER, '}  // namespace webcpp::demo',
+         '/** The colours. */\n'
+         'enum class colour {\n'
+         '    red,\n'
+         '};\n\n'
+         '}  // namespace webcpp::demo')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   f'{at(root, HEADER, "    red,")}:',
+                   'webcpp::demo::colour::red: Missing documentation for enum value')
+
+
+def test_macros_are_documented_and_listed(root):
+    prepare(root)
+    edit(root, HEADER, 'namespace webcpp::demo {\n',
+         '#define WEBCPP_DEMO_UNDOCUMENTED 1\n\n'
+         'namespace webcpp::demo {\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   f'{at(root, HEADER, "#define WEBCPP_DEMO_UNDOCUMENTED")}:',
+                   'WEBCPP_DEMO_UNDOCUMENTED: macro is undocumented')
+    # Documented, it has a section of its own, and the reference lists the library's macros.
+    edit(root, HEADER, '#define WEBCPP_DEMO_UNDOCUMENTED 1\n',
+         '/** The answer, as a macro. */\n#define WEBCPP_DEMO_UNDOCUMENTED 1\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), True)
+    html = (root / PAGE).read_text()
+    assert 'id="WEBCPP_DEMO_UNDOCUMENTED"' in html, html
+    assert re.search(r'<h3 id="webcpp-demo-macros">(<a class="anchor"[^>]*></a>)?Macros</h3>',
+                     html), html
+    assert re.search(r'<a href="#WEBCPP_DEMO_UNDOCUMENTED"><code( class="whole")?>'
+                     r'WEBCPP_DEMO_UNDOCUMENTED</code></a>', html), html
+    assert 'Global namespace' not in html, html
+
+
+def test_missing_tparam_fails_naming_the_template(root):
+    prepare(root)
+    edit(root, HEADER, '    @tparam T An arithmetic type.\n', '')
+    result = harness.run_b2(root, 'libs/demo/doc')
+    harness.expect(result, False,
+                   f'{at(root, HEADER, "constexpr T twice(")}: webcpp::demo::twice: the template '
+                   'parameter T has no @tparam')
+    assert not (root / PAGE).exists()
+
+
+def test_detail_without_brief_fails_naming_it(root):
+    prepare(root)
+    edit(root, HEADER,
+         '/** Returns the sum of two values, with which twice adds a value to itself. */\n', '')
+    result = harness.run_b2(root, 'libs/demo/doc')
+    harness.expect(result, False,
+                   f'{at(root, HEADER, "constexpr T sum(")}: webcpp::demo::detail::sum: a detail '
+                   'symbol needs a brief')
+
+
+def test_page_needs_its_reference(root):
+    prepare(root)
+    jamfile = 'libs/demo/doc/Jamfile'
+    edit(root, jamfile, 'webcpp.reference demo ;\n', '')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   'webcpp.doc demo: the page includes the library\'s reference, and '
+                   'libs/demo/doc/Jamfile declares none; add webcpp.reference demo ;')
+    # A page or a reference is the library's whose doc directory declares it.
+    edit(root, jamfile, 'webcpp.doc demo : demo.adoc ;\n', 'webcpp.reference other ;\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   f'webcpp.reference is declared in {(root / "libs/demo/doc").resolve()}, which '
+                   'is not libs/other/doc')
+
+
+def test_reference_needs_its_page(root):
+    # A doc directory that declares the reference and no page fails its own build, by name: the
+    # index would link a page that the build never makes. Building the reference alone is a
+    # page's work too.
+    prepare(root)
+    edit(root, 'libs/demo/doc/Jamfile', 'webcpp.doc demo : demo.adoc ;\n', '')
+    named = ('webcpp.reference demo: the library has no page, and libs/demo/doc/Jamfile declares '
+             'its reference alone; add webcpp.doc demo : <page>.adoc ;')
+    for target in ('libs/demo/doc', 'libs/demo/doc//reference'):
+        harness.expect(harness.run_b2(root, target), False, named)
+    assert not (root / PAGE).exists()
+
+
+def test_doc_builds_at_once_share_the_packages(root):
+    # Two b2 runs at once, one that converts a page with Asciidoctor.js while the other installs
+    # the packages again, as -a does, and two that install them at the same time: none fails,
+    # and the install is made once for a lockfile, then only pointed at.
+    prepare(root)
+    install = '/webcpp/doc-tools//node-modules'
+    for round in range(3):
+        ended = harness.run_lanes(root, {
+            'page': ('-a', f'--build-dir=bin/page-{round}', 'libs/demo/doc'),
+            'install a': ('-a', f'--build-dir=bin/install-{round}-a', install),
+            'install b': ('-a', f'--build-dir=bin/install-{round}-b', install),
+        })
+        for name, result in ended.items():
+            assert result.returncode == 0, (round, name, result.stdout[-4000:])
+        assert len(ended) == 3, ended
+    assert (root / PAGE).is_file()
+    installs = sorted(path for path in (root / 'tools/doc/.node-modules').iterdir()
+                      if path.name != '.lock')
+    assert len(installs) == 1, installs
+    link = root / 'tools/doc/node_modules'
+    assert link.is_symlink() and link.resolve() == (installs[0] / 'node_modules').resolve(), link
+
+
+def test_mrdocs_is_found_or_named(root):
+    prepare(root)
+    installed = harness.mrdocs_root()
+    (root / '.local/mrdocs').unlink()
+    # Nowhere: not at -sMRDOCS, not in .local and not on PATH.
+    result = harness.run_b2(root, 'libs/demo/doc')
+    harness.expect(result, False, 'MrDocs', f'{root.resolve()}/.local/mrdocs/bin/mrdocs', 'PATH',
+                   '-sMRDOCS=<path>')
+    # On PATH.
+    path = f'{installed}/bin{os.pathsep}{os.environ["PATH"]}'
+    harness.expect(harness.run_b2(root, 'libs/demo/doc', env_extra={'PATH': path}), True)
+    shutil.rmtree(root / 'libs/demo/doc/html')
+    # At -sMRDOCS, which names a file that must be there.
+    harness.expect(harness.run_b2(root, '-a', f'-sMRDOCS={installed}/bin/mrdocs',
+                                  'libs/demo/doc'), True)
+    assert (root / PAGE).is_file()
+    harness.expect(harness.run_b2(root, '-sMRDOCS=/nowhere/mrdocs', 'libs/demo/doc'), False,
+                   '-sMRDOCS=/nowhere/mrdocs', 'is not a file')
+
+
+def test_clang_is_given(root):
+    prepare(root)
+    clang = shutil.which('clang++')
+    assert clang, 'no clang++ on PATH'
+    harness.expect(harness.run_b2(root, f'-sCLANG={clang}', 'libs/demo/doc'), True)
+    harness.expect(harness.run_b2(root, '-sCLANG=/nowhere/clang++', 'libs/demo/doc'), False,
+                   '-sCLANG=/nowhere/clang++ is not a file')
+
+
+def test_library_settings_only_present_the_reference(root):
+    prepare(root)
+    settings = (root / 'libs/demo/doc/mrdocs.yml').resolve()
+    text = settings.read_text()
+    # A key of how the reference is presented is the library's to set.
+    settings.write_text(text + 'sort-members: false\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), True)
+    generated = (root / 'bin/libs/demo/doc/mrdocs.yml').read_text()
+    assert 'sort-members: false\n' in generated, generated
+    # Any other is refused, naming the file, the line and the key: one that narrows what is
+    # documented, one that loosens the strictness, and one MrDocs does not know.
+    for key, value in (('exclude-symbols', "\n  - 'webcpp::demo::answer'"),
+                       ('warn-as-error', ' false'),
+                       ('include-symbols', "\n  - 'webcpp::demo::twice'"),
+                       ('implementation-defined', "\n  - 'webcpp::demo'"),
+                       ('see-below', "\n  - 'webcpp::demo::answer'"),
+                       ('no-such-key', ' true')):
+        settings.write_text(text + f'{key}:{value}\n')
+        line = text.count('\n') + 1
+        harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                       f'{settings}:{line}: {key} is not a setting a library may give its '
+                       'reference')
+
+
+def test_doc_check_and_rendered_check_run(root):
+    prepare(root)
+    page = 'libs/demo/doc/demo.adoc'
+    # doc-check, with --complete: every example is shown.
+    edit(root, page, '[listing]\n----\ninclude::{examples}/catches.expected[]\n----\n', '')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   'catches.cpp: the page shows neither its code nor its output')
+    edit(root, page, 'on:\n\n', 'on:\n\n[listing]\n----\ninclude::{examples}/catches.expected[]'
+                                '\n----\n')
+    # doc-check reads the library's files for references to the page.
+    stale = 'doc' + ': #nowhere'
+    edit(root, HEADER, 'namespace webcpp::demo {\n',
+         f'// Why ({stale}).\nnamespace webcpp::demo {{\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   'answer.hpp:10: names no anchor of the page: #nowhere')
+    edit(root, HEADER, f'// Why ({stale}).\n', '')
+    # The rendered page: a span of inline code that does not close.
+    edit(root, page, 'it.\n\n[#quick-start]', 'it, `unclosed.\n\n[#quick-start]')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   'a backtick outside code, a span of inline code that did not close')
+    assert not (root / PAGE).exists()
+
+
+def test_page_includes_a_file_of_the_superproject(root):
+    # A page shows a tagged region of a file the superproject's git tracks, through
+    # {webcpp-root}. The scratch copy is no git checkout, so it becomes one here, which tracks
+    # that file once the page has failed on it untracked.
+    prepare(root)
+    (root / 'tools/region.jam').write_text('# tag::shown[]\nusing clang : shown ;\n'
+                                           '# end::shown[]\n')
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=root, check=True)
+    edit(root, 'libs/demo/doc/demo.adoc', '[#holds]\n',
+         '[listing]\n----\ninclude::{webcpp-root}/tools/region.jam[tag=shown]\n----\n\n'
+         '[#holds]\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   'includes a file the superproject does not track: '
+                   '{webcpp-root}/tools/region.jam')
+    assert not (root / PAGE).exists()
+    subprocess.run(['git', 'add', 'tools/region.jam'], cwd=root, check=True)
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), True)
+    html = (root / PAGE).read_text()
+    assert 'using clang : shown ;' in html and 'tag::shown' not in html, html
+
+
+def test_page_includes_a_file_of_its_library(root):
+    # A page shows a tagged region of a file its library's own git tracks, through
+    # {library-root}: libs/demo is a git repository of its own, which tracks nothing until the
+    # page has failed on the file untracked.
+    prepare(root)
+    edit(root, 'libs/demo/test/Jamfile', 'webcpp.headers-alone demo : ../include ;\n',
+         '# tag::alone[]\nwebcpp.headers-alone demo : ../include ;\n# end::alone[]\n')
+    edit(root, 'libs/demo/doc/demo.adoc', '[#holds]\n',
+         '[listing]\n----\ninclude::{library-root}/test/Jamfile[tag=alone]\n----\n\n[#holds]\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   'includes a file the library does not track: {library-root}/test/Jamfile')
+    assert not (root / PAGE).exists()
+    subprocess.run(['git', 'add', 'test/Jamfile'], cwd=root / 'libs/demo', check=True)
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), True)
+    html = (root / PAGE).read_text()
+    assert 'webcpp.headers-alone demo : ../include ;' in html and 'tag::alone' not in html, html
+    # And a C++ block shows a tagged region of a test, highlighted as an example's is.
+    edit(root, 'libs/demo/test/pass.cpp', '    BOOST_TEST_EQ(webcpp::demo::answer(), 42);\n',
+         '    // tag::answer[]\n    BOOST_TEST_EQ(webcpp::demo::answer(), 42);\n'
+         '    // end::answer[]\n')
+    subprocess.run(['git', 'add', 'test/pass.cpp'], cwd=root / 'libs/demo', check=True)
+    edit(root, 'libs/demo/doc/demo.adoc', '[#holds]\n',
+         '[source]\n----\ninclude::{library-root}/test/pass.cpp[tag=answer,indent=0]\n----\n\n'
+         '[#holds]\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), True)
+    html = (root / PAGE).read_text()
+    listing = re.search(r'<pre\b[^>]*><code\b[^>]*>([^\n]*BOOST_TEST_EQ[^\n]*)</code></pre>', html)
+    assert listing is not None and 'class="hljs-number">42<' in listing.group(1), html
+
+
+def test_an_override_spelled_through_an_alias_is_the_derived_class_s_own(root):
+    # An override whose parameter is spelled through an alias, which MrDocs reads as an overload
+    # of its own: had MrDocs copied the interface's member into the derived class, under the
+    # interface's anchor, Asciidoctor would refuse the page for the anchor twice. Each class
+    # lists its own members, and the interface's are in its section.
+    prepare(root)
+    edit(root, HEADER, '}  // namespace webcpp::demo\n',
+         '/** A number, spelled through an alias. */\nusing number = int;\n\n'
+         '/** A source of answers. */\nclass source {\npublic:\n'
+         '    /** Destroys the source. */\n    virtual ~source() = default;\n\n'
+         '    /** Returns an answer.\n\n        @param value The value.\n'
+         '        @return The answer.\n    */\n    virtual int give(int value) = 0;\n};\n\n'
+         '/** A source that doubles. */\nclass doubler final : public source {\npublic:\n'
+         '    /** Returns twice the value.\n\n        @param value The value.\n'
+         '        @return Twice the value.\n    */\n'
+         '    int give(number value) override {\n        return 2 * value;\n    }\n};\n\n'
+         '}  // namespace webcpp::demo\n')
+    result = harness.run_b2(root, 'libs/demo/doc')
+    harness.expect(result, True)
+    html = (root / PAGE).read_text()
+    ids = re.findall(r'\bid="([^"]+)"', html)
+    assert len(ids) == len(set(ids)), sorted(i for i in set(ids) if ids.count(i) > 1)
+    assert 'id="webcpp-demo-source-give"' in html and 'id="webcpp-demo-doubler-give"' in html, (
+        re.findall(r'id="(webcpp-demo-[a-z_]+-give[^"]*)"', html))
+
+
+def test_index_shows_release_notes_with_a_library_s_section(root):
+    # The index shows each version's release notes, which include a library's section of its
+    # changelog by its region, a file the library's own git tracks, shown without its tag
+    # lines. A region renamed, the file untracked, or notes the index does not include fail.
+    prepare(root)
+    demo = root / 'libs/demo'
+    (demo / 'doc/changelog.adoc').write_text(
+        '[appendix]\n[#demo-changelog]\n== Changelog\n\nWhat changed.\n\n'
+        '[#demo-changelog-unreleased]\n=== Unreleased\n\n// tag::unreleased[]\n'
+        '* Added a planted line.\n// end::unreleased[]\n')
+    with (demo / 'doc/demo.adoc').open('a') as page:
+        page.write('\ninclude::changelog.adoc[]\n')
+    subprocess.run(['git', 'add', 'doc/changelog.adoc'], cwd=demo, check=True)
+    (root / 'doc/releases/9.0.0.adoc').write_text(
+        '[#webcpp-9-0-0]\n= webcpp 9.0.0\n\n[#webcpp-9-0-0-updated-libraries]\n'
+        '== Updated Libraries\n\n[#webcpp-9-0-0-demo]\n=== demo\n\n'
+        'include::{webcpp-root}/libs/demo/doc/changelog.adoc[tag=unreleased]\n')
+    edit(root, 'doc/index.adoc', 'include::releases/0.1.0.adoc[leveloffset=+2]\n',
+         'include::releases/9.0.0.adoc[leveloffset=+2]\n\n'
+         'include::releases/0.1.0.adoc[leveloffset=+2]\n')
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=root, check=True)
+    harness.expect(harness.run_b2(root, 'doc'), True)
+    html = (root / 'doc/html/index.html').read_text()
+    assert 'Added a planted line.' in html, html[-3000:]
+    assert 'tag::' not in html and 'end::' not in html, html[-3000:]
+    edit(root, 'libs/demo/doc/changelog.adoc', '// tag::unreleased[]', '// tag::renamed[]')
+    edit(root, 'libs/demo/doc/changelog.adoc', '// end::unreleased[]', '// end::renamed[]')
+    harness.expect(harness.run_b2(root, 'doc'), False, 'includes a region the file does not hold')
+    edit(root, 'libs/demo/doc/changelog.adoc', '// tag::renamed[]', '// tag::unreleased[]')
+    edit(root, 'libs/demo/doc/changelog.adoc', '// end::renamed[]', '// end::unreleased[]')
+    subprocess.run(['git', 'rm', '-q', '--cached', 'doc/changelog.adoc'], cwd=demo, check=True)
+    harness.expect(harness.run_b2(root, 'doc'), False,
+                   'includes a file its repository does not track: '
+                   '{webcpp-root}/libs/demo/doc/changelog.adoc')
+    subprocess.run(['git', 'add', 'doc/changelog.adoc'], cwd=demo, check=True)
+    edit(root, 'doc/index.adoc', 'include::releases/9.0.0.adoc[leveloffset=+2]\n\n', '')
+    harness.expect(harness.run_b2(root, 'doc'), False, 'releases/9.0.0.adoc: not reached from '
+                                                       'the page')
+
+
+def test_page_shows_the_counts_of_its_programs(root):
+    # Counted from what demo's test and example Jamfiles declare, as b2 recorded it: each program
+    # once, and each header compiled alone one.
+    prepare(root)
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), True)
+    text = page_text(root)
+    assert ('demo has 2 examples: 2 built natively, 2 for wasip2 and 2 for wasip3. It has 9 '
+            'tests, 1 of them a Boost.Test suite: 9 run natively, 6 on wasip2 and 6 on wasip3. '
+            'Each of its 2 headers compiles alone.') in text, text
+    # A program more is counted at the next build.
+    edit(root, 'libs/demo/test/Jamfile', 'webcpp.run pass :',
+         'webcpp.run pass_again : pass.cpp : <library>/webcpp/demo//demo : wasip2 ;\n'
+         'webcpp.run pass :')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), True)
+    assert 'It has 10 tests, 1 of them a Boost.Test suite: 9 run natively, 7 on wasip2 and 6 ' \
+        'on wasip3.' in page_text(root), page_text(root)
+    # A library that compiles no header alone has no header count, and no page.
+    edit(root, 'libs/demo/test/Jamfile', 'webcpp.headers-alone demo : ../include ;\n', '')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   'demo declares no webcpp.headers-alone: its headers are not counted',
+                   'webcpp.doc demo: tools/doc/counts.py could not count')
+
+
+def add_browser_demo(root: Path) -> None:
+    """Places the fixture library browser_demo beside demo in the scratch superproject root, a git
+    repository of its own too, with this checkout's emsdk in its .local, whose headers the
+    reference of page.hpp reads."""
+    shutil.copytree(harness.FIXTURES / 'browser_demo', root / 'libs/browser_demo',
+                    ignore=harness.built)
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=root / 'libs/browser_demo',
+                   check=True)
+    harness.link_emsdk(root)
+
+
+BROWSER_PAGE = 'libs/browser_demo/include/webcpp/browser_demo/page.hpp'
+BROWSER_NATIVE = 'libs/browser_demo/include/webcpp/browser_demo/native.hpp'
+
+
+def test_page_shows_its_linked_and_driven_programs(root):
+    # browser_demo links page and never runs it, and drives driven in its own lane: both are
+    # counted among its tests and on their own, and the page must show page's code, which
+    # doc-check is given from the example Jamfile. No emscripten toolset is needed to count them,
+    # only Emscripten's headers, which the reference reads.
+    prepare(root)
+    add_browser_demo(root)
+    harness.expect(harness.run_b2(root, 'libs/browser_demo/doc'), True)
+    text = page_text(root, 'libs/browser_demo/doc/html/index.html')
+    assert ('browser_demo has 1 example and 10 tests: 8 built natively and 9 for emscripten. '
+            'Among them, 1 is linked for emscripten and never run, and 1 is driven by a script '
+            'that node runs, on both targets. Its headers, 3, compile alone.') in text, text
+    source = 'libs/browser_demo/doc/browser_demo.adoc'
+    edit(root, source, '[source]\n----\ninclude::{examples}/page.cpp[tag=page]\n----\n', '')
+    page = root / 'libs/browser_demo/example/page.cpp'
+    harness.expect(harness.run_b2(root, 'libs/browser_demo/doc'), False,
+                   f'{page.resolve()}: the page does not show the code of this program, which '
+                   'is linked')
+
+
+def test_page_shows_twins_and_their_counts(root):
+    prepare(root)
+    add_oracle_demo(root)
+    # No Node: the twins are counted, not run.
+    harness.expect(harness.run_b2(root, 'libs/oracle_demo/doc'), True)
+    text = page_text(root, ORACLE_PAGE)
+    assert ('Of its 3 examples, 2 have a twin, the same program in JavaScript: 1 prints what its '
+            'example prints, and 1 prints an output of its own. 1 has no twin.') in text, text
+    # The twin's code and its own output, from the twins' directory webcpp.twins declares.
+    html = (root / ORACLE_PAGE).read_text()
+    assert 'Half of 7 is 3.5.' in html and 'squared is' in html, html
+    # And the page must show every divergent twin's own output: doc-check is given the twins.
+    edit(root, ORACLE_SOURCE, '[listing]\n----\ninclude::{twins}/half.expected[]\n----\n', '')
+    harness.expect(harness.run_b2(root, 'libs/oracle_demo/doc'), False,
+                   'half.expected: the page does not show this difference from the original')
+
+
+def test_links_between_pages(root):
+    prepare(root)
+    add_oracle_demo(root)
+    link = 'link:{webcpp-libs}/demo/{webcpp-page}#quick-start[demo]'
+    edit(root, ORACLE_SOURCE, 'superproject.\n', f'superproject. It is built as {link} is.\n')
+    reference = 'doc' + ': demo#holds'
+    edit(root, ORACLE_HEADER, 'namespace webcpp::oracle_demo {\n',
+         f'// See ({reference}).\nnamespace webcpp::oracle_demo {{\n')
+    # In the tree, the link goes from libs/oracle_demo/doc/html/ to demo's page there; on the
+    # site, from libs/oracle_demo/ to libs/demo/. Either is checked against demo's page, which
+    # is built first.
+    layouts = (((), '../../../demo/doc/html/index.html'),
+               (('-sWEBCPP_INDEX=site',), '../demo/index.html'))
+    for options, href in layouts:
+        harness.expect(harness.run_b2(root, *options, 'libs/oracle_demo/doc'), True)
+        html = (root / ORACLE_PAGE).read_text()
+        assert f'href="{href}#quick-start"' in html, html
+    assert list((root / 'bin/libs/demo/doc').rglob('index.html')), 'demo\'s page was not built'
+    for options, href in layouts:
+        for anchor, fault in (('nowhere', 'names no anchor of the page of demo: demo#nowhere'),
+                              ('quick-start-01', 'demo#quick-start-01 ends in the number MrDocs '
+                                                 'gives an overload')):
+            edit(root, ORACLE_SOURCE, '#quick-start[demo]', f'#{anchor}[demo]')
+            harness.expect(harness.run_b2(root, *options, 'libs/oracle_demo/doc'), False,
+                           f'{href}#{anchor}: {fault}')
+            edit(root, ORACLE_SOURCE, f'#{anchor}[demo]', '#quick-start[demo]')
+    # A reference of the library's code to an anchor of another library's page.
+    edit(root, ORACLE_HEADER, reference, 'doc' + ': demo#gone')
+    harness.expect(harness.run_b2(root, 'libs/oracle_demo/doc'), False,
+                   f'{at(root, ORACLE_HEADER, "// See (")}: names no anchor of the page of demo: '
+                   'demo#gone')
+    # And one to a library that has no page.
+    edit(root, ORACLE_HEADER, 'demo#gone', 'nowhere#gone')
+    harness.expect(harness.run_b2(root, 'libs/oracle_demo/doc'), False,
+                   'libs/oracle_demo links the page of nowhere, and libs/nowhere/doc/Jamfile does '
+                   'not exist')
+
+
+def test_links_into_two_pages(root):
+    # Two linked pages, each read for its own library's anchors: #only-third is third's alone,
+    # and third is the second library the page links.
+    prepare(root)
+    add_oracle_demo(root)
+    add_third(root)
+    edit(root, ORACLE_SOURCE, 'superproject.\n',
+         'superproject. It is built as link:{webcpp-libs}/demo/{webcpp-page}#quick-start[demo] '
+         'and link:{webcpp-libs}/third/{webcpp-page}#only-third[third] are.\n')
+    harness.expect(harness.run_b2(root, 'libs/oracle_demo/doc'), True)
+    pages = {name: next((root / f'bin/libs/{name}/doc').rglob('index.html')).read_text()
+             for name in ('demo', 'third')}
+    assert 'id="only-third"' in pages['third'] and 'id="only-third"' not in pages['demo']
+    assert 'id="quick-start"' in pages['demo'] and 'id="quick-start"' not in pages['third']
+    # And each anchor is still looked for in its own library's page only.
+    edit(root, ORACLE_SOURCE, '#only-third[third]', '#quick-start[third]')
+    harness.expect(harness.run_b2(root, 'libs/oracle_demo/doc'), False,
+                   '../../../third/doc/html/index.html#quick-start: names no anchor of the page '
+                   'of third: third#quick-start')
+
+
+def test_reference_reads_a_header_built_only_for_wasi(root):
+    prepare(root)
+    add_component_demo(root)
+    # The header of the world builds only for WASI. The reference parses it natively, with the
+    # requirements of the doc Jamfile: the bindings of wasip2, which their -headers target
+    # generates on the native toolset, and the macro of p2.
+    harness.expect(harness.run_b2(root, 'libs/component_demo/doc//reference'), True)
+    reference = next((root / 'bin/libs/component_demo/doc').rglob('reference.adoc')).read_text()
+    assert '[#webcpp-component_demo-text_of]' in reference, reference
+    assert 'Returns the text a string of the world' in reference, reference
+    assert (root / 'bin/generated/component_demo/demo-bindings-p2/demo_world.h').is_file()
+    # The page shows it, and counts the header among those compiled alone, though only WASI
+    # compiles it.
+    harness.expect(harness.run_b2(root, 'libs/component_demo/doc'), True)
+    text = page_text(root, COMPONENT_PAGE)
+    assert ('component_demo has 5 tests: 2 run natively, 4 on wasip2 and 4 on wasip3; wasmtime '
+            'serves 1 of them. Each of its 2 headers compiles alone') in text, text
+    # An undocumented function of the header fails the reference, naming it.
+    edit(root, WORLD, '}  // namespace webcpp::component_demo',
+         'int undocumented(int value);\n\n}  // namespace webcpp::component_demo')
+    harness.expect(harness.run_b2(root, 'libs/component_demo/doc//reference'), False,
+                   f'{at(root, WORLD, "int undocumented(")}:',
+                   'undocumented: function is undocumented')
+    edit(root, WORLD, 'int undocumented(int value);\n\n', '')
+    # Without the requirements a native parse needs, the header is not parsed, and the build
+    # fails naming it.
+    edit(root, 'libs/component_demo/doc/Jamfile',
+         ' : <library>/webcpp/component_demo//demo-bindings-p2-headers\n'
+         '  <define>WEBCPP_COMPONENT_DEMO_P2\n'
+         '  : <library>/webcpp/component_demo//demo-bindings-p3-headers'
+         ' <define>WEBCPP_COMPONENT_DEMO_P3 ;\n', ' ;\n')
+    harness.expect(harness.run_b2(root, 'libs/component_demo/doc//reference'), False,
+                   f'{at(root, WORLD, "#error")}:2: error: "webcpp/component_demo/world.hpp '
+                   'builds for wasip2 or wasip3')
+
+
+def test_reference_checks_each_branch_of_a_header(root):
+    prepare(root)
+    add_component_demo(root)
+    # The header of the world has a branch for each WASI version, and the reference parses p2's.
+    # The doc Jamfile gives p3's requirements too, with which the Doc Comments of the other branch
+    # are checked, its bindings generated on the native toolset.
+    harness.expect(harness.run_b2(root, 'libs/component_demo/doc//reference'), True)
+    assert (root / 'bin/generated/component_demo/demo-bindings-p3/demo_world.h').is_file()
+    # The reference's own parse sees p2's bindings alone: the check is its sibling, whose usage
+    # requirements never reach it.
+    database = (root / 'bin/libs/component_demo/doc/compile_commands.json').read_text()
+    assert 'demo-bindings-p2' in database and 'demo-bindings-p3' not in database, database
+    # In p3's branch alone, an undocumented function fails the page, built through its install
+    # alone, as when another page links it; it, a detail symbol without a brief and an
+    # undocumented macro each fail the reference, named, with p3's macro.
+    branch = '    return "p3";\n}\n'
+    edit(root, WORLD, branch, f'{branch}\nint undocumented_p3(int value);\n')
+    harness.expect(harness.run_b2(root, 'libs/component_demo/doc//html'), False,
+                   f'{at(root, WORLD, "int undocumented_p3(")}:',
+                   'undocumented_p3: function is undocumented')
+    assert not (root / COMPONENT_PAGE).exists()
+    edit(root, WORLD, f'{branch}\nint undocumented_p3(int value);\n', branch)
+    for planted, declared, message in (
+            ('int undocumented_p3(int value);\n', 'int undocumented_p3(',
+             'undocumented_p3: function is undocumented'),
+            ('namespace detail {\ninline int helper_p3() {\n    return 3;\n}\n'
+             '}  // namespace detail\n', 'inline int helper_p3(',
+             'webcpp::component_demo::detail::helper_p3: a detail symbol needs a brief'),
+            ('#define WEBCPP_COMPONENT_DEMO_ONLY_P3 3\n', '#define WEBCPP_COMPONENT_DEMO_ONLY_P3',
+             'WEBCPP_COMPONENT_DEMO_ONLY_P3: macro is undocumented')):
+        edit(root, WORLD, branch, f'{branch}\n{planted}')
+        harness.expect(harness.run_b2(root, 'libs/component_demo/doc//reference'), False,
+                       f'{at(root, WORLD, declared)}:', message,
+                       '--define "WEBCPP_COMPONENT_DEMO_P3"')
+        edit(root, WORLD, f'{branch}\n{planted}', branch)
+    harness.expect(harness.run_b2(root, 'libs/component_demo/doc//reference'), True)
+
+
+def test_reference_reads_headers_of_one_target(root):
+    prepare(root)
+    add_browser_demo(root)
+    # page.hpp builds only on emscripten, and holds only for wasm32's types, as Emscripten's own
+    # <emscripten/wire.h> does, which a native parse on Linux x86-64 read as a redefinition;
+    # native.hpp builds only against the fake dependency. The reference is one parse of every
+    # public header for Emscripten's target, as the emsdk's em++ compiles, which
+    # /webcpp//emscripten-reference finds in .local/emsdk, with the native backend's target, which
+    # brings the dependency.
+    harness.expect(harness.run_b2(root, 'libs/browser_demo/doc//reference'), True)
+    reference = next((root / 'bin/libs/browser_demo/doc').rglob('reference.adoc')).read_text()
+    for anchor, brief in (('page_title', 'Returns the title of the page the program runs in'),
+                          ('native_answer', 'Returns the answer the fake dependency gives')):
+        assert f'[#webcpp-browser_demo-{anchor}]' in reference, (anchor, reference)
+        assert brief in reference, (brief, reference)
+    # MrDocs reads the command of compile_commands.json, whose compiler is emscripten-clang++, the
+    # script that runs the emsdk's clang++ with the words em++ gives it: MrDocs runs it alone for
+    # the include directories it adds, which are then Emscripten's.
+    local = f'{root.resolve()}/.local/emsdk'
+    database = next((root / 'bin/libs/browser_demo/doc').rglob('compile_commands.json'))
+    command = json.loads(database.read_text())[0]['arguments']
+    script = database.parent.resolve() / 'emscripten-clang++'
+    assert Path(command[0]).resolve() == script, command
+    assert command[1:3] == ['-target', 'wasm32-unknown-emscripten'], command
+    assert '-fwasm-exceptions' in command and '-mllvm' not in command, command
+    assert ran(script) == [f'{local}/upstream/bin/clang++', '-target',
+                           'wasm32-unknown-emscripten'], script.read_text()
+    searched = subprocess.run([str(script), '-v', '-E', '-x', 'c++', '-'], input='', env={},
+                              capture_output=True, text=True, check=True).stderr
+    assert '/sysroot/include/c++/v1\n' in searched, searched
+    # An undocumented function in either fails the reference, naming it.
+    for header in (BROWSER_PAGE, BROWSER_NATIVE):
+        text = (root / header).read_text()
+        edit(root, header, '}  // namespace webcpp::browser_demo',
+             'int undocumented(int value);\n\n}  // namespace webcpp::browser_demo')
+        harness.expect(harness.run_b2(root, 'libs/browser_demo/doc//reference'), False,
+                       f'{at(root, header, "int undocumented(")}:',
+                       'undocumented: function is undocumented')
+        (root / header).write_text(text)
+    # -sWEBCPP_EMSDK names another emsdk, which must hold em++ and clang++ and be the version
+    # webcpp pins; without it, and without .local/emsdk, the build stops, naming both places. The
+    # shell's EMSDK, which emsdk_env.sh exports, and a WEBCPP_EMSDK of the environment, change
+    # nothing: the emsdk is .local/emsdk unless the command line says.
+    emsdk = (root / '.local/emsdk').resolve()
+    harness.expect(harness.run_b2(root, f'-sWEBCPP_EMSDK={emsdk}',
+                                  'libs/browser_demo/doc//reference'), True)
+    assert ran(script)[0] == f'{emsdk}/upstream/bin/clang++', script.read_text()
+    for variable in ('EMSDK', 'WEBCPP_EMSDK'):
+        harness.expect(harness.run_b2(root, 'libs/browser_demo/doc//reference',
+                                      env_extra={variable: '/nonexistent'}), True)
+        assert ran(script)[0] == f'{local}/upstream/bin/clang++', (variable, script.read_text())
+    # An emsdk of another version is refused, naming its version, the pinned one and the file.
+    other = fake_emsdk(root, '6.0.10')
+    version = other / 'upstream/emscripten/emscripten-version.txt'
+    harness.expect(harness.run_b2(root, f'-sWEBCPP_EMSDK={other}',
+                                  'libs/browser_demo/doc//reference'), False,
+                   f'{version} names Emscripten 6.0.10', 'webcpp pins 6.0.11')
+    (root / '.local/emsdk').unlink()
+    for options, named in (((), 'no -sWEBCPP_EMSDK=<dir> was given'),
+                           (('-sWEBCPP_EMSDK=/nonexistent',),
+                            '-sWEBCPP_EMSDK=/nonexistent holds none')):
+        harness.expect(harness.run_b2(root, *options, 'libs/browser_demo/doc//reference'), False,
+                       'The emsdk, whose em++ and clang++ read a reference', named, local,
+                       '-sWEBCPP_EMSDK=<dir>', 'upstream/emscripten/em++ is not there')
+    # A library whose reference does not ask for it needs no emsdk.
+    harness.expect(harness.run_b2(root, 'libs/demo/doc//reference'), True)
+
+
+def ran(script: Path) -> list[str]:
+    """The program the script emscripten-clang++ runs, and the first two words it gives it."""
+    line = next(line for line in script.read_text().splitlines() if line.startswith('exec '))
+    return shlex.split(line)[1:4]
+
+
+def test_a_native_parse_of_a_header_for_wasm32_fails(root):
+    # Read natively with Emscripten's own headers on its include path, as trystero's browser
+    # headers were, the reference fails at page.hpp's line that holds only for wasm32's types, as
+    # it failed at <emscripten/wire.h> on Linux x86-64, here on any 64-bit host, naming it; read
+    # for Emscripten's target, it passes (test_reference_reads_headers_of_one_target).
+    prepare(root)
+    add_browser_demo(root)
+    headers = (root / '.local/emsdk/upstream/emscripten/system/include').resolve()
+    edit(root, 'libs/browser_demo/doc/Jamfile', '<library>/webcpp//emscripten-reference',
+         f'<include>"{headers}"')
+    harness.expect(harness.run_b2(root, 'libs/browser_demo/doc//reference'), False,
+                   f'{at(root, BROWSER_PAGE, "static_assert(sizeof(long) == 4")}:',
+                   'page.hpp is read for wasm32')
+
+
+def fake_emsdk(root: Path, version: str) -> Path:
+    """An emsdk of root's own whose em++ and clang++ are there, and whose
+    emscripten-version.txt names version."""
+    emsdk = root / f'other emsdk {version}'
+    for tool in ('upstream/emscripten/em++', 'upstream/bin/clang++'):
+        (emsdk / tool).parent.mkdir(parents=True, exist_ok=True)
+        (emsdk / tool).write_text('#!/bin/sh\nexit 1\n')
+    (emsdk / 'upstream/emscripten/emscripten-version.txt').write_text(f'"{version}"\n')
+    return emsdk
+
+
+def test_tools_given_at_paths_with_spaces(root):
+    # b2 splits the value of -s at its spaces; MrDocs and clang++ are found at a path that holds
+    # one, as the scratch superproject's does.
+    prepare(root)
+    clang = shutil.which('clang++')
+    assert clang, 'no clang++ on PATH'
+    tools = root / 'linked tools'
+    tools.mkdir()
+    for name, tool in (('mrdocs', harness.mrdocs_root() / 'bin/mrdocs'),
+                       ('clang++', Path(clang))):
+        wrapper = tools / name
+        wrapper.write_text(f'#!/bin/sh\nexec "{tool}" "$@"\n')
+        wrapper.chmod(0o755)
+    (root / '.local/mrdocs').unlink()
+    harness.expect(harness.run_b2(root, f'-sMRDOCS={tools}/mrdocs', f'-sCLANG={tools}/clang++',
+                                  'libs/demo/doc'), True)
+    assert (root / PAGE).is_file()
+
+
+def test_page_outside_git(root):
+    # A library that is not a git checkout loads, and builds what needs no git; only the check
+    # of its page, which reads the files git lists, names it.
+    (root / '.local/mrdocs').symlink_to(harness.mrdocs_root())
+    harness.expect(harness.run_b2(root, 'libs/demo/doc//reference'), True)
+    harness.expect(harness.run_b2(root, '-n', 'libs/demo/doc'), True)
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   f'{(root / "libs/demo").resolve()}: is not a git checkout')
+
+
+def test_counts_warn_and_fail_through_the_build(root):
+    # A library's own counts.py: what it writes on its standard error is shown and is no count;
+    # a count of a thousand or more reads with a thousands separator; its failure stops the build
+    # with its message.
+    prepare(root)
+    script = root / 'libs/demo/doc/counts.py'
+    script.write_text('import sys\n'
+                      'print("counts.py: a warning, n-cases=99", file=sys.stderr, flush=True)\n'
+                      'print("n-cases=3")\nprint("n-steps=1234567")\n')
+    edit(root, 'libs/demo/doc/demo.adoc', 'compiles alone.\n',
+         'compiles alone. {n-cases} cases, {n-steps} steps.\n')
+    result = harness.run_b2(root, 'libs/demo/doc')
+    harness.expect(result, True, 'counts.py: a warning, n-cases=99')
+    assert 'compiles alone. 3 cases, 1,234,567 steps.' in page_text(root), page_text(root)
+    script.write_text('import sys\nsys.exit("counts.py: no case file in fixtures")\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/doc'), False,
+                   'counts.py: no case file in fixtures',
+                   'webcpp.doc demo: tools/doc/counts.py could not count')
+
+
+def test_index_lists_every_library(root):
+    prepare(root)
+    # A second library, a port, with a page of its own to link to.
+    other = add_paged(root, 'other').resolve()
+    (other / 'meta').mkdir()
+    (other / 'meta/libraries.json').write_text(
+        '{\n'
+        '    "key": "other",\n'
+        '    "name": "Other",\n'
+        '    "authors": ["WebCpp.org"],\n'
+        '    "description": "A port, whose description holds C++, a_b, a | and {braces}. It\'s '
+        'the original\'s, but `it\'s` and https://example.org/it\'s stay \'straight\'.",\n'
+        '    "category": ["Testing"],\n'
+        '    "cxxstd": "20",\n'
+        '    "port-of": {\n'
+        '        "name": "original.js",\n'
+        '        "language": "JavaScript",\n'
+        '        "version": "1.2.3",\n'
+        '        "url": "https://github.com/webcpporg/original",\n'
+        '        "licence": "MIT"\n'
+        '    }\n'
+        '}\n')
+    # The index links a library's page only when there is one: an empty doc Jamfile fails the
+    # index, naming it, as does a page it declares that is not there.
+    declared = (other / 'doc/Jamfile').read_text()
+    no_page = (f'{other}/doc/Jamfile: declares no page, webcpp.doc other : <page>.adoc ;, and '
+               'every library of libs/ has a page, which the index links to')
+    (other / 'doc/Jamfile').write_text('')
+    harness.expect(harness.run_b2(root, 'doc'), False, no_page)
+    # With the reference alone, the library's own doc build stops first, naming it.
+    for jamfile in ('import webcpp ;\n\nwebcpp.reference other ;\n',
+                    'import webcpp ;\n\n# webcpp.doc other : other.adoc ;\n'
+                    'webcpp.reference other ;\n'):
+        (other / 'doc/Jamfile').write_text(jamfile)
+        harness.expect(harness.run_b2(root, 'doc'), False, 'webcpp.reference other: the library '
+                       'has no page, and libs/other/doc/Jamfile declares its reference alone')
+    # The page is the one b2 declares, read from the build, not from the Jamfile's text: one
+    # named through a variable is the library's page.
+    (other / 'doc/Jamfile').write_text(declared.replace(
+        'webcpp.doc other : other.adoc ;',
+        'local page = other.adoc ;\nwebcpp.doc other : $(page) ;'))
+    harness.expect(harness.run_b2(root, 'doc'), True)
+    (other / 'doc/Jamfile').write_text(declared)
+    (other / 'doc/other.adoc').rename(other / 'doc/moved.adoc')
+    listed = subprocess.run([sys.executable, str(root / 'tools/doc/libraries.py'),
+                             '--root', str(root), '--output', str(root / 'libraries.adoc'),
+                             '--page', f'demo={root / "libs/demo/doc/demo.adoc"}',
+                             '--page', f'other={other / "doc/other.adoc"}'],
+                            capture_output=True, text=True, check=False)
+    assert listed.returncode == 1, (listed.returncode, listed.stdout, listed.stderr)
+    assert (f'{other}/doc/other.adoc: there is no such file; libs/other/doc/Jamfile declares it '
+            'the page of other, which the index links to') in listed.stdout, listed.stdout
+    (other / 'doc/moved.adoc').rename(other / 'doc/other.adoc')
+    result = harness.run_b2(root, 'doc')
+    harness.expect(result, True)
+    html = (root / 'doc/html/index.html').read_text()
+    rows = re.findall(r'<tr>(.*?)</tr>', html, flags=re.S)
+    cells = [[unescape(re.sub(r'<[^>]+>', '', cell)).strip()
+              for cell in re.findall(r'<t[dh]\b[^>]*>(.*?)</t[dh]>', row, flags=re.S)]
+             for row in rows]
+    assert cells == [
+        ['Library', 'Description', 'Ports'],
+        ['demo', 'The smallest library the superproject builds, which the tests of its build '
+                 'place in libs/demo.', 'original'],
+        ['Other', 'A port, whose description holds C++, a_b, a | and {braces}. It\u2019s the '
+                  "original\u2019s, but `it's` and https://example.org/it's stay 'straight'.",
+         'original.js 1.2.3, in JavaScript (MIT)'],
+    ], cells
+    assert '<a href="../../libs/demo/doc/html/index.html">demo</a>' in html, html
+    assert '<a href="../../libs/other/doc/html/index.html">Other</a>' in html, html
+    assert '<a href="https://github.com/webcpporg/original">original.js 1.2.3</a>' in html, html
+    # And each library's page, which the index links to, is built with it.
+    assert (root / PAGE).is_file()
+    assert (other / 'doc/html/index.html').is_file()
+    # For the site, where the index is docs/ and each library's page libs/<name>/, the same
+    # index links there; b2 site lays the site out so (tools/ci/assemble.py).
+    result = harness.run_b2(root, 'doc', '-sWEBCPP_INDEX=site')
+    harness.expect(result, True)
+    html = (root / 'doc/html/index.html').read_text()
+    assert '<a href="../libs/demo/">demo</a>' in html, html
+    assert '<a href="../libs/other/">Other</a>' in html, html
+    assert '../../libs/' not in html, html
+    harness.expect(harness.run_b2(root, 'doc', '-sWEBCPP_INDEX=elsewhere'), False,
+                   '-sWEBCPP_INDEX=elsewhere is neither tree nor site')
+    # b2 site builds the pages for the site without the option, and refuses them for the tree.
+    harness.expect(harness.run_b2(root, 'doc', 'site', '-sWEBCPP_INDEX=tree'), False,
+                   '-sWEBCPP_INDEX=tree builds the pages for the tree, and b2 site publishes them')
+    # Without it, the index links the pages in the tree again.
+    harness.expect(harness.run_b2(root, 'doc'), True)
+    html = (root / 'doc/html/index.html').read_text()
+    assert '<a href="../../libs/demo/doc/html/index.html">demo</a>' in html, html
+    # A library without meta/libraries.json is named.
+    (other / 'meta/libraries.json').unlink()
+    harness.expect(harness.run_b2(root, 'doc'), False,
+                   f'{other}/meta/libraries.json: there is no such file')
+
+
+CONFIG_HPP = ('#ifndef WEBCPP_CONFIG_HPP\n#define WEBCPP_CONFIG_HPP\n\n'
+              '#include <webcpp/version.hpp>\n\n'
+              '#ifdef __MRDOCS__\n/** Defined by the developer. */\n#define WEBCPP_NO_EXCEPTIONS\n'
+              '#undef WEBCPP_NO_EXCEPTIONS\n#endif\n\n'
+              '/** Defined natively. */\n#define WEBCPP_TARGET_NATIVE\n\n'
+              '/** Defined with exceptions. */\n#define WEBCPP_HAS_EXCEPTIONS\n\n#endif\n')
+VERSION_HPP = ('#ifndef WEBCPP_VERSION_HPP\n#define WEBCPP_VERSION_HPP\n\n'
+               '/** The version as a number. */\n#define WEBCPP_VERSION 100\n\n'
+               '/** The version as text. */\n#define WEBCPP_LIB_VERSION "0_1"\n\n#endif\n')
+
+
+def test_config_reference_lists_every_webcpp_macro(root):
+    # A library named config, macros only, as config's headers are: its reference lists every
+    # WEBCPP_* macro but the include guards, in a section Macros of its own and with no section of
+    # the global namespace. An undocumented macro fails, named at its line; so does a macro of no
+    # family the names of libraries leave to config, and any declaration in its headers.
+    prepare(root)
+    config = add_paged(root, 'config')
+    config_hpp = 'libs/config/include/webcpp/config.hpp'
+    version_hpp = 'libs/config/include/webcpp/version.hpp'
+    (root / config_hpp).write_text(CONFIG_HPP)
+    (root / version_hpp).write_text(VERSION_HPP)
+    harness.expect(harness.run_b2(root, 'libs/config/doc'), True)
+    html = (config / 'doc/html/index.html').read_text()
+    for macro in ('WEBCPP_VERSION', 'WEBCPP_LIB_VERSION', 'WEBCPP_TARGET_NATIVE',
+                  'WEBCPP_NO_EXCEPTIONS', 'WEBCPP_HAS_EXCEPTIONS'):
+        assert f'id="{macro}"' in html, (macro, html[-3000:])
+    assert 'WEBCPP_CONFIG_HPP' not in html and 'WEBCPP_VERSION_HPP' not in html
+    assert re.search(r'<h3 id="webcpp-config-macros">(<a class="anchor"[^>]*></a>)?Macros</h3>',
+                     html), html[-3000:]
+    assert 'Global namespace' not in html, html[-3000:]
+    edit(root, version_hpp, '/** The version as a number. */\n', '')
+    harness.expect(harness.run_b2(root, 'libs/config/doc'), False,
+                   f'{at(root, version_hpp, "#define WEBCPP_VERSION 100")}:',
+                   'WEBCPP_VERSION: macro is undocumented')
+    (root / version_hpp).write_text(VERSION_HPP)
+    edit(root, config_hpp, '#define WEBCPP_HAS_EXCEPTIONS\n',
+         '#define WEBCPP_HAS_EXCEPTIONS\n\n/** Of no family. */\n#define WEBCPP_STRAY 1\n')
+    harness.expect(harness.run_b2(root, 'libs/config/doc'), False,
+                   'reference.py: WEBCPP_STRAY: a macro of config is WEBCPP_<FAMILY> or '
+                   'WEBCPP_<FAMILY>_*')
+    (root / config_hpp).write_text(CONFIG_HPP.replace(
+        '#define WEBCPP_HAS_EXCEPTIONS\n',
+        '#define WEBCPP_HAS_EXCEPTIONS\n\nnamespace webcpp {\n\n/** A function. */\n'
+        'inline int planted() { return 0; }\n\n}  // namespace webcpp\n'))
+    harness.expect(harness.run_b2(root, 'libs/config/doc'), False,
+                   f'{at(root, config_hpp, "namespace webcpp {")}: webcpp: config holds macros '
+                   'alone')
+
+
+def test_other_libraries_list_only_their_own_macros(root):
+    # Any other library's reference lists its own WEBCPP_<NAME>_* alone.
+    prepare(root)
+    other = add_paged(root, 'other')
+    header = other / 'include/webcpp/other.hpp'
+    header.write_text(header.read_text().replace(
+        '#define WEBCPP_OTHER_HPP\n',
+        '#define WEBCPP_OTHER_HPP\n\n/** Its own. */\n#define WEBCPP_OTHER_OWN 1\n\n'
+        '/** Not its own. */\n#define WEBCPP_ELSEWHERE 1\n'))
+    harness.expect(harness.run_b2(root, 'libs/other/doc'), True)
+    html = (other / 'doc/html/index.html').read_text()
+    assert 'id="WEBCPP_OTHER_OWN"' in html and 'WEBCPP_ELSEWHERE' not in html, html[-3000:]
+
+
+# The words no library's name may be, alone or followed by an underscore and more: config's
+# macros take WEBCPP_HAS_*, WEBCPP_LIB_*, WEBCPP_NO_*, WEBCPP_TARGET_* and WEBCPP_VERSION*, and the
+# tests' WEBCPP_TEST_*.
+RESERVED_WORDS = ('has', 'lib', 'no', 'target', 'test', 'version')
+
+
+def add_described(root: Path, name: str) -> Path:
+    """Places a library name, with a page and a meta/libraries.json, in the scratch superproject
+    root, and returns its directory."""
+    library = add_paged(root, name)
+    (library / 'meta').mkdir()
+    (library / 'meta/libraries.json').write_text(
+        '{\n'
+        f'    "key": "{name}",\n'
+        f'    "name": "{name}",\n'
+        '    "description": "A library the index lists.",\n'
+        '    "port-of": null\n'
+        '}\n')
+    return library
+
+
+def list_libraries(root: Path, name: str) -> subprocess.CompletedProcess:
+    """Runs libraries.py over a superproject of its own, under root, whose one library is name,
+    described and with its page."""
+    # A directory of its own for each: on a file system that ignores case, Target is target.
+    alone = Path(tempfile.mkdtemp(prefix=f'{name} ', dir=root))
+    (alone / 'libs').mkdir()
+    library = add_described(alone, name)
+    return subprocess.run([sys.executable, str(root / 'tools/doc/libraries.py'), '--root',
+                           str(alone), '--output', str(alone / 'libraries.adoc'), '--page',
+                           f'{name}={library / "doc" / (name + ".adoc")}'],
+                          capture_output=True, text=True, check=False)
+
+
+def test_a_library_named_as_config_s_macros_is_refused(root):
+    # A library named target would meet config's WEBCPP_TARGET_*: described and with its page, as
+    # the index would list it, it is refused, named. So is each word, alone or followed by _ and
+    # more, in any case; a name that only begins with a word's letters is not.
+    prepare(root)
+    add_described(root, 'target')
+    harness.expect(harness.run_b2(root, 'doc'), False,
+                   'a library is not named target: its macros, WEBCPP_TARGET_*')
+    refused = (*RESERVED_WORDS, *(f'{word}_x' for word in RESERVED_WORDS), 'Target', 'No_X')
+    for name in refused:
+        result = list_libraries(root, name)
+        assert result.returncode == 1, (name, result.returncode, result.stdout, result.stderr)
+        assert f'a library is not named {name}: ' in result.stdout, (name, result.stdout)
+    for name in ('hash', 'library', 'notes', 'targets', 'testing', 'versions', 'nox'):
+        result = list_libraries(root, name)
+        assert result.returncode == 0, (name, result.returncode, result.stdout, result.stderr)
+
+CASES = [
+    test_page_builds_with_its_reference,
+    test_undocumented_function_fails_naming_it,
+    test_what_mrdocs_defaults_would_hide_fails,
+    test_declarator_sharing_a_comment_fails,
+    test_undocumented_enumerator_fails,
+    test_macros_are_documented_and_listed,
+    test_missing_tparam_fails_naming_the_template,
+    test_detail_without_brief_fails_naming_it,
+    test_page_needs_its_reference,
+    test_reference_needs_its_page,
+    test_doc_builds_at_once_share_the_packages,
+    test_mrdocs_is_found_or_named,
+    test_clang_is_given,
+    test_library_settings_only_present_the_reference,
+    test_doc_check_and_rendered_check_run,
+    test_page_includes_a_file_of_the_superproject,
+    test_page_includes_a_file_of_its_library,
+    test_an_override_spelled_through_an_alias_is_the_derived_class_s_own,
+    test_index_shows_release_notes_with_a_library_s_section,
+    test_page_shows_the_counts_of_its_programs,
+    test_page_shows_twins_and_their_counts,
+    test_page_shows_its_linked_and_driven_programs,
+    test_links_between_pages,
+    test_links_into_two_pages,
+    test_reference_reads_a_header_built_only_for_wasi,
+    test_reference_checks_each_branch_of_a_header,
+    test_reference_reads_headers_of_one_target,
+    test_a_native_parse_of_a_header_for_wasm32_fails,
+    test_tools_given_at_paths_with_spaces,
+    test_page_outside_git,
+    test_counts_warn_and_fail_through_the_build,
+    test_index_lists_every_library,
+    test_config_reference_lists_every_webcpp_macro,
+    test_other_libraries_list_only_their_own_macros,
+    test_a_library_named_as_config_s_macros_is_refused,
+]
+
+
+if __name__ == '__main__':
+    sys.exit(harness.run_cases('doc_test', CASES, sys.argv[1:]))

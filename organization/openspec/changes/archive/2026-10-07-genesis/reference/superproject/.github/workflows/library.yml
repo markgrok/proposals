@@ -1,0 +1,698 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+# The CI of a webcpp library, which its own .github/workflows/ci.yml calls:
+#
+#     jobs:
+#       ci:
+#         uses: webcpporg/webcpp/.github/workflows/library.yml@main
+#         with:
+#           library: <name>
+#
+# and of the superproject, whose ci.yml calls it without a library: then it builds every library
+# of libs/ at the commit its submodule points to, and the index page with their pages.
+#
+# Every job checks out webcpporg/webcpp with its submodules, then, for a library, the library's
+# commit into libs/<library> in place of its submodule; it runs from the superproject's root,
+# with the b2 and the Boost 1.92.0 of tools/ci/actions/boost. Jobs:
+#
+#   plan        runs b2 declared-targets and writes the matrix of lanes (tools/ci/matrix.py):
+#               a lane per compiler for each target the library declares. The CI never lists a
+#               library's targets by hand, and a target without a lane fails the plan. It also
+#               runs b2 declared-lanes and writes the matrix of own lanes, those a library
+#               declares with webcpp.lane, such as its oracle's, and says whether a library
+#               needs libraries that webcpp does not build yet (external), trystero's
+#               libsecp256k1, libdatachannel and OpenSSL, which the CI's actions of those names
+#               install, until webcpp builds them from third_party/.
+#   lanes       one job per lane, which runs the lane command, b2 -a --dump-tests
+#               --out-xml=<lane>.xml for one toolset, and uploads the XML. With --out-xml, b2
+#               exits 0 even when a test fails: the report gives the verdict. A wasip2 or
+#               wasip3 lane installs wasi-sdk, wasmtime, wit-bindgen and the WASI WIT first, the
+#               emscripten lane emsdk and Node, which runs its programs, and a lane whose entry
+#               says external the libraries its libraries need, built with the lane's compilers.
+#               GCC 14 and Clang 18 run their b2 in a container with no network but the loopback,
+#               whose image (tools/ci/container/Dockerfile) they load from the cache.
+#   container   when a lane runs in a container: builds that image once per run when the cache
+#               does not hold it, and saves it there; every lane waits for it.
+#   own-lanes   one job per own lane of a library and target it runs on, which runs the lane
+#               in every directory that declares it there. One that names no target, as an
+#               oracle, runs on Linux x86-64 with Clang 18, and with Node when it runs the
+#               original, b2 -a <directory>//<lane>, and its exit status is its verdict. One that
+#               names a target, as wasi's served tests and examples on wasip2, or a driven test on
+#               emscripten, is set up as that target's lane is, with Node when it runs the
+#               original, runs b2 -a --dump-tests --out-xml with its toolset, and uploads the
+#               XML, which the report reads as a lane's. One whose driver meets a browser has
+#               the pinned chrome-headless-shell (CHROME), and one whose library needs them the
+#               external libraries, as its entry says. A library that declares none, as xactor, has no such job.
+#   docs        the library's page, or every page and the index, with MrDocs on Linux x86-64,
+#               wit-bindgen and the WASI WIT, for a reference that parses a component's
+#               bindings, and, when a library declares emscripten (the plan's has-emscripten),
+#               emsdk without its system libraries, for one that parses a header built for
+#               emscripten alone, and, when a library needs them (the plan's external), the
+#               external libraries, which a reference of their headers' users parses; the index
+#               is built with -sWEBCPP_INDEX=site, its links where
+#               the site serves each page (libs/<name>/), and the pages are the artifact ci.yml
+#               publishes.
+#   tools       for the superproject only: every tools/**/*_test.py, the tests of the build,
+#               the oracle, the lint, the report, the documentation, the components and the
+#               CI's own scripts, with every tool a lane, the docs or the lint uses.
+#   lint        tools/lint/lint.sh in eight shards, each analysing an eighth of the files with
+#               clang-tidy and running every other rule; with the full history, which the
+#               banned-word rule reads, and the toolsets and tools of the WASI lanes, whose
+#               commands it analyses, and of the emscripten lane, without its system libraries,
+#               when a library declares emscripten; and the external libraries when a library
+#               needs them.
+#   actionlint  every workflow of the superproject and of the libraries.
+#   report      merges the XML of every lane and every own lane on a target with
+#               tools/report/report.py into the test matrix. Its exit status is the verdict, and it
+#               fails too when a lane's job failed or wrote no XML, or when an own lane's job
+#               failed.
+#
+# No b2 call passes -j: b2 runs as many jobs as the runner has processors.
+name: Library
+
+on:
+  workflow_call:
+    inputs:
+      library:
+        description: The library of libs/ to build; empty for every library and the index.
+        type: string
+        required: false
+        default: ''
+    outputs:
+      docs:
+        description: Whether the docs job built the pages and uploaded them as the docs artifact.
+        value: ${{ jobs.docs.outputs.built }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      own-lanes: ${{ steps.plan.outputs.own-lanes }}
+      has-own-lanes: ${{ steps.plan.outputs.has-own-lanes }}
+      has-emscripten: ${{ steps.plan.outputs.has-emscripten }}
+      external: ${{ steps.plan.outputs.external }}
+      lint-external: ${{ steps.plan.outputs.lint-external }}
+      has-container: ${{ steps.plan.outputs.has-container }}
+    steps:
+      # The superproject is the caller's commit when it calls this workflow itself, and main
+      # when a library does, the branch this workflow is called at.
+      # The superproject's submodules, not theirs: a pinned third-party repository may carry
+      # submodules of its own (nativejson-benchmark has 45) that no build reads.
+      - &superproject
+        name: Check out the superproject
+        if: inputs.library == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - &superproject-for-library
+        name: Check out the superproject
+        if: inputs.library != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: webcpporg/webcpp
+          ref: main
+          submodules: true
+      - &make-room
+        name: Make room for the library
+        if: inputs.library != ''
+        env:
+          LIBRARY: ${{ inputs.library }}
+        run: |
+          [[ "$LIBRARY" =~ ^[a-z][a-z0-9_]*$ ]] || { echo "not a library name: $LIBRARY"; exit 1; }
+          rm -rf "libs/$LIBRARY"
+      # The caller's repository at the commit of its event, a pull request's merge included.
+      - &library
+        name: Check out the library
+        if: inputs.library != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: libs/${{ inputs.library }}
+
+      - &boost
+        uses: ./tools/ci/actions/boost
+
+      - name: Plan the lanes
+        id: plan
+        env:
+          LIBRARY: ${{ inputs.library }}
+        run: |
+          arguments=()
+          if [ -n "$LIBRARY" ]; then
+            arguments=(--library "$LIBRARY")
+          fi
+          matrix="$(python3 tools/ci/matrix.py plan "${arguments[@]}")"
+          python3 -m json.tool <<< "$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          # Whether a lane runs in a container, whose image the container job builds first.
+          has_container="$(python3 -c 'import json, sys
+          print(str(any(lane["container"] for lane in json.load(sys.stdin)["include"])).lower())' \
+            <<< "$matrix")"
+          echo "has-container=$has_container" >> "$GITHUB_OUTPUT"
+          own_lanes="$(python3 tools/ci/matrix.py own-lanes "${arguments[@]}")"
+          python3 -m json.tool <<< "$own_lanes"
+          echo "own-lanes=$own_lanes" >> "$GITHUB_OUTPUT"
+          # A matrix with no entry fails its job, so the own-lanes job runs only when there is one.
+          if [ "$own_lanes" = '{"include":[]}' ]; then
+            echo "has-own-lanes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-own-lanes=true" >> "$GITHUB_OUTPUT"
+          fi
+          # Whether any library declares emscripten, whose headers the docs and the lint read.
+          has_emscripten="$(python3 tools/ci/matrix.py declares emscripten "${arguments[@]}")"
+          echo "has-emscripten=$has_emscripten" >> "$GITHUB_OUTPUT"
+          # Whether the library, or one it uses, needs libraries webcpp does not build, which the
+          # docs job installs then; and whether any library does, which the lint job, which
+          # analyses every library, installs them on.
+          external="$(python3 tools/ci/matrix.py external "${arguments[@]}")"
+          echo "external=$external" >> "$GITHUB_OUTPUT"
+          lint_external="$(python3 tools/ci/matrix.py external)"
+          echo "lint-external=$lint_external" >> "$GITHUB_OUTPUT"
+
+  # The container lanes' image, built once per run when the cache does not hold it, and saved
+  # there before any lane starts: two lanes that missed the cache together would each build it.
+  container:
+    name: Container image
+    needs: plan
+    if: needs.plan.outputs.has-container == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - *superproject
+      - *superproject-for-library
+      - uses: ./tools/ci/actions/container
+
+  # Every lane waits for the container job, which builds the image a container lane loads, and
+  # runs when that job succeeded or was not needed.
+  lanes:
+    name: ${{ matrix.name }}
+    needs: [plan, container]
+    if: >-
+      !cancelled() && needs.plan.result == 'success'
+      && (needs.container.result == 'success' || needs.container.result == 'skipped')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - *superproject
+      - *superproject-for-library
+      - *make-room
+      - *library
+      - *boost
+
+      # What a WASI lane installs, which the own-lanes job installs too, by these anchors, for an
+      # own lane on wasip2 or wasip3: a step a WASI lane needs is one of them. wit-bindgen and the
+      # WIT are installed for every library's WASI lane, whether or not it builds a component: it
+      # takes seconds, and a library that comes to need them never meets a lane without them.
+      - &wasi-sdk
+        if: matrix.wasm
+        uses: ./tools/ci/actions/wasi-sdk
+
+      - &wasmtime
+        if: matrix.wasm
+        uses: ./tools/ci/actions/wasmtime
+
+      - &wit-bindgen
+        if: matrix.wasm
+        uses: ./tools/ci/actions/wit-bindgen
+
+      - &wasi-wit
+        if: matrix.wasm
+        uses: ./tools/ci/actions/wasi-wit
+
+      # What the emscripten lane installs, which the own-lanes job installs too, by this anchor,
+      # for an own lane on emscripten: emsdk, which also gives the later steps EM_CACHE, its
+      # system libraries built.
+      - &emsdk
+        if: matrix.emsdk
+        uses: ./tools/ci/actions/emsdk
+
+      # The CI's Node, for a lane whose entry asks for it: the emscripten lane, whose programs b2's
+      # toolset runs with it, through the wrapper the emsdk action installs, and every own lane on
+      # emscripten or of the kind original, which runs the original's language.
+      - &node
+        if: matrix.node
+        uses: ./tools/ci/actions/node
+
+      # The libraries a library of the lane needs and webcpp does not build yet, for an entry
+      # that says external, which the own-lanes job installs too, by these anchors: OpenSSL
+      # first, which libdatachannel is built against; libsecp256k1, for emscripten too, after
+      # emsdk, on an entry that has it; and libdatachannel, with the lane's compilers, since a
+      # program shares the types of its C++ API. Only the native backend needs OpenSSL and
+      # libdatachannel, so an entry on emscripten has neither.
+      - &openssl
+        if: matrix.external && !matrix.emsdk
+        uses: ./tools/ci/actions/openssl
+
+      - &secp256k1
+        if: matrix.external
+        uses: ./tools/ci/actions/secp256k1
+        with:
+          cc: ${{ matrix.cc }}
+          emscripten: ${{ matrix.emsdk }}
+
+      - &libdatachannel
+        if: matrix.external && !matrix.emsdk
+        uses: ./tools/ci/actions/libdatachannel
+        with:
+          cc: ${{ matrix.cc }}
+          cxx: ${{ matrix.cxx }}
+
+      # The image a container lane runs b2 in (its entry's container), which the container job
+      # built and cached, restored from the cache, so that the lane builds none.
+      - if: matrix.container
+        uses: ./tools/ci/actions/container
+
+      # The lane registers its toolset in .local/user-config.jam, prints its b2 command and runs
+      # it; Windows's Python is python.
+      - name: Lane
+        id: lane
+        env:
+          LANE: ${{ toJSON(matrix) }}
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        run: '"$PYTHON" tools/ci/matrix.py lane "$LANE"'
+
+      - name: Upload the lane's XML
+        if: always() && steps.lane.outputs.xml != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lane-${{ matrix.id }}
+          path: ${{ steps.lane.outputs.xml }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # A library's own lane, on one target or on none, run in every directory that declares it
+  # there. One that names no target, such as an oracle, compiles nothing, but its targets inherit
+  # the requirements of the library's test project, the library's target among them, and with it
+  # the Jamroot's check of Boost, so the job has Boost and a toolset, Clang 18, as the docs job
+  # does. One that names a target, such as wasi's served tests and examples on wasip2, installs
+  # what that target's lane installs (its entry's wasm and emsdk, as a lane's, select the WASI
+  # steps and emsdk's, by their anchors), runs with its toolset and uploads its XML as a lane
+  # does, under its id: wasip2.wasi.http. An own lane of the kind original, which runs the
+  # original's language (an oracle, a driven test's driver, natively too), has the CI's Node,
+  # whose npm cache the action keys on every oracle's lock file, and so does one on emscripten,
+  # as the emscripten lane does; one of the kind programs elsewhere, a served lane, has none (its
+  # entry's node). The job's name and image are its entry's, which tools/ci/matrix.py writes: Own
+  # lane (xstate, oracle) and Own lane (wasi, http, wasip2).
+  own-lanes:
+    name: ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.has-own-lanes == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.own-lanes) }}
+    steps:
+      - *superproject
+      - *superproject-for-library
+      - *make-room
+      - *library
+      - *boost
+      - *wasi-sdk
+      - *wasmtime
+      - *wit-bindgen
+      - *wasi-wit
+      - *emsdk
+      - *node
+      - *openssl
+      - *secp256k1
+      - *libdatachannel
+
+      # The pinned chrome-headless-shell, as CHROME, for a lane whose driver meets a browser
+      # (its entry's chrome), as trystero's interop does.
+      - if: matrix.chrome
+        uses: ./tools/ci/actions/chrome
+
+      # It registers its toolset in .local/user-config.jam, prints its b2 command and runs it.
+      - name: Own lane
+        id: lane
+        env:
+          LANE: ${{ toJSON(matrix) }}
+        run: python3 tools/ci/matrix.py own-lane "$LANE"
+
+      - name: Upload the lane's XML
+        if: always() && steps.lane.outputs.xml != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lane-${{ matrix.id }}
+          path: ${{ steps.lane.outputs.xml }}
+          if-no-files-found: error
+          retention-days: 7
+
+  docs:
+    name: Documentation
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      built: ${{ steps.built.outputs.built }}
+    steps:
+      - *superproject
+      - *superproject-for-library
+      - *make-room
+      - *library
+      - *boost
+
+      - uses: ./tools/ci/actions/node
+
+      - uses: ./tools/ci/actions/mrdocs
+
+      # A reference that parses a component's bindings, as wasi's, has b2 generate them natively.
+      - uses: ./tools/ci/actions/wit-bindgen
+
+      - uses: ./tools/ci/actions/wasi-wit
+
+      # The emsdk in .local/emsdk, whose em++ and clang++ read for Emscripten's target the
+      # reference of a library with a header built for emscripten alone
+      # (/webcpp//emscripten-reference), when a library declares emscripten; with the sysroot in
+      # its cache, and without the system libraries, which no page links.
+      - if: needs.plan.outputs.has-emscripten == 'true'
+        uses: ./tools/ci/actions/emsdk
+        with:
+          libraries: 'false'
+
+      # The libraries the library, or one it uses, needs and webcpp does not build yet (the
+      # plan's external), whose headers its reference parses with the native backend's: with Clang 18,
+      # the compiler that parses them.
+      - if: needs.plan.outputs.external == 'true'
+        uses: ./tools/ci/actions/openssl
+
+      - if: needs.plan.outputs.external == 'true'
+        uses: ./tools/ci/actions/secp256k1
+        with:
+          cc: clang-18
+
+      - if: needs.plan.outputs.external == 'true'
+        uses: ./tools/ci/actions/libdatachannel
+        with:
+          cc: clang-18
+          cxx: clang++-18
+
+      # clang++ reads the headers for tools/doc/doc_comments.py; the Boost check compiles with
+      # the same Clang. The index links each library's page where the site serves it.
+      # A page whose library needs external libraries requires them, as a lane does, and is
+      # given each on b2's command line, where its build.jam reads it.
+      - name: Documentation
+        env:
+          LIBRARY: ${{ inputs.library }}
+          EXTERNAL: ${{ needs.plan.outputs.external }}
+        run: |
+          python3 tools/ci/matrix.py register clang-18
+          request=(doc -sWEBCPP_INDEX=site)
+          if [ -n "$LIBRARY" ]; then
+            request=("libs/$LIBRARY/doc")
+          fi
+          if [ "$EXTERNAL" = true ]; then
+            request=(webcpp-require-external=on "${request[@]}")
+            for variable in SECP256K1_ROOT SECP256K1_EMSCRIPTEN_ROOT LIBDATACHANNEL_ROOT \
+                OPENSSL_ROOT; do
+              if [ -n "${!variable-}" ]; then
+                request=("-s$variable=${!variable}" "${request[@]}")
+              fi
+            done
+          fi
+          env -u CPATH -u CPLUS_INCLUDE_PATH -u C_INCLUDE_PATH \
+            b2 --user-config=.local/user-config.jam -a -sCLANG=/usr/bin/clang++-18 \
+            toolset=clang-18 "${request[@]}"
+
+      # The pages where b2 doc writes them, which tools/ci/assemble.py lays out as the site.
+      - name: Upload the pages
+        if: inputs.library == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs
+          path: |
+            doc/html
+            libs/*/doc/html
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload the page
+        if: inputs.library != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-${{ inputs.library }}
+          path: libs/${{ inputs.library }}/doc/html
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Built
+        id: built
+        run: echo "built=true" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint (${{ matrix.shard }}/${{ strategy.job-total }})
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      # The whole history, of the superproject and of every library: the banned-word rule reads
+      # every commit, not only the tree.
+      - name: Check out the superproject
+        if: inputs.library == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+          fetch-depth: 0
+      - name: Check out the superproject
+        if: inputs.library != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: webcpporg/webcpp
+          ref: main
+          submodules: true
+          fetch-depth: 0
+      - *make-room
+      - name: Check out the library
+        if: inputs.library != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: libs/${{ inputs.library }}
+          fetch-depth: 0
+      - *boost
+
+      - uses: ./tools/ci/actions/wasi-sdk
+
+      - uses: ./tools/ci/actions/wit-bindgen
+
+      - uses: ./tools/ci/actions/wasi-wit
+
+      - uses: ./tools/ci/actions/node
+
+      # emsdk when a library declares emscripten, whose em++ the emscripten dry run names and
+      # whose cache holds the sysroot an emscripten command is analysed with; without the
+      # system libraries, which the lint never links.
+      - if: needs.plan.outputs.has-emscripten == 'true'
+        uses: ./tools/ci/actions/emsdk
+        with:
+          libraries: 'false'
+
+      # The libraries a library needs and webcpp does not build yet, when any does (the plan's
+      # lint-external), which the dry runs name and clang-tidy reads, built with Clang 18; and
+      # libsecp256k1's emscripten build too when a library declares emscripten, for the commands
+      # of that target.
+      - if: needs.plan.outputs.lint-external == 'true'
+        uses: ./tools/ci/actions/openssl
+
+      - if: needs.plan.outputs.lint-external == 'true'
+        uses: ./tools/ci/actions/secp256k1
+        with:
+          cc: clang-18
+          emscripten: ${{ needs.plan.outputs.has-emscripten }}
+
+      - if: needs.plan.outputs.lint-external == 'true'
+        uses: ./tools/ci/actions/libdatachannel
+        with:
+          cc: clang-18
+          cxx: clang++-18
+
+      # The compilation database is what b2 compiles with its default toolset, the first that
+      # user-config.jam registers, Clang 18, and, for what only a WASI target or emscripten
+      # builds, with the toolset of that target: a WASI dry run generates the bindings its
+      # commands include, and an emscripten command is analysed with the sysroot of the cache the
+      # emsdk action restores.
+      - name: Lint
+        env:
+          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          HAS_EMSCRIPTEN: ${{ needs.plan.outputs.has-emscripten }}
+        run: |
+          toolsets=(clang-18 wasip2 wasip3)
+          if [ "$HAS_EMSCRIPTEN" = true ]; then
+            toolsets+=(emscripten)
+          fi
+          python3 tools/ci/matrix.py register "${toolsets[@]}"
+          tools/lint/lint.sh --clang-format .local/wasi-sdk/bin/clang-format \
+            --clang-tidy .local/wasi-sdk/bin/clang-tidy --shard "$SHARD"
+
+  tools:
+    name: Tests of the tools (${{ matrix.shard }}/${{ strategy.job-total }})
+    if: inputs.library == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - *superproject
+      - *boost
+
+      - uses: ./tools/ci/actions/wasi-sdk
+
+      - uses: ./tools/ci/actions/wasmtime
+
+      - uses: ./tools/ci/actions/wit-bindgen
+
+      - uses: ./tools/ci/actions/wasi-wit
+
+      - uses: ./tools/ci/actions/node
+
+      - uses: ./tools/ci/actions/mrdocs
+
+      - uses: ./tools/ci/actions/emsdk
+
+      # The toolsets the tests build with, Clang 18 the default, emscripten among them, which the
+      # tests of the emscripten target build with (tools/test/emscripten_test.py), sharing the
+      # cache of system libraries the emsdk action restores (EM_CACHE, tools/test/harness.py),
+      # and the clang++ that tools/doc/doc_comments.py finds on PATH. The shards split the tests:
+      # a suite run by harness.run_cases runs its slice of cases in every shard (--shard K/N), and
+      # every other suite runs whole in one shard, in turn, so the N shards run each case once.
+      # Each failure is named.
+      - name: Tests of the tools
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        run: |
+          python3 tools/ci/matrix.py register clang-18 wasip2 wasip3 emscripten
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -sf /usr/bin/clang++-18 "$RUNNER_TEMP/bin/clang++"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          failed=()
+          whole=0
+          while IFS= read -r test; do
+            if grep -q 'run_cases(' "$test"; then
+              args=(--shard "$SHARD/$SHARDS")
+            else
+              whole=$((whole + 1))
+              [ $(((whole - 1) % SHARDS + 1)) -eq "$SHARD" ] || continue
+              args=()
+            fi
+            echo "::group::$test ${args[*]}"
+            python3 "$test" "${args[@]}" || failed+=("$test")
+            echo "::endgroup::"
+          done < <(find tools -name '*_test.py' -not -path '*/node_modules/*' | sort)
+          if [ "${#failed[@]}" -ne 0 ]; then
+            printf 'failed: %s\n' "${failed[@]}"
+            exit 1
+          fi
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - *superproject
+      - *superproject-for-library
+      - *make-room
+      - *library
+
+      # actionlint runs shellcheck, which the image has, on every run: script.
+      - name: actionlint 1.7.12
+        env:
+          ASSET: actionlint_1.7.12_linux_amd64.tar.gz
+          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          tools/ci/download.sh \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/$ASSET" \
+            "$SHA256" "$RUNNER_TEMP/$ASSET"
+          tar -xzf "$RUNNER_TEMP/$ASSET" -C "$RUNNER_TEMP" actionlint
+          shopt -s nullglob
+          "$RUNNER_TEMP/actionlint" -config-file .github/actionlint.yaml \
+            .github/workflows/*.yml libs/*/.github/workflows/*.yml
+
+  report:
+    name: Report
+    needs: [plan, lanes, own-lanes]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - *superproject
+      - *superproject-for-library
+      - *make-room
+      - *library
+
+      - name: Download the lanes' XML
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: lane-*
+          path: bin/lanes
+
+      # The lanes' XML and the own lanes', each artifact lane-<id>.
+      - name: Report
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+          OWN_LANES: ${{ needs.plan.outputs.own-lanes }}
+        run: |
+          python3 tools/ci/matrix.py report --plan "$MATRIX" --own-lanes "$OWN_LANES" \
+            --lanes bin/lanes --out bin/report
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report
+          path: bin/report
+          if-no-files-found: error
+          retention-days: 7
+
+      # A lane whose job failed after b2 wrote its XML, which the report may read as whole; and an
+      # own lane, whose job is its verdict when it writes no XML: skipped only when the plan found
+      # none.
+      - name: Every lane's job succeeded
+        if: ${{ !cancelled() }}
+        env:
+          LANES: ${{ needs.lanes.result }}
+          OWN_LANES: ${{ needs.own-lanes.result }}
+          HAS_OWN_LANES: ${{ needs.plan.outputs.has-own-lanes }}
+        run: |
+          status=0
+          if [ "$LANES" != success ]; then
+            echo "a lane's job did not succeed: $LANES"
+            status=1
+          fi
+          expected=skipped
+          if [ "$HAS_OWN_LANES" = true ]; then
+            expected=success
+          fi
+          if [ "$OWN_LANES" != "$expected" ]; then
+            echo "an own lane's job is $OWN_LANES, where $expected was expected"
+            status=1
+          fi
+          exit "$status"

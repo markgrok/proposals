@@ -1,0 +1,29 @@
+From dedd08de6eaa540404eaa984b4f76f1d7b1252c6 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 08:18:15 -0400
+Subject: [PATCH 04/25] trystero: the searched libraries are explicit, so a
+ bare b2 reports no missing alternative
+
+---
+ build.jam | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/build.jam b/build.jam
+index 96d6dc8..f8b35df 100644
+--- a/build.jam
++++ b/build.jam
+@@ -58,6 +58,11 @@ lib crypto : : <name>libcrypto <toolset>msvc <search>$(openssl-root)/lib
+   : : <include>$(openssl-root)/include ;
+ lib crypto : : <name>crypto <search>$(openssl-root)/lib
+   : : <include>$(openssl-root)/include ;
++# Searched libraries, used only through <library>: built as dependencies, with
++# the properties of what uses them. Requested alone, by b2 at the
++# superproject's root or b2 libs/trystero, their alternatives would be matched
++# against a request without the <cxxstd>20 each inherits, and none chosen.
++explicit secp256k1 datachannel ssl crypto ;
+ # end::dependencies[]
+ 
+ # The dependencies of the rooms: libsecp256k1, the emscripten build of it on
+-- 
+2.55.0
+

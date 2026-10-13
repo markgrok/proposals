@@ -1,0 +1,70 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+= trystero: serverless WebRTC rooms for {cpp}
+:toc: left
+:toclevels: 1
+:idprefix:
+:sectanchors:
+:example-caption!:
+:attribute-missing: warn
+
+trystero is a header-only port of https://github.com/dmotz/trystero[Trystero]
+0.26.0's serverless WebRTC rooms for {cpp}20, one of the libraries of
+https://github.com/webcpporg/webcpp[webcpp]. Peers find each other over
+public Nostr relays and exchange messages directly, over WebRTC data
+channels. The wire is Trystero's: a room joined from {cpp} and the same room
+joined from Trystero's JavaScript are one room.
+
+This page teaches trystero section by section: what a room is, how a program
+joins one in the browser and natively, how its actions carry messages, where
+its memory comes from, what each backend asks of its platform, the wire it
+speaks, and what it guarantees. Every program it shows is one of the
+library's examples, which the build compiles and links on its target. None
+is run by the build, since each needs the public relays or a browser, so the
+page shows no output of theirs. The <<reference,reference>> lists every name
+the headers declare.
+
+include::overview.adoc[]
+
+include::quick-start.adoc[]
+
+include::building.adoc[]
+
+include::usage.adoc[]
+
+include::allocation.adoc[]
+
+include::browser.adoc[]
+
+include::native.adoc[]
+
+include::protocol.adoc[]
+
+include::design.adoc[]
+
+include::guarantees.adoc[]
+
+include::testing.adoc[]
+
+[#reference]
+== Reference
+
+Every name trystero declares, in the namespace `webcpp::trystero` and those
+nested in it, from the Doc Comments of its headers: each class, function,
+type and enumerator with its declaration, what it does, what it asks of its
+caller and how it fails, and the part of Trystero 0.26.0 it ports. The other
+sections teach the library; this one is where a name is looked up.
+
+include::{reference}[leveloffset=+1]
+
+include::differences.adoc[]
+
+include::roadmap.adoc[]
+
+include::acknowledgements.adoc[]
+
+include::changelog.adoc[]

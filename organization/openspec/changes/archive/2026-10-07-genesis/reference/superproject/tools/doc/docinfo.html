@@ -1,0 +1,143 @@
+<!--
+Copyright (c) 2026 WebCpp.org
+
+Distributed under the Boost Software License, Version 1.0. (See
+accompanying file LICENSE_1_0.txt or copy at
+https://www.boost.org/LICENSE_1_0.txt)
+
+The style every page adds to Asciidoctor's, in its head (docinfo=shared).
+-->
+<style>
+/* Room for a line of the examples, which clang-format keeps within 100 columns, without
+   scrolling. */
+#header, #content, #footnotes, #footer { max-width: 66em; }
+/* The system's fonts, as the test report's pages use: Asciidoctor's style asks for Noto Serif,
+   Open Sans and Droid Sans Mono, which webfonts! keeps from being downloaded, so a page would
+   otherwise show whatever serif the system falls back to. */
+body, h1, h2, h3, h4, h5, h6, #toctitle, #toc ul, #content .title, .conum[data-value],
+.verseblock pre {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+code, kbd, pre, samp {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+/* The links of a reference's title, to the scopes its name is in, read as the title does. */
+#content :is(h2, h3, h4, h5, h6) a:not(.anchor) { color: inherit; text-decoration: none; }
+#content :is(h2, h3, h4, h5, h6) a:not(.anchor):hover { text-decoration: underline; }
+/* The block's own background shows behind the highlighted code. */
+.listingblock > .content > pre.highlight { background: #f7f7f8; }
+pre.highlight > code.hljs { background: none; padding: 0; }
+/* Code inside a link reads as part of the link, with no box of its own to break its underline. */
+#content a > code { padding: 0; background: none; color: inherit; }
+/* A line of code stays whole and scrolls, as it reads in an editor. */
+.listingblock pre, .literalblock pre {
+  white-space: pre;
+  word-wrap: normal;
+  overflow-x: auto;
+}
+/* Where the table of contents stands at the left of the content, from 768px, Asciidoctor leaves
+   the content 15px of room at its right, against the table's 240px, 320px from 1280px. The
+   content gets a gutter there taken from the table's width, whose entries keep their lines: the
+   content keeps its width, so that every line of it, a line of 100 columns among them, breaks
+   where it did. */
+@media screen and (min-width: 48em) {
+  body.toc2.toc-left { padding-left: 14em; padding-right: 1em; }
+  body.toc2.toc-left #toc.toc2 { width: 14em; }
+}
+@media screen and (min-width: 80em) {
+  body.toc2.toc-left { padding-left: 18em; padding-right: 2em; }
+  body.toc2.toc-left #toc.toc2 { width: 18em; }
+}
+/* From 1280px, Asciidoctor sets a listing in 1em while a table of contents at the side takes
+   20em of the width, so a line of 100 columns would scroll in a window narrower than 1345px. On a
+   page with that table, its size from 768px, .90625em, keeps such a line whole from 1280px on. */
+@media screen and (min-width: 80em) {
+  body.toc2 .literalblock pre, body.toc2 .listingblock > .content > pre { font-size: .90625em; }
+}
+/* Code in a sentence has a box narrow enough that a comma or a period after it stays close, and
+   the same box in a table cell, alone in the cell or not. */
+:not(pre):not([class^=L]) > code { padding: .1em .2ex; }
+#content p.tableblock > code:only-child { background: #f7f7f8; padding: .1em .2ex; }
+/* A word breaks between two letters only when it is wider than its line: Asciidoctor's style
+   lets the text of the page, of a cell and of a note break anywhere (overflow-wrap: anywhere),
+   which a phone's narrow line does inside a name. A name of code breaks between its parts, where
+   postprocess.mjs marks them, and a part still wider than the line breaks where it must, so that
+   the page never scrolls sideways. */
+body, td.tableblock > .content, td.hdlist2, .admonitionblock > table td.content {
+  overflow-wrap: break-word;
+}
+/* Inline code breaks between its words (postprocess.mjs), never inside one, at a hyphen as
+   `--recursive` would or elsewhere, on a screen wide enough for its longest word. In a table on
+   a narrower screen it breaks inside a word only where the word alone is wider than its column
+   can be, so a column keeps room for a name of the reference, `answer`, whole. A word short enough
+   for a phone's line, which postprocess.mjs marks whole, stays on one line at any width: without
+   it, a phone would break `#xactor-invariant-13` at a hyphen though the word fits the line. On a
+   phone, a longer word breaks between its parts, at the span.wbr postprocess.mjs marks, whose
+   zero-width space, generated here, breaks the line and is never copied. From 600px, whose line
+   holds such a word whole, a break of inline code is no box, and so is a break between two parts
+   of a name in a heading or a URL, span.wbr.part: the name moves whole to the next line rather
+   than break at the end of one, and a table's column keeps room for it. A heading's break after
+   a ::, a plain span.wbr, stays at every width. The space's alternative text is empty, so that
+   a screen reader reads the name whole; an engine that does not know it keeps the first
+   declaration. */
+span.wbr::after { content: "\200B"; content: "\200B" / ""; }
+@media screen and (min-width: 56.25em) {
+  :not(pre):not([class^=L]) > code { white-space: nowrap; }
+  :not(pre):not([class^=L]) > code.words { white-space: normal; }
+  code.words > span { white-space: nowrap; }
+}
+@media screen and (min-width: 37.5em) {
+  #content :not(pre):not([class^=L]) > code span.wbr, span.wbr.part { display: none; }
+}
+@media screen and (max-width: 74.9375em) {
+  table.tableblock :not(pre):not([class^=L]) > code,
+  table.tableblock code.words > span { white-space: normal; overflow-wrap: break-word; }
+}
+#content code.whole, #content code.words > span.whole { white-space: nowrap; }
+/* The hyphens that open a flag stay with its first character (postprocess.mjs), at any width. */
+#content code .lead { white-space: nowrap; }
+/* A table too wide for the page, for a word of code it does not break, scrolls in its own box
+   (postprocess.mjs), as a block of code does, and the page never gets wider than the screen. The
+   box takes the table's margin and its white, so a table that fits shows as it did. An edge with
+   more of the table beyond it has a shadow: each shadow stays at its edge of the box, and a white
+   cover as wide moves with the table, hiding the shadow when the table's own edge is there. */
+.table-scroll {
+  overflow-x: auto;
+  margin-bottom: 1.25em;
+  background:
+    linear-gradient(#fff, #fff) left / .75em 100% no-repeat,
+    linear-gradient(#fff, #fff) right / .75em 100% no-repeat,
+    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .18), transparent) left / .75em 100%
+      no-repeat,
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, .18), transparent) right / .75em 100%
+      no-repeat,
+    #fff;
+  background-attachment: local, local, scroll, scroll;
+}
+.table-scroll > table.tableblock { margin-bottom: 0; background: none; }
+/* On a phone, a table's rows stack: each row is a box with a frame, each cell a block under the
+   one before it, and the row of headers is hidden. A table of three columns or more shows each
+   column's header above its cell, from the data-label postprocess.mjs gives the cell; a table of
+   two columns, a name and what it is, reads stacked without them. */
+@media screen and (max-width: 56.1875em) {
+  table.tableblock, table.tableblock > tbody, table.tableblock > tbody > tr,
+  table.tableblock > tbody > tr > td, table.tableblock > tbody > tr > th {
+    display: block; width: auto;
+  }
+  table.tableblock > thead, table.tableblock > colgroup { display: none; }
+  table.tableblock { border-width: 0; }
+  table.tableblock > tbody > tr { border: 1px solid #dedede; margin-bottom: .75em; }
+  table.tableblock > tbody > tr:last-child { margin-bottom: 0; }
+  table.grid-all > tbody > tr > * { border-width: 0; }
+  table.tableblock > tbody > tr > * + * { padding-top: 0; }
+  table.tableblock td[data-label]::before {
+    content: attr(data-label); display: block; font-weight: 600; font-size: .875em;
+    color: rgba(0, 0, 0, .8); margin-bottom: .125em;
+  }
+  /* A note's label stands above its text, which keeps the width of the page. */
+  .admonitionblock > table, .admonitionblock > table > tbody, .admonitionblock > table > tbody > tr,
+  .admonitionblock > table > tbody > tr > td { display: block; width: auto; }
+  .admonitionblock > table td.icon { text-align: left; padding: 0 0 .25em; }
+  .admonitionblock > table td.content { padding: 0 0 0 .75em; }
+}
+</style>

@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-07
+webcpp:
+  library: xstate
+  title: "xstate: XState's state machines and actors for C++20"
+  kind: port
+  port_of: "XState 5.33.2 (TypeScript, MIT)"
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/xstate/tree/5299db2
+  decided: 2026-10-07

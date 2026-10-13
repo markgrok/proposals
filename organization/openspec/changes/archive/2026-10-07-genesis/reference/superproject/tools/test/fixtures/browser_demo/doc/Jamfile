@@ -1,0 +1,14 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+import webcpp ;
+
+webcpp.doc browser_demo : browser_demo.adoc ;
+# One parse of every public header, for Emscripten's target, where page.hpp
+# builds (/webcpp//emscripten-reference): the native backend's target brings
+# the fake dependency.
+webcpp.reference browser_demo : <library>/webcpp/browser_demo//native
+  <library>/webcpp//emscripten-reference ;

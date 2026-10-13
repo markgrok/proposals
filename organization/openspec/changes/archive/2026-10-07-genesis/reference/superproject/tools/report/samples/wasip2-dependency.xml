@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?> 
+<build format="1.0" version="5.5.3"> 
+  <directory><![CDATA[$TMPDIR/webcpp scratch ohb1_ssu]]></directory> 
+  <command><![CDATA["b2" "--user-config=$TMPDIR/webcpp scratch ohb1_ssu/.local/user-config.jam" "-a" "--dump-tests" "--out-xml=wasip2-dependency.xml" "toolset=clang-wasip2" "testing.launcher=wasmtime" "libs/demo/test//parses_json"]]></command> 
+  <targets> 
+    <target> 
+      <name><![CDATA[.//boost_version.o]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[.//tools/test/boost_version.cpp]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi]]></path> 
+      <jam-target><![CDATA[<pbin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>boost_version.o]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[.//tools/boost_json.o]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[.//tools/boost_json.cpp]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi]]></path> 
+      <jam-target><![CDATA[<pbin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>tools/boost_json.o]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[.//libboost_json.a]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[.//tools/boost_json.o]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi]]></path> 
+      <jam-target><![CDATA[<pbin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>libboost_json.a]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[libs/demo/test//parses_json.o]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[libs/demo/test//parses_json.cpp]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi]]></path> 
+      <jam-target><![CDATA[<pbin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>parses_json.o]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[libs/demo/test//parses_json.wasm]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[libs/demo/test//parses_json.o]]></dependency> 
+        <dependency><![CDATA[.//libboost_json.a]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi]]></path> 
+      <jam-target><![CDATA[<pbin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>parses_json.wasm]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[libs/demo/test//parses_json.run]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[libs/demo/test//parses_json.wasm]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi]]></path> 
+      <jam-target><![CDATA[<pbin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>parses_json.run]]></jam-target> 
+    </target> 
+    <target> 
+      <name><![CDATA[libs/demo/test//parses_json.test]]></name> 
+      <dependencies> 
+        <dependency><![CDATA[libs/demo/test//parses_json.run]]></dependency> 
+      </dependencies> 
+      <path><![CDATA[bin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi]]></path> 
+      <jam-target><![CDATA[<pbin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>parses_json.test]]></jam-target> 
+    </target> 
+  </targets> 
+  <test type="RUN" name="demo/pass"> 
+    <target><![CDATA[libs/demo/test//pass.test]]></target> 
+    <source><![CDATA[libs/demo/test/pass.cpp]]></source> 
+  </test> 
+  <test type="RUN_FAIL" name="demo/fails"> 
+    <target><![CDATA[libs/demo/test//fails.test]]></target> 
+    <source><![CDATA[libs/demo/test/fails.cpp]]></source> 
+  </test> 
+  <test type="COMPILE_FAIL" name="demo/rejects"> 
+    <target><![CDATA[libs/demo/test//rejects.test]]></target> 
+    <source><![CDATA[libs/demo/test/rejects.cpp]]></source> 
+  </test> 
+  <test type="RUN" name="demo/native_only"> 
+    <target><![CDATA[libs/demo/test//native_only.test]]></target> 
+    <source><![CDATA[libs/demo/test/native_only.cpp]]></source> 
+  </test> 
+  <test type="COMPILE" name="demo/native_only_compiles"> 
+    <target><![CDATA[libs/demo/test//native_only_compiles.test]]></target> 
+    <source><![CDATA[libs/demo/test/native_only.cpp]]></source> 
+  </test> 
+  <test type="COMPILE" name="demo/alone-demo"> 
+    <target><![CDATA[libs/demo/test//alone-demo.test]]></target> 
+  </test> 
+  <test type="COMPILE" name="demo/alone-demo-answer"> 
+    <target><![CDATA[libs/demo/test//alone-demo-answer.test]]></target> 
+  </test> 
+  <test type="RUN" name="demo/suite"> 
+    <target><![CDATA[libs/demo/test//suite.test]]></target> 
+    <source><![CDATA[libs/demo/test/suite_test.cpp]]></source> 
+  </test> 
+  <test type="RUN" name="demo/parses_json"> 
+    <target><![CDATA[libs/demo/test//parses_json.test]]></target> 
+    <source><![CDATA[libs/demo/test/parses_json.cpp]]></source> 
+  </test> 
+  <action status="0" start="2026-10-09 00:10:19.582486000 +0000" end="2026-10-09 00:10:20.215825000 +0000" user="0.584112" system="0.043495"> 
+    <name><![CDATA[clang-darwin%clang-darwin.compile.c++]]></name> 
+    <jam-target><![CDATA[<pbin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>parses_json.o]]></jam-target> 
+    <path><![CDATA[bin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi/parses_json.o]]></path> 
+    <command><![CDATA[
+    "$TMPDIR/webcpp-local-56qpwk7n/local/wasi-sdk/bin/clang++"   -std=c++20 --target=wasm32-wasip2 -O0 -fno-inline -Wall -Wextra -Werror -g --system-header-prefix="boost/" -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -DBOOST_ALL_NO_LIB   -I"/opt/homebrew/opt/boost/include" -I"libs/demo/include"  -c -o "bin/libs/demo/test/parses_json.test/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi/parses_json.o" "libs/demo/test/parses_json.cpp"
+]]></command> 
+  </action> 
+  <action status="1" start="2026-10-09 00:10:19.538540000 +0000" end="2026-10-09 00:10:20.401565000 +0000" user="0.809018" system="0.047690"> 
+    <name><![CDATA[clang-darwin%clang-darwin.compile.c++]]></name> 
+    <jam-target><![CDATA[<pbin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi>tools/boost_json.o]]></jam-target> 
+    <path><![CDATA[bin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi/tools/boost_json.o]]></path> 
+    <command><![CDATA[
+    "$TMPDIR/webcpp-local-56qpwk7n/local/wasi-sdk/bin/clang++"   -std=c++20 --target=wasm32-wasip2 -O0 -fno-inline -Wall -Wextra -Werror -g --system-header-prefix="boost/" -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -DBOOST_ALL_NO_LIB   -I"/opt/homebrew/opt/boost/include"  -c -o "bin/clang-darwin-wasip2/debug/cxxstd-20-iso/link-static/target-os-wasi/tools/boost_json.o" "tools/boost_json.cpp"
+]]></command> 
+    <output><![CDATA[tools/boost_json.cpp:12:2: error: "planted: Boost.JSON's definitions do not compile"
+   12 | #error "planted: Boost.JSON's definitions do not compile"
+      |  ^
+1 error generated.
+]]></output> 
+  </action> 
+</build>

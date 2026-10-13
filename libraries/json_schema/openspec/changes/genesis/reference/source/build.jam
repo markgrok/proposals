@@ -1,0 +1,19 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+#
+# json_schema, a header-only JSON Schema validator for C++20. A program uses
+# it through /webcpp/json_schema//json_schema, which adds its headers,
+# Boost's, Boost.JSON's definitions and webcpp::regex.
+
+project /webcpp/json_schema ;
+
+alias json_schema
+  : : : :
+    <include>include
+    <library>/boost//headers
+    <library>/webcpp//boost_json
+    <library>/webcpp/regex//regex
+  ;

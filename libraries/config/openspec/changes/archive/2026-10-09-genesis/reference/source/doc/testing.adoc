@@ -1,0 +1,134 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[#config-testing]
+== How config is tested
+
+What config does, it does when a program is compiled, so its tests are
+compiled and never run, each declared in `test/Jamfile` with one of
+webcpp's rules: `webcpp.headers-alone`, which compiles each public header
+as the only include of its translation unit; `webcpp.compile`, a
+translation unit that checks the macros with `#error` and `static_assert`
+and passes when it compiles; and `webcpp.compile-diagnostic`, a source that
+passes when clang stops it with the error it states. `test/Jamfile`
+declares {n-tests} of them:
+
+[cols="1,3",options="header"]
+|===
+| Test | What it checks
+
+| `alone-config`
+| `<webcpp/config.hpp>` compiles alone, as the only include of its
+  translation unit.
+
+| `version`
+| `<webcpp/version.hpp>` compiles alone, and its two macros name one
+  version, `WEBCPP_LIB_VERSION` writing the patch level exactly when it is
+  not 0.
+
+| `target`
+| Exactly one target macro is defined, the one of the toolset the build is
+  for, which `test/Jamfile` tells the test.
+
+| `exceptions`, `exceptions_off`, `exceptions_developer_off`
+| `WEBCPP_HAS_EXCEPTIONS` is defined exactly when webcpp has exceptions: as
+  the build asks, with `exception-handling=off`, and with
+  `WEBCPP_NO_EXCEPTIONS` defined, which leaves `BOOST_NO_EXCEPTIONS` as the
+  compiler has it; config never defines `WEBCPP_NO_EXCEPTIONS`, and it
+  includes `<boost/config.hpp>`.
+
+| `predefined_target`, `predefined_wasip2`, `predefined_wasip3`, `predefined_emscripten`, `predefined_exceptions`
+| A target macro, or `WEBCPP_HAS_EXCEPTIONS`, defined on the command line
+  stops the build with config's message alone.
+
+| `unsupported_wasip1`, `unsupported_wasm32_unknown`, `unsupported_wasm`
+| A WebAssembly build for none of webcpp's targets stops with
+  "unsupported target": wasm32-wasip1 and wasm32-unknown-unknown with
+  wasi-sdk's clang, before `<boost/config.hpp>` for the second, and
+  `+__wasm__+` defined alone natively.
+|===
+
+`example/Jamfile` builds the program this page shows, runs it, and compares
+what it printed with the `.expected` beside it; a program that returns
+anything but 0 fails too.
+
+[#config-testing-targets]
+=== Targets
+
+`test/Jamfile` and `example/Jamfile` declare the four targets,
+`webcpp.targets native wasip2 wasip3 emscripten`, and b2 builds each program
+for those alone. A `webcpp.compile-diagnostic` test is built on b2's clang
+toolset alone, native clang, `clang-wasip2` and `clang-wasip3`, since
+`-verify`, which reads the error a source states, is clang's: GCC, MSVC and
+Emscripten skip the `predefined_*` and `unsupported_*` tests.
+
+[cols="1,4,1,1",options="header"]
+|===
+| Target | Toolset | Tests declared | Examples
+
+| native
+| any toolset that is not one of the three below: GCC, Clang and MSVC among
+  them
+| {n-tests-native}
+| {n-examples-native}
+
+| wasip2
+| `clang-wasip2`, the clang of wasi-sdk for wasm32-wasip2, run by wasmtime
+| {n-tests-wasip2}
+| {n-examples-wasip2}
+
+| wasip3
+| `clang-wasip3`, for wasm32-wasip3, run by wasmtime
+| {n-tests-wasip3}
+| {n-examples-wasip3}
+
+| emscripten
+| `emscripten`, Emscripten's `em++`, whose programs b2's toolset runs with
+  node itself
+| {n-tests-emscripten}
+| {n-examples-emscripten}
+|===
+
+A count is of the tests a target's Jamfile declares: with GCC, MSVC and
+Emscripten, b2 skips the `predefined_*` and `unsupported_*` tests among
+them, as above.
+
+From the root of a webcpp checkout, these build every test and build and
+run every example, natively, for wasm32-wasip2, for wasm32-wasip3 and with Emscripten,
+with the toolsets a `user-config.jam` registers, as webcpp's
+https://github.com/webcpporg/webcpp/blob/main/AGENTS.md[AGENTS.md] shows:
+
+[source,bash]
+----
+b2 libs/config/test libs/config/example
+b2 toolset=clang-wasip2 testing.launcher=wasmtime libs/config/test libs/config/example
+b2 toolset=clang-wasip3 testing.launcher=wasmtime libs/config/test libs/config/example
+b2 toolset=emscripten libs/config/test libs/config/example
+----
+
+Emscripten is given no `testing.launcher`: b2's toolset runs its programs
+with node itself. b2 compares timestamps, so a result that counts is built
+from scratch, with `b2 -a`. `b2 libs/config/test//target` builds one test
+alone, while working on it.
+
+[#config-testing-report]
+=== The test matrix
+
+The continuous integration runs config's tests and examples in lanes, one
+toolset each: the native compilers, wasip2, wasip3 and emscripten. Each lane
+builds from scratch and records what b2 built and ran:
+
+[source,bash]
+----
+b2 -a --dump-tests --out-xml=<lane>.xml toolset=<toolset> libs/config/test libs/config/example
+----
+
+webcpp's `tools/report/report.py` merges the files of every lane into a
+matrix: a page of the libraries by lanes, and a page of each library's tests
+and examples by lanes, where each cell says whether that program passed in
+that lane, or how it failed. A test b2 skips in a lane, as a
+`predefined_*` test with GCC, is a grey cell there. The matrix is published
+with the documentation, at https://webcpporg.github.io/webcpp/report/.

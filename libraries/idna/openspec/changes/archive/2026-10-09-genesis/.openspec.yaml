@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-09
+webcpp:
+  library: idna
+  title: "idna: internationalized domain names for C++20"
+  kind: own
+  port_of: null
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/idna/tree/e2452e5
+  decided: 2026-10-09

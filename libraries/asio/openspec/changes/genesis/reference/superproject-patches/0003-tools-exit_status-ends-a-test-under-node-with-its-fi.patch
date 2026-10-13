@@ -1,0 +1,736 @@
+From deb9e86977ac10efe2358fa8b0c62f4dc5aa3011 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 07:14:52 -0400
+Subject: [PATCH 03/10] tools: exit_status ends a test under node with its
+ first status, and the test support's edges pinned
+
+The test support's exit_status gives its status to the pre-js, which ends node with the first one on its next turn and restores it over any later write: a later exit_status(0) or process.exitCode = 0 no longer turns a failure into a pass, and a pending timer no longer holds a finished test to its bound. node_test_demo pins it on both variants, with the JSPI postRun path (a main that returns 0 after a suspension), a main that never resumes, an unmarked std::exit(0), and a bound node's timers cannot hold, which the pre-js now refuses by name. webcpp.compile, compile-fail and compile-diagnostic take /webcpp//node-test for its header, so demo's fixture and webcpp_jam_test return to their state before the support. webcpp.run, run-fail and example refuse -sMODULARIZE and -sEXPORT_ES6, under which node would load a program without running it. AGENTS.md says so, and the comments cite only what the tree holds.
+---
+ AGENTS.md                                     | 73 ++++++++++++-------
+ Jamroot                                       |  6 +-
+ doc/releases/0.1.0.adoc                       |  4 +
+ .../include/webcpp/test/exit_status.hpp       | 27 ++++---
+ tools/node-test/node-pre.js                   | 34 +++++++--
+ tools/test/emscripten_test.py                 | 71 ++++++++++++++++--
+ tools/test/fixtures/demo/test/Jamfile         |  5 +-
+ .../test/fixtures/node_test_demo/test/Jamfile | 14 ++++
+ .../test/bound_out_of_range.cpp               | 19 +++++
+ .../test/ends_with_a_timer_pending.cpp        | 24 ++++++
+ .../node_test_demo/test/exits_unmarked.cpp    | 16 ++++
+ .../test/keeps_the_first_status.cpp           | 37 ++++++++++
+ .../node_test_demo/test/never_resumes.cpp     | 22 ++++++
+ tools/test/webcpp_jam_test.py                 | 22 +++++-
+ tools/webcpp.jam                              | 45 ++++++++++--
+ 15 files changed, 355 insertions(+), 64 deletions(-)
+ create mode 100644 tools/test/fixtures/node_test_demo/test/bound_out_of_range.cpp
+ create mode 100644 tools/test/fixtures/node_test_demo/test/ends_with_a_timer_pending.cpp
+ create mode 100644 tools/test/fixtures/node_test_demo/test/exits_unmarked.cpp
+ create mode 100644 tools/test/fixtures/node_test_demo/test/keeps_the_first_status.cpp
+ create mode 100644 tools/test/fixtures/node_test_demo/test/never_resumes.cpp
+
+diff --git a/AGENTS.md b/AGENTS.md
+index e787ab4..b8a1384 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1501,12 +1501,17 @@ that suspends.
+ no library's Jamfile can leave it out: its usage requirements give the header
+ `<webcpp/test/exit_status.hpp>` (`tools/node-test/include`) everywhere, and
+ on emscripten the pre-js `tools/node-test/node-pre.js` (`--pre-js`), which is
+-also a dependency of the program, so that an edit of it relinks it. Under
+-node, a `main` that suspended and then returns loses its value under
+-Asyncify, and node would exit 0; a `main` that never finishes would exit 0
+-on both variants. Under the pre-js, a program ends with these statuses
+-(measured with Emscripten 6.0.11 and node 26.7.0, the same source built
+-without a variant, with `-sJSPI` and with `-sASYNCIFY`):
++also a dependency of the program, so that an edit of it rebuilds it,
++recompiled and relinked. The rules that only compile, `webcpp.compile`,
++`webcpp.compile-fail` and `webcpp.compile-diagnostic`, take it too, for the
++header: a test's `main` ends with `webcpp::test::exit_status`. Under node, a
++`main` that suspended and then returns loses its value under Asyncify, and
++node would exit 0; a `main` that never finishes would exit 0 on both
++variants; and `std::exit` sets the status without ending node, so that a
++later write replaces it, and anything pending keeps node running. Under the
++pre-js, a program ends with these statuses (measured with Emscripten 6.0.11
++and node 26.7.0, the same source built without a variant, with `-sJSPI` and
++with `-sASYNCIFY`):
+ 
+ | `main` | without suspension | JSPI | Asyncify |
+ | --- | --- | --- | --- |
+@@ -1515,27 +1520,43 @@ without a variant, with `-sJSPI` and with `-sASYNCIFY`):
+ | suspends, returns 3 | (aborts) | 3 | **1**, with the line below |
+ | suspends, `exit_status(4)` | (aborts) | 4 | 4 |
+ | suspends, `std::exit(7)` unmarked | (aborts) | 7 | 7 |
++| suspends, `std::exit(0)` unmarked | (aborts) | 0 | **1**, with the line below |
++| awaits a promise that nothing settles | (aborts) | **1** at once, with the line below | **1** at once, with the line below |
++| suspends, `exit_status(3)`; later a callback gives `exit_status(0)` and a timer sets `process.exitCode = 0` | (aborts) | 3 at once | 3 at once |
++| suspends, `exit_status(0)` while a timer of 300 s is pending | (aborts) | 0 at once | 0 at once |
+ | sleeps 600 s after `bound(3s)` | (aborts) | 1 after 3 s | 1 after 3 s |
++| `bound(0s)`, or a bound past 2147483 s | (aborts) | **1** at once, naming it | **1** at once, naming it |
+ | returns 1, a timer sets `process.exitCode = 0` later (trystero's tests) | 0 | 0 | 0 |
+ 
+ The line, on standard error, is `webcpp: main did not finish: it never
+-returned, or it returned after a suspension under Asyncify, which loses the
+-value; end it with webcpp::test::exit_status`: the pre-js replaces only a 0
+-that `main` never gave, since any other status is a failure already. A test
+-is also bounded: past 120 s, the pre-js stops it with 1 and the line
+-`webcpp: the test ran past its bound of <n> s`. 120 s is longer than any
+-emscripten test of webcpp, and short enough that a test that waits forever
+-fails inside the CI job instead of running to the job's own timeout. A test
+-that needs longer calls `webcpp::test::bound(std::chrono::seconds(<n>))`,
+-which re-arms the bound from that moment (natively it does nothing), and
+-says why. The watchdog is `unref`'d: it ends only a test that something else
+-keeps alive. It bounds a test that waits, not one that spins inside
+-WebAssembly, which no JavaScript timer interrupts. In a browser, which has no
+-process, the pre-js does nothing, and a program of `webcpp.link` or
+-`webcpp.drive` never links it. The rule: **a test whose `main` may suspend
+-under Asyncify ends through `webcpp::test::exit_status`**, which natively
+-returns its status, and on emscripten tells the pre-js that `main` finished
+-and exits with it: `return webcpp::test::exit_status(boost::report_errors());`.
++returned, or it ended after a suspension under Asyncify through a return or
++std::exit, which loses the status; end it with webcpp::test::exit_status`:
++the pre-js replaces only a 0 that `main` never gave, since any other status
++is a failure already. `webcpp::test::exit_status` gives its status to the
++pre-js, which ends node with the first status it is given on node's next
++turn, whatever is still pending or runs later, and restores it over any
++later write of `process.exitCode`. A test is also bounded: past 120 s, the
++pre-js stops it with 1 and the line `webcpp: the test ran past its bound of
++<n> s`. 120 s is longer than any emscripten test of webcpp, and short enough
++that a test that waits forever fails inside the CI job instead of running to
++the job's own timeout. A test that needs longer calls
++`webcpp::test::bound(std::chrono::seconds(<n>))`, which re-arms the bound
++from that moment (natively it does nothing), and says why; a bound outside 1
++to 2147483 s, which node's timers cannot hold, stops the test with 1 and the
++line `webcpp: the bound of <n> s is outside 1 to 2147483 s`. The watchdog is
++`unref`'d: it ends only a test that something else keeps alive. It bounds a
++test that waits, not one that spins inside WebAssembly, which no JavaScript
++timer interrupts. In a browser, which has no process, the pre-js does
++nothing, and a program of `webcpp.link` or `webcpp.drive` never links it. A
++program node runs may not link `-sMODULARIZE` or `-sEXPORT_ES6`, which wrap
++it in a factory that node never calls, so that it would pass having run
++nothing: `webcpp.run`, `webcpp.run-fail` and `webcpp.example` stop the build
++naming the flag, when their requirements or their Jamfile's give it (a
++library's usage requirements are not read). The rule: **a test or example
++whose `main` may suspend under Asyncify ends through
++`webcpp::test::exit_status`, never through `return` or `std::exit`**, which
++natively returns its status, and on emscripten ends node with it:
++`return webcpp::test::exit_status(boost::report_errors());`.
+ `tools/test/emscripten_test.py` pins each case's exact status on the fixture
+ library `node_test_demo`.
+ 
+@@ -1566,9 +1587,9 @@ webcpp.data         <directory> + ;   (requirements)
+ | `webcpp.targets t ...` | | the Jamfile's default targets; before its first program, once; each is `native`, `emscripten`, `wasip2` or `wasip3`, or the build stops naming it |
+ | `webcpp.run` | the program exits with 0 | built once per target it declares; a user's `exception-handling=off` links `tools/throw_exception.cpp`; on emscripten, run by node, linked with `-sNODERAWFS=1`; links `/webcpp//node-test` on every target (Targets, above) |
+ | `webcpp.run-fail` | the program exits with another status | built and run as `webcpp.run`'s, and links `/webcpp//node-test` likewise |
+-| `webcpp.compile` | the sources compile | no program is linked |
+-| `webcpp.compile-fail` | the sources do not compile | left out of clang-tidy; any error passes it, the wrong one included |
+-| `webcpp.compile-diagnostic` | the sources stop with every error they state in clang's `-verify` comments, `// expected-error@<file>:* {{<message>}}` for a header they include or `// expected-error@+1 {{<message>}}` for the next line | compiled with `-Xclang -verify -Xclang -verify-ignore-unexpected=error,note`, so an error not stated and a note are ignored; built on b2's `clang` toolset only (native clang, `clang-wasip2`, `clang-wasip3`) and skipped elsewhere, since `-verify` is clang's: a refusal would turn every gcc and msvc lane red for a declaration that holds; left out of clang-tidy |
++| `webcpp.compile` | the sources compile | no program is linked; takes `/webcpp//node-test` for its header |
++| `webcpp.compile-fail` | the sources do not compile | left out of clang-tidy; any error passes it, the wrong one included; takes `/webcpp//node-test` for its header |
++| `webcpp.compile-diagnostic` | the sources stop with every error they state in clang's `-verify` comments, `// expected-error@<file>:* {{<message>}}` for a header they include or `// expected-error@+1 {{<message>}}` for the next line | compiled with `-Xclang -verify -Xclang -verify-ignore-unexpected=error,note`, so an error not stated and a note are ignored; built on b2's `clang` toolset only (native clang, `clang-wasip2`, `clang-wasip3`) and skipped elsewhere, since `-verify` is clang's: a refusal would turn every gcc and msvc lane red for a declaration that holds; left out of clang-tidy; takes `/webcpp//node-test` for its header |
+ | `webcpp.boost-test` | every case of the Boost.Test suite passes | native only, whatever the Jamfile declares; the header-only framework, `tools/boost_test_runner.cpp`, is one object of the suite's, always compiled with exceptions |
+ | `webcpp.example` | the program exits with 0, and its standard output, carriage returns removed, equals `<stem>.expected` beside it | its standard input is `<stem>.input` beside it, else empty, never the terminal, on every target (wasmtime passes it through, and node under `-sNODERAWFS=1`); run through `testing.launcher` for WASI, and on emscripten with the node on `PATH`, not the one b2's toolset registered, which b2 gives only to its own testing rules, by `tools/example/run_example.py`, which names a failing exit status (or the signal) before the diff; always run again, and `<stem>.input` is a source of the run; links `/webcpp//node-test` on every target (Targets, above) |
+ | `webcpp.link` | the program links | never run: a program for a browser, which node refuses to run (`-sENVIRONMENT=web`), or one that needs the network; b2's `link` test, which `--dump-tests` lists and the report shows as a link test; never linked with `-sNODERAWFS=1`. The explicit target `<name>-program` is the same program, an `exe` of the same sources and requirements, `<name>-program.js` on emscripten, for a target that needs its files, such as a page that loads it. An example Jamfile's is shown on the page by its code, and has no `.expected` (chapter 8) |
+diff --git a/Jamroot b/Jamroot
+index 9d595e5..a78d547 100644
+--- a/Jamroot
++++ b/Jamroot
+@@ -423,8 +423,10 @@ for local name in boost_url boost_charconv boost_locale
+ # pre-js that fails a test under node whose main did not finish, and stops
+ # one past its bound (tools/node-test/node-pre.js). Quoted, as the Boost
+ # directory is, so that a path that holds a space builds. The pre-js is also a
+-# dependency of every program that links it, so that an edit of it relinks them
+-# in an incremental build (b2 does not read a link flag's file as a source).
++# dependency of every program that links it, so that an edit of it rebuilds
++# them in an incremental build, recompiled and relinked, since a dependency
++# reaches every target of a program (b2 does not read a link flag's file as a
++# source).
+ alias node-test : : : : <include>tools/node-test/include
+   <toolset>emscripten:<linkflags>"--pre-js \"$(WEBCPP_ROOT)/tools/node-test/node-pre.js\""
+   <toolset>emscripten:<dependency>$(WEBCPP_ROOT)/tools/node-test/node-pre.js ;
+diff --git a/doc/releases/0.1.0.adoc b/doc/releases/0.1.0.adoc
+index 87a68fc..1534bd8 100644
+--- a/doc/releases/0.1.0.adoc
++++ b/doc/releases/0.1.0.adoc
+@@ -148,6 +148,10 @@ so that no install script reports an install.
+ * Added `/webcpp//node-test`, which every test and example links, with
+ `<webcpp/test/exit_status.hpp>`: under Node, a test whose `main` never
+ finishes fails, and one past its bound of 120 s stops.
++* Changed `webcpp::test::exit_status` to end a test under Node at once,
++with the first status it is given.
++* Added a refusal of `-sMODULARIZE` and `-sEXPORT_ES6` on a test or example
++that Node runs, which would pass having run nothing.
+ 
+ [#webcpp-0-1-0-compilers-tested]
+ == Compilers tested
+diff --git a/tools/node-test/include/webcpp/test/exit_status.hpp b/tools/node-test/include/webcpp/test/exit_status.hpp
+index ee3ff86..428491f 100644
+--- a/tools/node-test/include/webcpp/test/exit_status.hpp
++++ b/tools/node-test/include/webcpp/test/exit_status.hpp
+@@ -20,26 +20,33 @@
+ namespace webcpp::test {
+ 
+ /**
+- Ends main with status: natively returns it; on emscripten tells webcpp's test support that
+- main finished, then exits.
++ Ends main with status: natively returns it; on emscripten gives it to webcpp's test support,
++ which ends node with the first status it is given on its next turn, then exits.
+ 
+- Tip: under Asyncify a main that suspended loses the value it returns, and node would exit 0
+- (measured, asio-plan/exitcode); exit keeps it on both variants.
++ Tip: under Asyncify a main that suspended loses the value it returns, and node would exit 0;
++ and std::exit alone leaves node running while anything is pending, so that a later write
++ replaces the status (both measured with Emscripten 6.0.11 and node 26.7.0).
+ */
+ [[nodiscard]] inline int exit_status(int status) {
+ #ifdef __EMSCRIPTEN__
+-    EM_ASM({
+-        if (Module['webcppTestFinished']) {
+-            Module['webcppTestFinished']();
+-        }
+-    });
++    EM_ASM(
++        {
++            if (Module['webcppTestFinished']) {
++                Module['webcppTestFinished']($0);
++            }
++        },
++        status);
+     std::exit(status);
+ #else
+     return status;
+ #endif
+ }
+ 
+-/** Re-arms the bound of this test under node to limit, from now; natively does nothing. */
++/**
++ Re-arms the bound of this test under node to limit, from now; natively does nothing.
++
++ Tip: a limit outside 1 to 2147483 s, which node's timers cannot hold, stops the test with 1.
++*/
+ inline void bound(std::chrono::seconds limit) {
+ #ifdef __EMSCRIPTEN__
+     EM_ASM(
+diff --git a/tools/node-test/node-pre.js b/tools/node-test/node-pre.js
+index 8aca5f9..000c2b6 100644
+--- a/tools/node-test/node-pre.js
++++ b/tools/node-test/node-pre.js
+@@ -5,12 +5,21 @@
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+ // webcpp's test support under node, which every test and example on emscripten links
+-// (--pre-js, tools/webcpp.jam): a test whose main did not finish fails, and a test that runs
+-// past its bound is stopped. In a browser, which has no process, it does nothing.
++// (--pre-js, tools/webcpp.jam): a test whose main did not finish fails, a test that ends through
++// webcpp::test::exit_status ends with the first status it gives, and a test that runs past its
++// bound is stopped. In a browser, which has no process, it does nothing.
+ if (typeof process === 'object' && typeof process.on === 'function') {
+     let finished = false
++    // The first status exit_status gives, the test's own; null until then.
++    let status = null
+     let watchdog = null
++    // The longest bound, in seconds: node fires a timer of more than 2^31 - 1 ms at once.
++    const longest = 2147483
+     const bound = seconds => {
++        if (!(seconds >= 1 && seconds <= longest)) {
++            process.stderr.write(`webcpp: the bound of ${seconds} s is outside 1 to ${longest} s\n`)
++            process.exit(1)
++        }
+         if (watchdog) {
+             clearTimeout(watchdog)
+         }
+@@ -22,8 +31,14 @@ if (typeof process === 'object' && typeof process.on === 'function') {
+     }
+     bound(120)
+     Module['webcppTestBound'] = bound
+-    Module['webcppTestFinished'] = () => {
++    // Node ends with the first status on its next turn, whatever is still pending or runs
++    // later: a timer, a callback that gives another status, a write of process.exitCode.
++    Module['webcppTestFinished'] = given => {
+         finished = true
++        if (status === null) {
++            status = given
++            setImmediate(() => process.exit(status))
++        }
+     }
+     // After main returned: under Asyncify a main that suspended returns early, unwound, and
+     // Asyncify.currData is then set; that return is not main's end.
+@@ -32,13 +47,18 @@ if (typeof process === 'object' && typeof process.on === 'function') {
+             finished = true
+         }
+     })
+-    // A status other than 0 is a failure already; only a 0 that main never said is replaced.
++    // The status exit_status gave is restored over any later write; otherwise a status other
++    // than 0 is a failure already, and only a 0 that main never said is replaced.
+     process.on('exit', () => {
++        if (status !== null) {
++            process.exitCode = status
++            return
++        }
+         if (!finished && !process.exitCode) {
+             process.exitCode = 1
+-            process.stderr.write('webcpp: main did not finish: it never returned, or it returned ' +
+-                'after a suspension under Asyncify, which loses the value; end it with ' +
+-                'webcpp::test::exit_status\n')
++            process.stderr.write('webcpp: main did not finish: it never returned, or it ended ' +
++                'after a suspension under Asyncify through a return or std::exit, which loses ' +
++                'the status; end it with webcpp::test::exit_status\n')
+         }
+     })
+ }
+diff --git a/tools/test/emscripten_test.py b/tools/test/emscripten_test.py
+index 936b081..e7f45ff 100644
+--- a/tools/test/emscripten_test.py
++++ b/tools/test/emscripten_test.py
+@@ -16,10 +16,12 @@ process behind, and one that no own lane names is refused; and a native build ne
+ The suspension variant, jspi by default and asyncify on request, builds with the exceptions each
+ needs, asyncify in a directory of its own, and natively adds nothing. Every program node runs links
+ the test support (/webcpp//node-test), whose fixture library node_test_demo pins each case's exact
+-status: a main that did not finish fails, a status given through webcpp::test::exit_status is kept,
+-and a test past its bound is stopped. Each case builds a scratch superproject with browser_demo and
+-node_test_demo, whose path holds a space, and the emsdk linked into its .local; Emscripten's cache
+-is the one the harness gives every b2. Run with the names of some cases to run only those."""
++status: a main that did not finish fails, the first status given through webcpp::test::exit_status
++ends the test at once and is kept, and a test past its bound is stopped; a program node runs that
++links -sMODULARIZE or -sEXPORT_ES6, which node would load without running, is refused. Each case
++builds a scratch superproject with browser_demo and node_test_demo, whose path holds a space, and
++the emsdk linked into its .local; Emscripten's cache is the one the harness gives every b2. Run
++with the names of some cases to run only those."""
+ 
+ from __future__ import annotations
+ 
+@@ -140,7 +142,8 @@ def test_programs_are_wasm32(root):
+ def test_suspend_variants_build_apart(root):
+     # jspi, the default, compiles with WebAssembly exceptions and adds no directory; asyncify
+     # composes JavaScript exceptions, which Asyncify needs (an Asyncify program built with
+-    # -fwasm-exceptions traps, P/timer_catch.cpp), and builds in a directory of its own.
++    # -fwasm-exceptions traps, measured with Emscripten 6.0.11), and builds in a directory of its
++    # own.
+     result = harness.run_b2(root, '-a', '-n', '-d+2', *EMSCRIPTEN,
+                             'libs/browser_demo/test//catches')
+     harness.expect(result, True)
+@@ -183,15 +186,68 @@ def test_a_test_ends_as_its_main_ends(root):
+         'returns_without_suspension', 'exits_zero_after_suspension_jspi',
+         'exits_zero_after_suspension_asyncify', 'returns_one_after_suspension_jspi',
+         'returns_zero_after_suspension_asyncify', 'never_finishes',
+-        'exit_in_coroutine_asyncify', 'exit_in_handler_jspi'}, result.stdout[-4000:]
++        'exit_in_coroutine_asyncify', 'exit_in_handler_jspi',
++        'returns_zero_after_suspension_jspi', 'never_resumes_jspi', 'never_resumes_asyncify',
++        'keeps_the_first_status_jspi', 'keeps_the_first_status_asyncify',
++        'ends_with_a_timer_pending_jspi', 'ends_with_a_timer_pending_asyncify',
++        'exits_unmarked_jspi', 'exits_unmarked_asyncify', 'bound_zero',
++        'bound_too_long'}, result.stdout[-4000:]
+     assert exit_status(root, 'returns_one_after_suspension_jspi')[0] == 1
++    # Under JSPI a main that returns 0 after a suspension finished: the pre-js reads its end
++    # after main's promise settles, never before.
++    assert exit_status(root, 'returns_zero_after_suspension_jspi')[0] == 0
+     status, text = exit_status(root, 'returns_zero_after_suspension_asyncify')
+     assert status == 1 and 'webcpp: main did not finish' in text, text
+     status, text = exit_status(root, 'never_finishes')
+     assert status == 1 and 'webcpp: the test ran past its bound of 3 s' in text, text
++    # A main that awaits what never comes, with nothing else alive, fails as node ends, long
++    # before its bound.
++    for name in ('never_resumes_jspi', 'never_resumes_asyncify'):
++        status, text = exit_status(root, name)
++        assert status == 1 and 'webcpp: main did not finish' in text, (name, text)
++        assert 'past its bound' not in text, (name, text)
+     assert exit_status(root, 'exit_in_coroutine_asyncify')[0] == 3
+     assert exit_status(root, 'exit_in_handler_jspi')[0] == 3
+-    assert time.monotonic() - started < 600, 'the bound did not stop never_finishes'
++    # The first status exit_status gives ends the test at once: neither a later exit_status(0)
++    # nor a later write of process.exitCode = 0 replaces it, and a pending timer does not hold
++    # it to its bound.
++    for name in ('keeps_the_first_status_jspi', 'keeps_the_first_status_asyncify'):
++        assert exit_status(root, name)[0] == 3, name
++    for name in ('ends_with_a_timer_pending_jspi', 'ends_with_a_timer_pending_asyncify'):
++        status, text = exit_status(root, name)
++        assert status == 0 and 'past its bound' not in text, (name, text)
++    # An unmarked std::exit after a suspension: JSPI keeps its status, Asyncify fails it.
++    assert exit_status(root, 'exits_unmarked_jspi')[0] == 0
++    status, text = exit_status(root, 'exits_unmarked_asyncify')
++    assert status == 1 and 'webcpp: main did not finish' in text, text
++    # A bound node's timers cannot hold is refused, naming it.
++    for name, seconds in (('bound_zero', 0), ('bound_too_long', 2147484)):
++        status, text = exit_status(root, name)
++        assert status == 1 and (f'webcpp: the bound of {seconds} s is outside 1 to 2147483 s'
++                                in text), (name, text)
++    assert time.monotonic() - started < 300, 'a test waited for its bound'
++
++
++def test_a_program_node_cannot_run_is_refused(root):
++    # -sMODULARIZE and -sEXPORT_ES6 wrap a program in a factory that node never calls, so a run
++    # would pass having run nothing: webcpp.run, webcpp.run-fail and webcpp.example refuse them
++    # on emscripten, naming the flag; webcpp.link, for a page, takes them.
++    jamfile = root / 'libs/node_test_demo/test/Jamfile'
++    text = jamfile.read_text()
++    for declaration, flag in (
++            ('webcpp.run modular : returns.cpp : <linkflags>-sMODULARIZE=1', '-sMODULARIZE=1'),
++            ('webcpp.run-fail modular : returns.cpp : <linkflags>-sEXPORT_ES6', '-sEXPORT_ES6'),
++            ('webcpp.run modular : returns.cpp : <toolset>emscripten:<linkflags>-sMODULARIZE',
++             '-sMODULARIZE'),
++            ('webcpp.example returns.cpp : <linkflags>-sEXPORT_ES6=1', '-sEXPORT_ES6=1')):
++        jamfile.write_text(f'{text}{declaration} ;\n')
++        result = harness.run_b2(root, '-n', *EMSCRIPTEN, NODE_TEST)
++        harness.expect(result, False, f'webcpp: {flag} makes node load the program without '
++                       'running it')
++    jamfile.write_text(f'{text}webcpp.link modular : returns.cpp : <linkflags>-sMODULARIZE=1 ;\n')
++    result = harness.run_b2(root, *EMSCRIPTEN, f'{NODE_TEST}//modular')
++    harness.expect(result, True)
++    assert passed(result) == {'modular'}, result.stdout[-4000:]
+ 
+ 
+ def test_every_test_and_example_links_the_support(root):
+@@ -394,6 +450,7 @@ CASES = [prepared(case) for case in (
+     test_a_test_ends_as_its_main_ends,
+     test_every_test_and_example_links_the_support,
+     test_natively_the_support_is_a_header,
++    test_a_program_node_cannot_run_is_refused,
+     test_a_failure_reaches_the_report,
+     test_link_only_builds_and_never_runs,
+     test_link_only_unresolved_symbol_fails,
+diff --git a/tools/test/fixtures/demo/test/Jamfile b/tools/test/fixtures/demo/test/Jamfile
+index 6cbd4a2..313bace 100644
+--- a/tools/test/fixtures/demo/test/Jamfile
++++ b/tools/test/fixtures/demo/test/Jamfile
+@@ -12,10 +12,7 @@ webcpp.run pass : pass.cpp : <library>/webcpp/demo//demo ;
+ webcpp.run-fail fails : fails.cpp : <library>/webcpp/demo//demo ;
+ webcpp.compile-fail rejects : rejects.cpp : <library>/webcpp/demo//demo ;
+ webcpp.run native_only : native_only.cpp : <library>/webcpp/demo//demo : native ;
+-# Compiles native_only.cpp a second time, the same way as native_only, whose
+-# test support it takes too: the lint's database lists the command once.
+-webcpp.compile native_only_compiles : native_only.cpp
+-  : <library>/webcpp/demo//demo <library>/webcpp//node-test : native ;
++webcpp.compile native_only_compiles : native_only.cpp : <library>/webcpp/demo//demo : native ;
+ webcpp.headers-alone demo : ../include ;
+ # A Boost.Test suite: built and run natively only.
+ webcpp.boost-test suite : suite_test.cpp : <library>/webcpp/demo//demo ;
+diff --git a/tools/test/fixtures/node_test_demo/test/Jamfile b/tools/test/fixtures/node_test_demo/test/Jamfile
+index b0acfa0..8127df4 100644
+--- a/tools/test/fixtures/node_test_demo/test/Jamfile
++++ b/tools/test/fixtures/node_test_demo/test/Jamfile
+@@ -26,3 +26,17 @@ webcpp.run-fail returns_zero_after_suspension_asyncify : returns_after_suspensio
+ webcpp.run-fail never_finishes : never_finishes.cpp : $(jspi) ;
+ webcpp.run-fail exit_in_coroutine_asyncify : exit_in_coroutine.cpp : $(asyncify) ;
+ webcpp.run-fail exit_in_handler_jspi : exit_in_handler.cpp : $(jspi) ;
++webcpp.run returns_zero_after_suspension_jspi : returns_after_suspension.cpp
++  : $(jspi) <define>WEBCPP_TEST_STATUS=0 ;
++webcpp.run-fail never_resumes_jspi : never_resumes.cpp : $(jspi) ;
++webcpp.run-fail never_resumes_asyncify : never_resumes.cpp : $(asyncify) ;
++webcpp.run-fail keeps_the_first_status_jspi : keeps_the_first_status.cpp : $(jspi) ;
++webcpp.run-fail keeps_the_first_status_asyncify : keeps_the_first_status.cpp : $(asyncify) ;
++webcpp.run ends_with_a_timer_pending_jspi : ends_with_a_timer_pending.cpp : $(jspi) ;
++webcpp.run ends_with_a_timer_pending_asyncify : ends_with_a_timer_pending.cpp : $(asyncify) ;
++webcpp.run exits_unmarked_jspi : exits_unmarked.cpp : $(jspi) ;
++webcpp.run-fail exits_unmarked_asyncify : exits_unmarked.cpp : $(asyncify) ;
++webcpp.run-fail bound_zero : bound_out_of_range.cpp
++  : $(jspi) <define>WEBCPP_TEST_BOUND=0 ;
++webcpp.run-fail bound_too_long : bound_out_of_range.cpp
++  : $(jspi) <define>WEBCPP_TEST_BOUND=2147484 ;
+diff --git a/tools/test/fixtures/node_test_demo/test/bound_out_of_range.cpp b/tools/test/fixtures/node_test_demo/test/bound_out_of_range.cpp
+new file mode 100644
+index 0000000..60552ba
+--- /dev/null
++++ b/tools/test/fixtures/node_test_demo/test/bound_out_of_range.cpp
+@@ -0,0 +1,19 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// Asks for a bound of WEBCPP_TEST_BOUND seconds, outside 1 to 2147483, which is refused.
++
++#include <webcpp/test/exit_status.hpp>
++
++#include <emscripten.h>
++
++#include <chrono>
++
++int main() {
++    webcpp::test::bound(std::chrono::seconds(WEBCPP_TEST_BOUND));
++    emscripten_sleep(5000);
++    return webcpp::test::exit_status(0);
++}
+diff --git a/tools/test/fixtures/node_test_demo/test/ends_with_a_timer_pending.cpp b/tools/test/fixtures/node_test_demo/test/ends_with_a_timer_pending.cpp
+new file mode 100644
+index 0000000..28a836f
+--- /dev/null
++++ b/tools/test/fixtures/node_test_demo/test/ends_with_a_timer_pending.cpp
+@@ -0,0 +1,24 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// Ends with 0 through exit_status while a timer of 300 s is pending, which must not hold it.
++
++#include <webcpp/test/exit_status.hpp>
++
++#include <emscripten.h>
++#include <emscripten/em_js.h>
++
++// clang-format off
++EM_JS(void, wait_300_s, (), {
++    setTimeout(() => {}, 300000);
++});
++// clang-format on
++
++int main() {
++    wait_300_s();
++    emscripten_sleep(10);
++    return webcpp::test::exit_status(0);
++}
+diff --git a/tools/test/fixtures/node_test_demo/test/exits_unmarked.cpp b/tools/test/fixtures/node_test_demo/test/exits_unmarked.cpp
+new file mode 100644
+index 0000000..1c9be2f
+--- /dev/null
++++ b/tools/test/fixtures/node_test_demo/test/exits_unmarked.cpp
+@@ -0,0 +1,16 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// Suspends, then ends with std::exit(0), without exit_status.
++
++#include <emscripten.h>
++
++#include <cstdlib>
++
++int main() {
++    emscripten_sleep(10);
++    std::exit(0);
++}
+diff --git a/tools/test/fixtures/node_test_demo/test/keeps_the_first_status.cpp b/tools/test/fixtures/node_test_demo/test/keeps_the_first_status.cpp
+new file mode 100644
+index 0000000..abd63fa
+--- /dev/null
++++ b/tools/test/fixtures/node_test_demo/test/keeps_the_first_status.cpp
+@@ -0,0 +1,37 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// Ends with 3 through exit_status, while a callback that would end with 0 and a write of
++// process.exitCode = 0 are still to come.
++
++#include <webcpp/test/exit_status.hpp>
++
++#include <emscripten.h>
++#include <emscripten/em_js.h>
++#include <emscripten/eventloop.h>
++
++// clang-format off
++EM_JS(void, write_zero_later, (), {
++    setTimeout(() => {
++        process.exitCode = 0;
++    }, 50);
++});
++// clang-format on
++
++namespace {
++
++void end_with_zero(void*) {
++    (void)webcpp::test::exit_status(0);
++}
++
++}  // namespace
++
++int main() {
++    emscripten_set_timeout(end_with_zero, 50, nullptr);
++    write_zero_later();
++    emscripten_sleep(10);
++    return webcpp::test::exit_status(3);
++}
+diff --git a/tools/test/fixtures/node_test_demo/test/never_resumes.cpp b/tools/test/fixtures/node_test_demo/test/never_resumes.cpp
+new file mode 100644
+index 0000000..6a9297a
+--- /dev/null
++++ b/tools/test/fixtures/node_test_demo/test/never_resumes.cpp
+@@ -0,0 +1,22 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// Awaits a promise that nothing settles, with nothing else to keep node alive: main never ends.
++
++#include <webcpp/test/exit_status.hpp>
++
++#include <emscripten/em_js.h>
++
++// clang-format off
++EM_ASYNC_JS(void, await_forever, (), {
++    await new Promise(() => {});
++});
++// clang-format on
++
++int main() {
++    await_forever();
++    return webcpp::test::exit_status(0);
++}
+diff --git a/tools/test/webcpp_jam_test.py b/tools/test/webcpp_jam_test.py
+index 5258758..5078723 100755
+--- a/tools/test/webcpp_jam_test.py
++++ b/tools/test/webcpp_jam_test.py
+@@ -168,7 +168,7 @@ def test_compile_builds_only_where_declared(root):
+     assert not passed(result), result.stdout[-4000:]
+     assert 'native_only' not in result.stdout, result.stdout[-4000:]
+     # Declared for wasip2 too, it is compiled there, and a source that does not compile fails it.
+-    line = '  : <library>/webcpp/demo//demo <library>/webcpp//node-test'
++    line = 'webcpp.compile native_only_compiles : native_only.cpp : <library>/webcpp/demo//demo'
+     harness.replace(root / 'libs/demo/test/Jamfile', f'{line} : native ;',
+                     f'{line} : native wasip2 ;')
+     result = harness.run_b2(root, *WASIP2, target)
+@@ -177,6 +177,25 @@ def test_compile_builds_only_where_declared(root):
+         result.stdout[-4000:])
+ 
+ 
++def test_a_compile_finds_the_test_support(root):
++    # A test's main ends with webcpp::test::exit_status, so a rule that only compiles a test's
++    # source finds <webcpp/test/exit_status.hpp> as webcpp.run does: webcpp.compile,
++    # webcpp.compile-fail and webcpp.compile-diagnostic take /webcpp//node-test too.
++    harness.add_library(
++        root, 'support',
++        'import webcpp ;\n'
++        '\n'
++        'webcpp.compile compiles : compiles.cpp ;\n'
++        'webcpp.compile-diagnostic diagnosed : diagnosed.cpp ;\n',
++        {'compiles.cpp': '#include <webcpp/test/exit_status.hpp>\n\n'
++                         'int main() { return webcpp::test::exit_status(0); }\n',
++         'diagnosed.cpp': '#include <webcpp/test/exit_status.hpp>\n\n'
++                          '// expected-error@+1 {{stated here}}\n#error "stated here"\n'})
++    result = harness.run_b2(root, '-a', 'libs/support/test')
++    harness.expect(result, True)
++    assert passed(result) == {'compiles', 'diagnosed'}, (passed(result), result.stdout[-4000:])
++
++
+ def test_compile_diagnostic_passes_only_on_its_diagnostic(root):
+     # A source that states, in clang's -verify comments, the error it must stop with: in a header
+     # it includes (@<file>:*, as a header's guard), or on its own line (@+1).
+@@ -1056,6 +1075,7 @@ CASES = [
+     test_wasip2_skips_native_only_and_has_exceptions,
+     test_wasip3_catches_a_throw,
+     test_compile_builds_only_where_declared,
++    test_a_compile_finds_the_test_support,
+     test_compile_diagnostic_passes_only_on_its_diagnostic,
+     test_filter_maps_each_toolset_to_its_target,
+     test_undeclared_jamfile_is_native_only,
+diff --git a/tools/webcpp.jam b/tools/webcpp.jam
+index 5f6ef3d..23fbad8 100644
+--- a/tools/webcpp.jam
++++ b/tools/webcpp.jam
+@@ -114,10 +114,10 @@ feature.feature webcpp-require-external : on : optional incidental propagated ;
+ feature.feature webcpp-data : : free incidental ;
+ toolset.flags testing.capture-output LAUNCHER : <webcpp-data> : unchecked ;
+ 
+-# The suspension variant of a program on emscripten (WEBCPP_ASIO_SPEC.md
+-# section 4.4): jspi, JavaScript Promise Integration, the default, with
+-# WebAssembly exceptions; or asyncify, Emscripten's Asyncify, which traps
+-# with WebAssembly exceptions and so composes JavaScript-based ones.
++# The suspension variant of a program on emscripten (AGENTS.md chapter 9):
++# jspi, JavaScript Promise Integration, the default, with WebAssembly
++# exceptions; or asyncify, Emscripten's Asyncify, which traps with
++# WebAssembly exceptions and so composes JavaScript-based ones.
+ # Composite, since b2 takes only free features from usage requirements;
+ # propagated, so that every library a program uses is built for its
+ # variant. A non-default value builds in a directory of its own.
+@@ -142,7 +142,8 @@ feature.compose <webcpp-suspend>asyncify : <exception-handling-method>js ;
+ 
+ # What every test and example links (Jamroot's node-test): no library's
+ # Jamfile can leave it out, and one that links -sJSPI or -sASYNCIFY gets it
+-# with the rest.
++# with the rest. The rules that only compile take it too, for its header: a
++# test's main ends with webcpp::test::exit_status.
+ .node-test = <library>/webcpp//node-test ;
+ 
+ if [ os.name ] = NT { .python = python ; } else { .python = python3 ; }
+@@ -313,6 +314,7 @@ local rule program ( kind : names + : targets * )
+ # A test that passes when its program, built from sources, exits with 0.
+ rule run ( name : sources + : requirements * : targets * )
+ {
++    node-runnable webcpp.run $(name) : $(requirements) ;
+     testing.run $(sources) : : : $(requirements) [ program run : $(name) : $(targets) ]
+         $(.handler) $(.node-raw-fs) $(.node-test) : $(name) ;
+ }
+@@ -345,6 +347,7 @@ rule boost-test ( name : sources + : requirements * )
+ # status other than 0.
+ rule run-fail ( name : sources + : requirements * : targets * )
+ {
++    node-runnable webcpp.run-fail $(name) : $(requirements) ;
+     testing.run-fail $(sources) : : : $(requirements) [ program run-fail : $(name) : $(targets) ]
+         $(.handler) $(.node-raw-fs) $(.node-test) : $(name) ;
+ }
+@@ -375,6 +378,32 @@ rule data ( directories + )
+     return $(result) ;
+ }
+ 
++# Stops the build, naming the flag and the program, when the requirements
++# of a program node runs (run, run-fail, example), or its Jamfile's, link
++# -sMODULARIZE or -sEXPORT_ES6, under a condition or not. Either wraps the
++# program in a factory that node never calls: the program, its pre-js among
++# it, would never run, and its test would pass. A page's program, which
++# webcpp.link links, may take them. Read from the declaration, since b2
++# evaluates a conditional requirement before it adds the free requirements;
++# a library's usage requirements are not read.
++local rule node-runnable ( kind name : requirements * )
++{
++    local jamfile = [ jamfile ] ;
++    local inherited = [ project.attribute $(jamfile) requirements ] ;
++    for local property in $(requirements) [ $(inherited).raw ]
++    {
++        local flag = [ MATCH "<linkflags>(.*)$" : $(property) ] ;
++        local found = [ MATCH "^-s(MODULARIZE|EXPORT_ES6)(=(.*))?$" : $(flag) ] ;
++        if $(found) && $(found[3]) != 0
++        {
++            local place = [ where ] ;
++            errors.user-error "webcpp: $(flag) makes node load the program without running it,"
++                "and $(kind) $(name) in $(place[4]) runs it under node; a page's program,"
++                "which webcpp.link links, may take it" ;
++        }
++    }
++}
++
+ # A test that passes when its program, built from sources, links, which it
+ # never runs: a program for a browser, which node refuses to run, or one that
+ # needs the network. The explicit target <name>-program is the same program,
+@@ -406,14 +435,14 @@ rule link ( name : sources + : requirements * : targets * )
+ rule compile ( name : sources + : requirements * : targets * )
+ {
+     testing.compile $(sources) : $(requirements) [ program compile : $(name) : $(targets) ]
+-        : $(name) ;
++        $(.node-test) : $(name) ;
+ }
+ 
+ # A test that passes when sources do not compile.
+ rule compile-fail ( name : sources + : requirements * : targets * )
+ {
+     testing.compile-fail $(sources) : $(requirements)
+-        [ program compile-fail : $(name) : $(targets) ] : $(name) ;
++        [ program compile-fail : $(name) : $(targets) ] $(.node-test) : $(name) ;
+ }
+ 
+ # A test that passes when sources stop with the errors they state, in
+@@ -434,6 +463,7 @@ rule compile-diagnostic ( name : sources + : requirements * : targets * )
+     testing.compile $(sources)
+       : $(requirements) <cxxflags>"-Xclang -verify -Xclang -verify-ignore-unexpected=error,note"
+         <conditional>@webcpp%clang-only [ program compile-diagnostic : $(name) : $(targets) ]
++        $(.node-test)
+       : $(name) ;
+ }
+ 
+@@ -457,6 +487,7 @@ rule example ( source : requirements * : targets * )
+ {
+     local name = $(source:B) ;
+     local only = [ program example : $(name) : $(targets) ] ;
++    node-runnable webcpp.example $(name) : $(requirements) ;
+     exe $(name) : $(source) : $(requirements) $(only) $(.handler) $(.node-raw-fs)
+         $(.node-test) ;
+     local found = [ where ] ;
+-- 
+2.55.0
+

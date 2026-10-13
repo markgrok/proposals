@@ -1,0 +1,30 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[appendix]
+[#xactor-changelog]
+== Changelog
+
+What changed in xactor in each version of webcpp, newest first, one line
+per change. "Unreleased" is what the next version brings. The release notes
+of every version are on webcpp's index page.
+
+[#xactor-changelog-unreleased]
+=== Unreleased
+
+// tag::unreleased[]
+* *Breaking change:* removed the guarantee that xactor runs without RTTI;
+build it with RTTI.
+* Changed the guarantee without exceptions to compiling only, which the lint
+checks.
+* Added the `WEBCPP_XACTOR_NO_EXCEPTIONS` configuration macro, defined
+automatically or by the developer.
+* Updated the documentation: a link to xstate, and a changelog appendix.
+* Changed `config.hpp` to include `<webcpp/config.hpp>`, webcpp's
+configuration, which the build adds.
+* Added `WEBCPP_NO_EXCEPTIONS`, which disables xactor's exceptions with
+every webcpp library's.
+// end::unreleased[]

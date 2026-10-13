@@ -1,0 +1,69 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+# The standard libraries' own checks are on in every test, libc++'s and
+# libstdc++'s (each ignores the other's macro), so that a read past the end of
+# a view traps instead of reading a neighbour's memory.
+project : requirements <library>/webcpp/idna//idna
+  <define>_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
+  <define>_GLIBCXX_ASSERTIONS ;
+
+import webcpp ;
+
+# Every test runs on every target with the same vectors, which is how the
+# page's guarantee 3 (idna-invariant-3) is checked.
+webcpp.targets native wasip2 wasip3 emscripten ;
+
+webcpp.headers-alone idna : ../include ;
+
+# config.hpp defines WEBCPP_IDNA_NO_EXCEPTIONS exactly when webcpp has no
+# exceptions, and keeps it when a developer defines it in a build that has
+# them.
+webcpp.compile config : config_test.cpp ;
+webcpp.compile config_developer_defined : config_test.cpp
+  : <define>WEBCPP_IDNA_NO_EXCEPTIONS <define>WEBCPP_TEST_IDNA_DEVELOPER_DEFINED ;
+# WEBCPP_NO_EXCEPTIONS, which a developer defines for every webcpp library at
+# once, defines WEBCPP_IDNA_NO_EXCEPTIONS in a build that has exceptions.
+webcpp.compile config_all_off : config_test.cpp
+  : <define>WEBCPP_NO_EXCEPTIONS <define>WEBCPP_TEST_IDNA_ALL_OFF ;
+
+webcpp.run errors : errors_test.cpp ;
+webcpp.run options : options_test.cpp ;
+webcpp.run utf8 : utf8_test.cpp ;
+webcpp.run punycode : punycode_test.cpp ;
+webcpp.run properties : properties_test.cpp ;
+
+# The tests that compile the generated vectors, a large file of data each,
+# which MSVC compiles only with /bigobj.
+webcpp.run vectors : vectors_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
+
+# A conformance test holds each verdict against test/known_failures.json
+# through as_listed, which must fail a program on a listed line that passes and
+# on an unlisted line that fails.
+webcpp.run known_failures : known_failures_test.cpp ;
+webcpp.run-fail known_failures_unexpected_pass : known_failures_test.cpp
+  : <define>WEBCPP_TEST_IDNA_UNEXPECTED_PASS ;
+webcpp.run-fail known_failures_unexpected_failure : known_failures_test.cpp
+  : <define>WEBCPP_TEST_IDNA_UNEXPECTED_FAILURE ;
+
+webcpp.run nfc : nfc_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
+webcpp.run context : context_test.cpp ;
+webcpp.run bidi : bidi_test.cpp ;
+
+webcpp.run process : process_test.cpp ;
+webcpp.run validity : validity_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
+
+webcpp.run uts46 : uts46_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
+webcpp.run allocation : allocation_test.cpp ;
+
+# The own lane tables: the generator runs again from the pinned Unicode
+# files, downloading those its cache lacks, and every output is compared
+# with the committed file, the page's guarantee 5 (idna-invariant-5). The
+# ordinary lanes never run it.
+webcpp.generated tables : ../tools/generate_tables.py
+  : : ../include/webcpp/idna/detail/tables.hpp generated/idna_test_v2.ipp
+      generated/nfc_test.ipp ;
+webcpp.lane tables : generated-tables ;

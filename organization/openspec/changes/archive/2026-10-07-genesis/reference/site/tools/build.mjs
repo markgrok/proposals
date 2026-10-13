@@ -1,0 +1,237 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+// The site's build, the npm script `build`:
+//
+//   build.mjs --bundle
+//       bundles src/server.tsx into build/server.mjs, which renders the pages and which the
+//       tests import, and src/client.tsx into build/client/site.js, which the browser runs;
+//   build.mjs --render --pages <dir> --out <dir> --context <file.json> [--chrome <file>]
+//             [--site-chrome <file>]
+//       renders every <dir>/**/*.oui into <out>/<path>/index.html with the context the file
+//       holds, and its social card into <out>/cards/ (tools/cards.mjs), with a card for the page
+//       of each library of the context's catalogue, which b2 site takes from the libraries'
+//       docs, the icons and the favicon (tools/icons.mjs), and copies assets/ and the client
+//       bundle into <out>/assets/. With --chrome, it also writes into <file> the header the
+//       libraries' light pages show (renderFragment's `docs-header`), and with --site-chrome the
+//       header of a page of the site's own style it does not render (`site-header`), each with
+//       its links from the site's root, which tools/ci/assemble.py rebases for each page it heads;
+//   build.mjs --index <site> --base <url> --catalogue <libraries.json> --channel <preview|release>
+//             [--superproject <dir>]
+//       writes the files that index a site laid out whole, robots.txt, llms.txt, libraries.json
+//       and, on release, sitemap.xml (tools/indexing.mjs, which takes the same options, --index
+//       as --site).
+//
+// The steps may be given at once, and run in that order. A fault of a page prints
+// `<file>:<line>: <message>` and exits 1; a usage error exits 2.
+//
+// Both bundles define process.env.NODE_ENV as "production": OpenUI's web entry mounts a
+// devtools widget, fetched from a CDN, in development, and only the define drops it. OpenUI and
+// zod are bundled into the server too, so that its test reads the code the browser runs.
+//
+// In both, lang-core's telemetry, which posts to PostHog when the environment asks for it, is
+// replaced by src/openui_telemetry.ts, which does nothing: no bundle carries the analytics' host or
+// key, so no reader's browser and no build can reach them.
+
+import {execFileSync} from 'node:child_process'
+import {cp, mkdir, readdir, readFile, rename, writeFile} from 'node:fs/promises'
+import {dirname, join, relative, resolve} from 'node:path'
+import {fileURLToPath, pathToFileURL} from 'node:url'
+import {parseArgs} from 'node:util'
+import {writeCards} from './cards.mjs'
+import {drawing} from './drawing.mjs'
+import {writeIcons} from './icons.mjs'
+
+const site = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+/**
+ * The esbuild plugin that loads @openuidev/lang-core with its telemetry region, inlined in
+ * dist/index.mjs, replaced by an import of src/openui_telemetry.ts, and without the import of the
+ * shared module that holds the analytics' host and key, which only that region uses.
+ * Tip: a lang-core whose index.mjs no longer has that shape stops the build, naming it, rather than
+ * bundle a telemetry this plugin no longer removes.
+ */
+const withoutTelemetry = {
+    name: 'without-openui-telemetry',
+    setup(build) {
+        build.onLoad({filter: /[\\/]@openuidev[\\/]lang-core[\\/]dist[\\/]index\.mjs$/}, async args => {
+            const source = await readFile(args.path, 'utf8')
+            const shared = /^import \{[^}]*\} from "\.\/shared-[\w-]+\.mjs";\n/m
+            const region = /^\/\/#region src\/telemetry\/runtime\.ts\n[\s\S]*?^\/\/#endregion\n/m
+            if (!shared.test(source) || !region.test(source)) {
+                return {errors: [{text: `${args.path}: no telemetry region and shared import to replace; check src/openui_telemetry.ts against this lang-core`}]}
+            }
+            const stub = JSON.stringify(join(site, 'src/openui_telemetry.ts'))
+            const replaced = 'import {recordSystemPromptGeneration, prepareParserParseTelemetry, captureParserParseResult, ' +
+                `captureParserParseException} from ${stub};\n`
+            return {contents: source.replace(shared, '').replace(region, replaced), loader: 'js'}
+        })
+    },
+}
+
+/**
+ * The esbuild plugin that gives a component importing assets/logo.svg its drawing alone
+ * (tools/drawing.mjs), so that no bundle carries the file's comments and licence.
+ */
+const markDrawing = {
+    name: 'mark-drawing',
+    setup(build) {
+        build.onLoad({filter: /[\\/]assets[\\/]logo\.svg$/}, async args => ({
+            contents: drawing(await readFile(args.path, 'utf8')),
+            loader: 'text',
+        }))
+    },
+}
+
+/**
+ * Writes each of esbuild's output files beside its path, then moves it onto the path by one rename.
+ * Tip: esbuild writes in place, truncating first, and a test importing build/server.mjs while
+ * another process bundles (dev_test.mjs's rebuilds, in the same npm test) read it empty; a rename
+ * replaces the file whole, so a reader sees the old file or the new one, never part of either.
+ */
+async function writeWhole({outputFiles}) {
+    for (const {path, contents} of outputFiles) {
+        const next = `${path}.${process.pid}.next`
+        await mkdir(dirname(path), {recursive: true})
+        await writeFile(next, contents)
+        await rename(next, path)
+    }
+}
+
+async function bundle() {
+    const esbuild = await import('esbuild')
+    const common = {
+        bundle: true,
+        jsx: 'automatic',
+        define: {'process.env.NODE_ENV': '"production"'},
+        logLevel: 'warning',
+        absWorkingDir: site,
+        plugins: [withoutTelemetry, markDrawing],
+        write: false,
+    }
+    await writeWhole(await esbuild.build({
+        ...common,
+        entryPoints: ['src/server.tsx'],
+        outfile: 'build/server.mjs',
+        platform: 'node',
+        format: 'esm',
+        external: ['react', 'react-dom'],
+    }))
+    await writeWhole(await esbuild.build({
+        ...common,
+        entryPoints: ['src/client.tsx'],
+        outfile: 'build/client/site.js',
+        platform: 'browser',
+        format: 'esm',
+        minify: true,
+    }))
+}
+
+/** Every `.oui` file under `directory`, as paths relative to it, sorted. */
+async function pagesUnder(directory) {
+    const entries = await readdir(directory, {recursive: true, withFileTypes: true})
+    return entries
+        .filter(entry => entry.isFile() && entry.name.endsWith('.oui'))
+        .map(entry => relative(directory, join(entry.parentPath, entry.name)))
+        .sort()
+}
+
+/** `index.oui` is the home, `libraries.oui` is `libraries/`, `a/b.oui` is `a/b/`. */
+function pathOf(page) {
+    const name = page.split('\\').join('/').replace(/\.oui$/, '')
+    return name === 'index' ? '' : name.replace(/\/index$/, '') + '/'
+}
+
+async function render({pages, out, context: contextFile, chrome, 'site-chrome': siteChrome}) {
+    const {renderPage, renderFragment, pageTitle, cardPath, PageError} = await import(pathToFileURL(join(site, 'build/server.mjs')).href)
+    const context = JSON.parse(await readFile(contextFile, 'utf8'))
+    const cards = []
+    for (const page of await pagesUnder(pages)) {
+        const path = pathOf(page)
+        const file = join(pages, page)
+        const root = '../'.repeat(path.split('/').filter(Boolean).length)
+        try {
+            const source = await readFile(file, 'utf8')
+            const html = renderPage(file, source, {...context, root, path})
+            await mkdir(join(out, path), {recursive: true})
+            await writeFile(join(out, path, 'index.html'), html)
+            cards.push({file: cardPath(path), title: pageTitle(file, source)})
+        } catch (error) {
+            if (error instanceof PageError) {
+                console.error(`${error.file}:${error.line}: ${error.message}`)
+                process.exit(1)
+            }
+            throw error
+        }
+    }
+    // A library's card shows its name: its page's title is the docs', which this build never sees.
+    for (const library of context.catalogue) {
+        cards.push({file: cardPath(library.page), title: library.name})
+    }
+    await writeCards(out, cards)
+    await writeIcons(out)
+    await cp(join(site, 'assets'), join(out, 'assets'), {recursive: true})
+    await cp(join(site, 'build/client/site.js'), join(out, 'assets/site.js'))
+    for (const [file, fragment] of [[chrome, 'docs-header'], [siteChrome, 'site-header']]) {
+        if (file) {
+            await mkdir(dirname(resolve(file)), {recursive: true})
+            await writeFile(file, renderFragment(fragment, {...context, root: '', path: ''}))
+        }
+    }
+}
+
+/** tools/indexing.mjs over the site `site`, with the options --index was given. */
+function index({index, base, catalogue, channel, superproject}) {
+    const options = ['--site', index, '--base', base, '--catalogue', catalogue, '--channel', channel]
+    if (superproject) {
+        options.push('--superproject', superproject)
+    }
+    execFileSync(process.execPath, [join(site, 'tools/indexing.mjs'), ...options], {stdio: 'inherit'})
+}
+
+const {values} = parseArgs({
+    options: {
+        bundle: {type: 'boolean', default: false},
+        render: {type: 'boolean', default: false},
+        pages: {type: 'string'},
+        out: {type: 'string'},
+        context: {type: 'string'},
+        chrome: {type: 'string'},
+        'site-chrome': {type: 'string'},
+        index: {type: 'string'},
+        base: {type: 'string'},
+        catalogue: {type: 'string'},
+        channel: {type: 'string'},
+        superproject: {type: 'string'},
+    },
+})
+if (!values.bundle && !values.render && !values.index) {
+    console.error('usage: build.mjs [--bundle] [--render --pages <dir> --out <dir> --context <file.json> [--chrome <file>] [--site-chrome <file>]]\n' +
+        '                 [--index <site> --base <url> --catalogue <libraries.json> --channel <preview|release> [--superproject <dir>]]')
+    process.exit(2)
+}
+if (values.render && !(values.pages && values.out && values.context)) {
+    console.error('build.mjs: --render needs --pages, --out and --context')
+    process.exit(2)
+}
+if (values.index && !(values.base && values.catalogue && values.channel)) {
+    console.error('build.mjs: --index needs --base, --catalogue and --channel')
+    process.exit(2)
+}
+if (values.bundle) {
+    await bundle()
+}
+if (values.render) {
+    await render(values)
+}
+if (values.index) {
+    try {
+        index(values)
+    } catch (error) {
+        // indexing.mjs has said why on its standard error.
+        process.exit(error.status ?? 1)
+    }
+}

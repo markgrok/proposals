@@ -1,0 +1,29 @@
+From 906f28a3d2279116be508042f16d170a28aa418c Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 13:19:45 -0400
+Subject: [PATCH 22/25] trystero: the interop driver's call that does not
+ answer in 10 s gives undefined, never a TypeError
+
+Under load, the browser flood scenario's window.floodOffers outlasted the 10 s every DevTools call is bounded by, and evaluate read .result of undefined. The call now settles as its comment says, and the scenario waits for what the flood did.
+---
+ test/oracle/interop/run.mjs | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/test/oracle/interop/run.mjs b/test/oracle/interop/run.mjs
+index ac2dc4e..b98e362 100644
+--- a/test/oracle/interop/run.mjs
++++ b/test/oracle/interop/run.mjs
+@@ -185,7 +185,9 @@ const openPage = async (path, label) => {
+     await new Promise(r => (ws.onopen = r))
+     await send('Runtime.enable')
+     await send('Page.navigate', {url: base + path})
+-    const evaluate = async expression => (await send('Runtime.evaluate', {expression, returnByValue: true, awaitPromise: true})).result?.value
++    // A call that does not answer in 10 s gives undefined, as a value of its own: a flood on a loaded machine
++    // outlasts it, and the scenario then waits for what the flood did.
++    const evaluate = async expression => (await send('Runtime.evaluate', {expression, returnByValue: true, awaitPromise: true}))?.result?.value
+     return {
+         label,
+         problems,
+-- 
+2.55.0
+

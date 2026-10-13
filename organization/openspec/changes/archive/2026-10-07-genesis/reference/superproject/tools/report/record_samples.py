@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+"""Records the samples of tools/report/samples/, each the file one lane's b2 run wrote.
+
+Usage: record_samples.py [NAME ...]
+
+A sample is what `b2 -a --dump-tests --out-xml=FILE` writes, run with the arguments of a lane (the
+Jamroot's lane command) in a scratch superproject that holds the fixture library demo, or
+component_demo with this checkout's wit-bindgen and WIT, or browser_demo with its emsdk, and
+whatever SAMPLES plants beside it. It is then trimmed of what report.py never reads, and of what
+would only describe the machine that recorded it: the <os> element (uname, which names the host),
+every <properties> and <sources> element, the actions b2 runs for itself, which have no <name>, when
+they succeeded (creating a directory, for one), and the lines in which Emscripten says what it does
+with its cache, which depend on the cache's state. The temporary directory, under which the scratch
+superproject is and whose path names the machine too, is written as $TMPDIR. report_test.py records
+every sample afresh, untrimmed, and checks that the report reads it as it reads the committed one.
+
+b2 records the compilers' paths, which user-config.jam can place under the home directory: the
+scratch superproject reaches .local/ through a link outside it, and a sample that still names the
+home directory is not written. With names, only those samples are recorded.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import sys
+import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+# The harness lives beside the other tests of the build, in tools/test.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'test'))
+
+import harness
+
+SAMPLES = Path(__file__).resolve().parent / 'samples'
+
+NATIVE = ('toolset=clang',)
+WASIP2 = ('toolset=clang-wasip2', 'testing.launcher=wasmtime')
+EMSCRIPTEN = ('toolset=emscripten',)
+
+PLANTED_TESTS = """import webcpp ;
+
+webcpp.run fails_to_run : fails_to_run.cpp ;
+webcpp.run fails_to_compile : fails_to_compile.cpp ;
+webcpp.run fails_to_link : fails_to_link.cpp ;
+webcpp.compile-fail compiles : compiles.cpp ;
+webcpp.run-fail exits_with_zero : exits_with_zero.cpp ;
+"""
+
+PLANTED_TEST_SOURCES = {
+    'fails_to_run.cpp': ('#include <boost/core/lightweight_test.hpp>\n'
+                         '\n'
+                         'int main() {\n'
+                         '    BOOST_TEST_EQ(1 + 1, 3);\n'
+                         '    return boost::report_errors();\n'
+                         '}\n'),
+    'fails_to_compile.cpp': 'int main() { return undeclared; }\n',
+    'fails_to_link.cpp': 'int missing();\n\nint main() { return missing(); }\n',
+    'compiles.cpp': 'int main() { return 0; }\n',
+    'exits_with_zero.cpp': 'int main() { return 0; }\n',
+}
+
+PLANTED_EXAMPLES = """import webcpp ;
+
+webcpp.example prints_otherwise.cpp ;
+webcpp.example does_not_compile.cpp ;
+"""
+
+PLANTED_EXAMPLE_SOURCES = {
+    'prints_otherwise.cpp': '#include <cstdio>\n\nint main() { std::puts("printed"); }\n',
+    'prints_otherwise.expected': 'expected\n',
+    'does_not_compile.cpp': 'int main() { return undeclared; }\n',
+    'does_not_compile.expected': 'expected\n',
+}
+
+# A failed comparison of text that CDATA cannot hold as it is: a ]]>, markup, and a byte that is
+# not UTF-8, as a parser's test could print.
+ODD_SOURCE = r"""#include <boost/core/lightweight_test.hpp>
+
+#include <string>
+
+int main() {
+    BOOST_TEST_EQ(std::string("<b>]]>&amp;</b>"), std::string("\xff"));
+    return boost::report_errors();
+}
+"""
+
+
+def plant_failures(root: Path) -> None:
+    """Adds the library planted, whose every test and example fails in its own way."""
+    harness.add_library(root, 'planted', PLANTED_TESTS, PLANTED_TEST_SOURCES)
+    examples = root / 'libs/planted/example'
+    examples.mkdir()
+    (examples / 'Jamfile').write_text(PLANTED_EXAMPLES)
+    for name, text in PLANTED_EXAMPLE_SOURCES.items():
+        (examples / name).write_text(text)
+
+
+def plant_native_only(root: Path) -> None:
+    """Adds the library nativeonly, which declares native only."""
+    harness.add_library(root, 'nativeonly',
+                        'import webcpp ;\n'
+                        '\n'
+                        'webcpp.targets native ;\n'
+                        '\n'
+                        'webcpp.run works : works.cpp ;\n',
+                        {'works.cpp': 'int main() { return 0; }\n'})
+
+
+def plant_broken_boost_json(root: Path) -> None:
+    """Breaks tools/boost_json.cpp, Boost.JSON's definitions, which every program that parses JSON
+    links."""
+    definitions = root / 'tools/boost_json.cpp'
+    definitions.write_text(definitions.read_text()
+                           + '#error "planted: Boost.JSON\'s definitions do not compile"\n')
+
+
+def plant_wrong_transcript(root: Path) -> None:
+    """Makes the transcript component_demo's served test expects say another status than its
+    component answers."""
+    harness.replace(root / 'libs/component_demo/test/answers.expected', 'HTTP/1.1 404 Not Found',
+                    'HTTP/1.1 405 Method Not Allowed')
+
+
+def plant_failing_driver(root: Path) -> None:
+    """Makes the script that drives browser_demo's driven test exit with 1 before it runs the
+    program."""
+    harness.replace(root / 'libs/browser_demo/test/driver/drive.mjs',
+                    "import { spawnSync } from 'node:child_process';\n",
+                    "import { spawnSync } from 'node:child_process';\n\nprocess.exit(1);\n")
+
+
+def plant_odd_output(root: Path) -> None:
+    """Adds the library odd, whose test prints what CDATA cannot hold."""
+    harness.add_library(root, 'odd', 'import webcpp ;\n\nwebcpp.run prints : prints.cpp ;\n',
+                        {'prints.cpp': ODD_SOURCE})
+
+
+@dataclass(frozen=True)
+class Sample:
+    """A lane to record: its toolset arguments, what it builds, what is planted first, and the
+    fixture library it is recorded beside, demo, or component_demo, which needs wit-bindgen and
+    the WIT, or browser_demo, which needs the emsdk."""
+
+    lane: tuple[str, ...]
+    targets: tuple[str, ...]
+    plant: Callable[[Path], None] | None = None
+    fixture: str = 'demo'
+
+
+SAMPLES_BY_NAME = {
+    # Every test and example of demo, natively: all pass.
+    'native-pass': Sample(NATIVE, ('libs/demo/test', 'libs/demo/example')),
+    # The same on wasip2, where the native-only programs are not built.
+    'wasip2-pass': Sample(WASIP2, ('libs/demo/test', 'libs/demo/example')),
+    # demo's pass and rejects, which pass, and each failure planted.
+    'native-failures': Sample(NATIVE, ('libs/demo/test//pass', 'libs/demo/test//rejects',
+                                       'libs/planted/test', 'libs/planted/example'),
+                              plant_failures),
+    # A library that declares native only, on wasip2: every program is skipped.
+    'wasip2-empty': Sample(WASIP2, ('libs/nativeonly/test',), plant_native_only),
+    # Two libraries on wasip2, one of which declares native only: demo's programs pass, and
+    # every program of nativeonly is skipped.
+    'wasip2-skipped-library': Sample(WASIP2, ('libs/demo/test', 'libs/demo/example',
+                                              'libs/nativeonly/test'), plant_native_only),
+    # A dependency outside every test fails: Boost.JSON's definitions, which parses_json links.
+    'wasip2-dependency': Sample(WASIP2, ('libs/demo/test//parses_json',),
+                                plant_broken_boost_json),
+    # A failure whose output b2 writes into CDATA unescaped.
+    'native-odd-output': Sample(NATIVE, ('libs/odd/test//prints',), plant_odd_output),
+    # component_demo's tests on wasip2, its served component among them: all pass.
+    'wasip2-served': Sample(WASIP2, ('libs/component_demo/test',), fixture='component_demo'),
+    # The same, its served component answering other than the transcript it expects.
+    'wasip2-served-failure': Sample(WASIP2, ('libs/component_demo/test',),
+                                    plant_wrong_transcript, fixture='component_demo'),
+    # browser_demo's tests and examples on emscripten, under node, page linked and never run:
+    # all pass.
+    'emscripten-pass': Sample(EMSCRIPTEN, ('libs/browser_demo/test', 'libs/browser_demo/example'),
+                              fixture='browser_demo'),
+    # Its own lane driver on emscripten, the script that drives driven exiting with 1.
+    'emscripten-driven-failure': Sample(EMSCRIPTEN, ('libs/browser_demo/test/driver//driver',),
+                                        plant_failing_driver, fixture='browser_demo'),
+}
+
+
+def scratch(name: str) -> Path:
+    """A scratch superproject in which the sample name is recorded: with its fixture library,
+    and, for component_demo, this checkout's wit-bindgen and WIT, for browser_demo its emsdk."""
+    fixture = SAMPLES_BY_NAME[name].fixture
+    root = harness.scratch_superproject(fixture)
+    if fixture == 'component_demo':
+        harness.link_wasi_tools(root)
+    if fixture == 'browser_demo':
+        harness.link_emsdk(root)
+    return root
+
+
+def record(name: str, root: Path) -> Path:
+    """Plants what the sample name needs in the scratch superproject root, runs its lane there,
+    and returns the file b2 wrote, untrimmed."""
+    sample = SAMPLES_BY_NAME[name]
+    if sample.plant is not None:
+        sample.plant(root)
+    output = root / f'{name}.xml'
+    result = harness.run_b2(root, '-a', '--dump-tests', f'--out-xml={output.name}', *sample.lane,
+                            *sample.targets)
+    # With --out-xml, b2 exits 0 even when a test fails; a failure here is b2's own.
+    if result.returncode != 0 or not output.is_file():
+        raise RuntimeError(f'{name}: b2 failed\n{result.stdout[-4000:]}')
+    return output
+
+
+# What trim removes, each a whole element on its own lines, as b2 writes them.
+TRIMMED = (
+    re.compile(rb'\n  <os .*?</os> ?(?=\n)', re.DOTALL),
+    re.compile(rb'\n    <properties>.*?</properties> ?(?=\n)', re.DOTALL),
+    re.compile(rb'\n    <sources>.*?</sources> ?(?=\n)', re.DOTALL),
+    # An action without a <name> has its <jam-target> first, once the two above are gone.
+    re.compile(rb'\n  <action status="0"[^>]*> ?\n    <jam-target>.*?\n  </action> ?(?=\n)',
+               re.DOTALL),
+    # What Emscripten says of its cache, a line of an action's output: a system library it builds
+    # on a link, how long that took, its sanity check. It depends on the cache's state and on
+    # which link comes first.
+    re.compile(rb'(?<=[\n\[])(?:cache|system_libs|shared):INFO:[^\n]*\n'),
+)
+
+
+def trim(data: bytes) -> bytes:
+    """The file b2 wrote, without what TRIMMED matches."""
+    for pattern in TRIMMED:
+        data = pattern.sub(b'', data)
+    return data
+
+
+# What a sample says in place of the temporary directory, under which the scratch superproject
+# is: its path names the machine (macOS's /var/folders/<hash>/T).
+TEMPORARY = b'$TMPDIR'
+
+
+def scrub(data: bytes) -> bytes:
+    """The file b2 wrote, with the temporary directory written as TEMPORARY wherever it is a
+    whole directory of a path: as Python names it, and resolved, which is how b2 names the
+    scratch superproject's directory on macOS (/private/var/folders/...)."""
+    temporary = Path(tempfile.gettempdir())
+    forms = {str(temporary).encode(), str(temporary.resolve()).encode()}
+    # The longer first: the one may hold the other, as /private/var/folders/... does.
+    for form in sorted(forms, key=len, reverse=True):
+        data = re.sub(re.escape(form) + rb'(?=/)', TEMPORARY, data)
+    return data
+
+
+def reroute_local(root: Path) -> Path:
+    """Points the scratch superproject root's user-config.jam at a link to the superproject's
+    .local/ outside the home directory, and returns the directory that holds the link."""
+    holder = Path(tempfile.mkdtemp(prefix='webcpp-local-'))
+    link = holder / 'local'
+    link.symlink_to(harness.ROOT / '.local')
+    config = root / '.local/user-config.jam'
+    text = config.read_text()
+    for local in {str(harness.ROOT / '.local'), str((harness.ROOT / '.local').resolve())}:
+        text = text.replace(local, str(link))
+    config.write_text(text)
+    return holder
+
+
+def main(names: list[str]) -> int:
+    unknown = set(names) - set(SAMPLES_BY_NAME)
+    if unknown:
+        print(f'record_samples: no sample named {", ".join(sorted(unknown))}', file=sys.stderr)
+        return 2
+    homes = {str(Path.home()).encode(), str(Path.home().resolve()).encode()}
+    for name in names or SAMPLES_BY_NAME:
+        root = scratch(name)
+        holder = reroute_local(root)
+        try:
+            data = scrub(trim(record(name, root).read_bytes()))
+        finally:
+            shutil.rmtree(root)
+            shutil.rmtree(holder)
+        if any(home in data for home in homes):
+            print(f'record_samples: {name} names the home directory; not written', file=sys.stderr)
+            return 1
+        (SAMPLES / f'{name}.xml').write_bytes(data)
+        print(f'{name}: {len(data)} bytes')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

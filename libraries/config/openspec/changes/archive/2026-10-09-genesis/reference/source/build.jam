@@ -1,0 +1,13 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+#
+# config, webcpp's configuration, which every webcpp library includes first,
+# as Boost.Config is Boost's. A library uses it through /webcpp/config//config,
+# which adds its headers and Boost's.
+
+project /webcpp/config ;
+
+alias config : : : : <include>include <library>/boost//headers ;

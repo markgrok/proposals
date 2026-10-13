@@ -1,0 +1,88 @@
+{
+    "boundaries": [
+        {
+            "headers": [
+                "include/webcpp/json_schema.hpp",
+                "include/webcpp/json_schema/*.hpp",
+                "include/webcpp/json_schema/detail/memory/*.hpp"
+            ],
+            "must-not-include": ["boost/locale", "webcpp/regex", "srell", "boost/url", "webcpp/lexical"],
+            "why": "the engines are reached only through their policies: Boost.Locale through output/locale.hpp, webcpp::regex through regex/webcpp_regex.hpp, Boost.URL through url/boost_url.hpp, formats through formats/default_formats.hpp"
+        },
+        {
+            "headers": [
+                "include/webcpp/json_schema/numbers/*.hpp",
+                "include/webcpp/json_schema/detail/numbers/*.hpp"
+            ],
+            "must-not-include": ["boost/locale", "webcpp/regex", "srell", "boost/url", "webcpp/lexical"],
+            "why": "the engines are reached only through their policies: Boost.Locale through output/locale.hpp, webcpp::regex through regex/webcpp_regex.hpp, Boost.URL through url/boost_url.hpp, formats through formats/default_formats.hpp"
+        },
+        {
+            "headers": ["include/webcpp/json_schema/ir/*.hpp"],
+            "must-not-include": [
+                "webcpp/json_schema/detail/compiler",
+                "webcpp/json_schema/detail/vm",
+                "webcpp/json_schema/output",
+                "webcpp/json_schema/emitter",
+                "boost/locale",
+                "webcpp/regex",
+                "srell",
+                "boost/url",
+                "webcpp/lexical"
+            ],
+            "why": "the IR is the contract; it knows no engine"
+        },
+        {
+            "headers": ["include/webcpp/json_schema/detail/json/*.hpp"],
+            "must-not-include": ["boost/locale", "webcpp/regex", "srell", "boost/url", "webcpp/lexical"],
+            "why": "the engines are reached only through their policies: Boost.Locale through output/locale.hpp, webcpp::regex through regex/webcpp_regex.hpp, Boost.URL through url/boost_url.hpp, formats through formats/default_formats.hpp"
+        },
+        {
+            "headers": [
+                "include/webcpp/json_schema/output/error.hpp",
+                "include/webcpp/json_schema/detail/vm/*.hpp",
+                "include/webcpp/json_schema/detail/output/*.hpp"
+            ],
+            "must-not-include": ["boost/locale", "webcpp/regex", "srell", "boost/url", "webcpp/lexical"],
+            "why": "the engines are reached only through their policies: Boost.Locale through output/locale.hpp, webcpp::regex through regex/webcpp_regex.hpp, Boost.URL through url/boost_url.hpp, formats through formats/default_formats.hpp"
+        },
+        {
+            "headers": [
+                "include/webcpp/json_schema/dialects/*.hpp",
+                "include/webcpp/json_schema/json/*.hpp"
+            ],
+            "must-not-include": ["boost/locale", "webcpp/regex", "srell", "boost/url", "webcpp/lexical"],
+            "why": "the engines are reached only through their policies: Boost.Locale through output/locale.hpp, webcpp::regex through regex/webcpp_regex.hpp, Boost.URL through url/boost_url.hpp, formats through formats/default_formats.hpp"
+        },
+        {
+            "headers": [
+                "include/webcpp/json_schema/output/message_hook.hpp",
+                "include/webcpp/json_schema/validator/options.hpp",
+                "include/webcpp/json_schema/registry/*.hpp",
+                "include/webcpp/json_schema/formats/format_set.hpp",
+                "include/webcpp/json_schema/vocabulary/*.hpp"
+            ],
+            "must-not-include": ["boost/locale", "webcpp/regex", "srell", "boost/url", "webcpp/lexical"],
+            "why": "the engines are reached only through their policies: Boost.Locale through output/locale.hpp, webcpp::regex through regex/webcpp_regex.hpp, Boost.URL through url/boost_url.hpp, formats through formats/default_formats.hpp"
+        },
+        {
+            "headers": [
+                "include/webcpp/json_schema/validator/validator.hpp",
+                "include/webcpp/json_schema/detail/dialects/*.hpp",
+                "include/webcpp/json_schema/detail/loader/*.hpp"
+            ],
+            "must-not-include": ["boost/locale", "webcpp/regex", "srell", "boost/url", "webcpp/lexical"],
+            "why": "the engines are reached only through their policies: Boost.Locale through output/locale.hpp, webcpp::regex through regex/webcpp_regex.hpp, Boost.URL through url/boost_url.hpp, formats through formats/default_formats.hpp"
+        },
+        {
+            "headers": ["include/webcpp/json_schema/regex/regex_policy.hpp"],
+            "must-not-include": ["boost/locale", "srell", "boost/url", "webcpp/lexical", "webcpp/regex"],
+            "why": "the policy's concept knows no engine"
+        },
+        {
+            "headers": ["include/webcpp/json_schema/regex/webcpp_regex.hpp"],
+            "must-not-include": ["boost/locale", "srell", "boost/url", "webcpp/lexical"],
+            "why": "webcpp::regex is reached only through this policy, and SRELL only through webcpp::regex"
+        }
+    ]
+}

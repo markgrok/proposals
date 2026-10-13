@@ -1,0 +1,57 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[#config-introduction]
+== Introduction
+
+config is webcpp's configuration, as
+https://www.boost.org/doc/libs/release/libs/config/[Boost.Config] is
+Boost's, one of the libraries of https://github.com/webcpporg/webcpp[webcpp].
+`<webcpp/config.hpp>` tells a program the target it is built for
+(<<config-targets>>) and whether webcpp has exceptions
+(<<config-exceptions>>), and `<webcpp/version.hpp>` webcpp's version
+(<<config-version>>).
+
+Every webcpp library's own configuration, `<webcpp/<library>/config.hpp>`,
+includes `<webcpp/config.hpp>` first, and every public header of the library
+includes its configuration first: whatever a program includes of webcpp,
+config is read before it. `<webcpp/config.hpp>` includes
+`<boost/config.hpp>` and `<webcpp/version.hpp>`, so a program that includes
+it has Boost.Config's macros and webcpp's version too.
+
+config is macros only, as Boost.Config is: it declares no namespace, no type
+and no function, and needs Boost's headers and nothing to build or link. Its
+macros are the collection's, `WEBCPP_*`, where every other library's are
+`WEBCPP_<LIBRARY>_*`, and so no library's name is `target`, `has`, `no`,
+`lib`, `version` or `test`, alone or followed by an underscore and more
+(`has_x`): its macros would meet config's, or the tests' `WEBCPP_TEST_*`.
+
+A library builds its own configuration on it. The program below holds the
+configuration of a library of its own, my_library, in a few lines: its macro
+`MY_LIBRARY_NO_EXCEPTIONS` is defined when webcpp has no exceptions, or when
+the developer defines it alone, as each webcpp library defines its
+`WEBCPP_<LIBRARY>_NO_EXCEPTIONS`:
+
+[source]
+----
+include::{examples}/config_quick_start.cpp[tag=library-config,indent=0]
+----
+
+The program then chooses its code by that macro, as the library's own code
+does:
+
+[source]
+----
+include::{examples}/config_quick_start.cpp[tag=main,indent=0]
+----
+
+Built with exceptions, as every target of webcpp builds by default, it
+prints, natively, on wasm32-wasip2, on wasm32-wasip3 and with Emscripten:
+
+[listing]
+----
+include::{examples}/config_quick_start.expected[]
+----

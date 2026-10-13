@@ -1,0 +1,1029 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+"""The CI's lanes: which ones run, each lane's b2 command, and the report that merges them.
+
+Usage: matrix.py plan [--library NAME] [--user-config FILE]
+       matrix.py own-lanes [--library NAME] [--user-config FILE]
+       matrix.py declares TARGET [--library NAME] [--user-config FILE]
+       matrix.py external [--library NAME]
+       matrix.py lane LANE [--user-config FILE] [--out-dir DIR] [-- B2-ARGUMENT ...]
+       matrix.py own-lane OWN-LANE [--user-config FILE] [--out-dir DIR] [-- B2-ARGUMENT ...]
+       matrix.py register ID [ID ...] [--user-config FILE]
+       matrix.py report --plan MATRIX [--own-lanes MATRIX] --lanes DIR --out DIR
+
+plan runs `b2 -d0 declared-targets` from the superproject's root and prints the JSON matrix of
+the lanes to run, {"include": [LANE, ...]}: one lane per compiler of LANES for each target a
+library declares, of the library --library names, else of every library. A lane builds the tests
+and examples of the libraries that declare its target, and no other: a lane of a target no
+library declares would build nothing. A target the CI has no lane for is a failure, never a lane
+left out. A lane says "external" when one of its libraries needs a library that webcpp does not
+build (see external, below), which the CI's actions of that name install before it runs, built
+with its "cc" and "cxx", the lane's own compilers, and "container" when its b2 runs in a Linux
+container with no network but the loopback.
+
+own-lanes runs `b2 -d0 declared-lanes` and prints the JSON matrix of the libraries' own lanes, of
+the library --library names, else of every library; empty, {"include":[]}, when none declares one,
+and a failure when --library names no library of libs/, as plan's does. An own lane is one a library
+declares with webcpp.lane, such as its oracle, or its served tests, and one job runs it, per target
+it runs on, in every directory D that declares it there: the entry {"library": L, "lane": N,
+"directories": [D, ...]}, with "kind", original when it runs the original's language in any of them
+(an oracle's twins or cases, a driven test's driver) and programs otherwise, as the line's last word
+says, "name", what the CI shows for the job, Own lane (L, N) or Own lane (L, N, T), the "os", "wasm"
+and "emsdk" of the lane whose setup it shares, and "node", true for a lane of the kind original,
+whose original runs with the CI's Node, and for one whose shared lane has Node, the emscripten
+lane's, which runs its programs; a served lane on wasip2 or wasip3 has none; "cc" and "cxx", the
+compilers of the lane it shares; "external", as a lane's; and "chrome", true for a lane of
+CHROME_LANES, whose driver meets a browser, which its job gives the pinned chrome-headless-shell as
+CHROME. One that names no target runs as `b2 -a toolset=clang-18 D//N ...`, whose exit status is its
+verdict: it writes no XML, so it is no column of the report. One that names targets is an entry per
+target T, which adds "platform": T and the "id" <T>.<L>.<N> (wasip2.wasi.http), and shares T's own
+lane, or the oracle's Clang 18 for native. It runs as that lane runs, with --dump-tests and
+--out-xml, and its XML, <id>.xml, is a column of the report under its id, which
+tools/report/report.py checks against the toolset it was built with and the library whose tests it
+lists. A target the CI has no lane to set up an own lane on fails the listing by name: an own lane
+is never run natively in its place.
+
+declares runs `b2 -d0 declared-targets` and prints true when some library of the superproject
+declares TARGET, else false: every library's, whatever --library names, which must be a library
+of libs/ as plan's must. The plan job writes it for emscripten as has-emscripten, on which the
+docs and lint jobs install emsdk: the lint analyses every library, and a page builds the page of
+each library it links, with its reference.
+
+external prints true when the library --library names, which must be a library of libs/, needs a
+library that webcpp does not build: it is in EXTERNAL_DEPENDENCIES, or a library of libs/ its
+build.jam or Jamfiles use (/webcpp/<name>), at any depth, is; else false. Without --library, it
+says whether any library of libs/ does. The plan job writes the first as external, on which the
+docs job installs those libraries, a page parsing its library's headers and those it uses, and the
+second as lint-external, on which the lint job, which analyses every library, installs them.
+
+lane runs one lane, LANE being one entry of that matrix as JSON: it registers the lane's toolset
+in the user-config.jam (unless it is there already), then runs the lane command the Jamroot
+documents,
+
+    b2 --user-config=FILE -a --dump-tests --out-xml=DIR/<lane>.xml toolset=<toolset> \\
+        <options> <B2-ARGUMENT ...> libs/<library>/test libs/<library>/example ...
+
+without CPATH, CPLUS_INCLUDE_PATH and C_INCLUDE_PATH. A lane is named after the directory b2
+builds it in, which tools/report/report.py checks: gcc-14, clang-linux-18, msvc-14.3, wasip2.
+Apple Clang's version is the image's, so its lane reads it from `clang++ -dumpversion` and
+registers clang under it: clang-darwin-17. With --out-xml, b2 exits 0 even when a test fails;
+the report is the verdict. B2-ARGUMENT is for a local run beside others, such as
+--build-dir=bin/lane-gcc-15; the CI passes none. A container lane, on Linux x86-64, first builds
+the image of tools/ci/container/Dockerfile, unless an image of its tag (the start of the
+Dockerfile's SHA-256) is there, as the CI's container action loads it, then runs that b2, by its
+path, in it, with `docker run --network none`, as the user who runs the lane, with the superproject
+and b2's prefix mounted at their own paths, and no variable of the environment: no test it runs can
+reach beyond the loopback. A lane whose entry says external gives b2 webcpp-require-external=on and
+-s<VARIABLE>=<dir> for each variable of EXTERNAL_VARIABLES set, which a library's build.jam reads
+from b2's command line alone; an own lane of such a library likewise.
+
+own-lane runs one own lane, OWN-LANE being one entry of the own-lanes matrix as JSON: it registers
+the toolset of the lane it shares (Clang 18 when it names no target), prints its b2 command and runs
+it. Without a target, b2's exit status is its verdict; with one, it writes DIR/<id>.xml, which the
+job uploads, and fails only when b2 cannot build at all, as a lane does.
+
+register adds the toolsets of the lanes named by id to the user-config.jam, in their order, the
+first being b2's default toolset: what the CI's tools job builds the tests of the tools with. A WASI
+lane's toolset is the region of tools/ci/wasi-sdk.jam between `# tag::<target>[]` and
+`# end::<target>[]`, after its region wasi-sdk, which names wasi-sdk's directory and gives it to the
+build as WASI_SDK, read when the lane registers its toolset, with wasi-sdk's directory, quoted, in
+place of /path/to/wasi-sdk and of $(wasi-sdk): the lines the documentation shows. The emscripten
+lane's toolset is likewise the region emscripten of tools/ci/emsdk.jam, after its region emsdk, with
+the directory where tools/ci/actions/emsdk installs the emsdk, quoted, in place of /path/to/emsdk
+and of $(emsdk), and the node wrapper it installs, quoted, in place of /path/to/node and of $(node).
+Each block of lines, the regions apart, is added once. A wasi-sdk.jam or an emsdk.jam without them
+fails what registers that toolset, a lane, an own lane on that target or register, naming the file
+and the tag; the plan and the report, which register nothing, never read them.
+
+report merges what the lanes of the matrix MATRIX wrote under DIR, one directory per lane,
+lane-<id>/<lane>.xml (as the CI downloads the lanes' artifacts), with tools/report/report.py into
+--out, and what the own lanes on a target of --own-lanes wrote, lane-<id>/<id>.xml. A lane of
+either that wrote no XML, as when its job failed before b2 ran, fails the report by name: the
+matrix would otherwise be green without it.
+
+The user-config.jam is .local/user-config.jam by default, where tools/ci/actions/boost writes the
+`using boost` line. Exit 0 on success; 1 when b2 or the report fails; 2 on a usage error, a
+--library that names no library, a target with no lane, a line of declared-lanes that is no own
+lane, an own lane on a target the CI cannot set up, a planned lane that wrote no XML, missing from
+the report, or a tools/ci/wasi-sdk.jam or tools/ci/emsdk.jam that does not hold the toolset to
+register.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+REPORT = ROOT / 'tools/report/report.py'
+
+# Whether site/ (webcpporg/webcpporg.github.io) is checked out, as Jamroot's own check: plan adds
+# site-test only then, and only for the whole superproject, which is what the site reads.
+SITE_JAMFILE = ROOT / 'site/Jamfile'
+
+# The targets a library may declare, which the report spells: tools/report/lanes.py's TARGETS.
+sys.path.insert(0, str(ROOT / 'tools/report'))
+from lanes import TARGETS  # noqa: E402
+
+COMPILER_PATHS = ('CPATH', 'CPLUS_INCLUDE_PATH', 'C_INCLUDE_PATH')
+
+# Where tools/ci/actions/wasi-sdk installs wasi-sdk, as the README installs it.
+WASI_SDK = '.local/wasi-sdk'
+
+# The lines that register each WASI toolset against $(wasi-sdk), each target's between its tag::
+# and end:: lines.
+WASI_SDK_JAM = ROOT / 'tools/ci/wasi-sdk.jam'
+
+# Where tools/ci/actions/emsdk installs the emsdk, and the node wrapper b2's emscripten toolset
+# runs a program with (tools/ci/actions/emsdk/node.sh).
+EMSDK = '.local/emsdk'
+EMSCRIPTEN_NODE = '.local/emscripten/node'
+
+# The lines that register b2's emscripten toolset against $(emsdk) and $(node), between the tag::
+# and end:: lines of the region emscripten.
+EMSDK_JAM = ROOT / 'tools/ci/emsdk.jam'
+
+# The libraries of libs/ whose build needs libraries webcpp does not build, and those libraries,
+# until webcpp builds them from third_party/ (AGENTS.md chapter 13): the CI's actions of these
+# names, tools/ci/actions/<name>, install each where the build looks, in .local/, before a lane,
+# an own lane, the docs or the lint that builds such a library runs.
+EXTERNAL_DEPENDENCIES = {'trystero': ('secp256k1', 'libdatachannel', 'openssl')}
+
+# The variables that name those libraries' directories, which the actions give a job, and a lane
+# of such a library passes to b2 as -s<VARIABLE>=<dir>: a library's build.jam reads them from b2's
+# command line alone, never from the environment.
+EXTERNAL_VARIABLES = ('SECP256K1_ROOT', 'SECP256K1_EMSCRIPTEN_ROOT', 'LIBDATACHANNEL_ROOT',
+                      'OPENSSL_ROOT')
+
+# The directory of the Dockerfile a container lane's image is built from, and the image, tagged
+# with the start of the Dockerfile's SHA-256: an image of another Dockerfile is never taken for it.
+# tools/ci/actions/container/install.sh tags the image it caches the same way.
+CONTAINER_CONTEXT = ROOT / 'tools/ci/container'
+
+
+def container_tag() -> str:
+    """The tag of the container lanes' image: webcpp-lane:<16 hex digits>, or the bare name when
+    the Dockerfile cannot be read, which then fails the build that needs it."""
+    try:
+        digest = hashlib.sha256((CONTAINER_CONTEXT / 'Dockerfile').read_bytes()).hexdigest()
+    except OSError:
+        return 'webcpp-lane'
+    return f'webcpp-lane:{digest[:16]}'
+
+
+CONTAINER_IMAGE = container_tag()
+
+# The own lanes whose driver meets a browser, (library, lane), which the CI's chrome action gives
+# its pinned chrome-headless-shell, as CHROME: trystero's interop, natively and on emscripten, and
+# document's js, whose examples Playwright runs in Chrome.
+CHROME_LANES = {('document', 'js'), ('trystero', 'interop')}
+
+# MSVC's lanes build 64-bit programs, embed their manifest with the linker and abbreviate b2's
+# paths against Windows's MAX_PATH, as xstate-cpp's green Windows jobs did. b2 abbreviates each
+# word of the toolset directory too, and msvc-14.3 and msvc-14.5 are their own abbreviations,
+# so the lanes keep their names (tools/ci/matrix_test.py checks it with b2's own rule).
+MSVC_OPTIONS = ('address-model=64', 'embed-manifest-via=linker', '--abbreviate-paths')
+
+
+@dataclass(frozen=True)
+class Lane:
+    """A lane: one toolset, one runner, for the libraries that declare its target."""
+
+    # Unique in a matrix, and fixed: the lane's job and artifact are named after it.
+    id: str
+    # What the CI shows for its job.
+    name: str
+    # The runner image.
+    os: str
+    # The target it builds for (tools/webcpp.jam): native, emscripten, wasip2 or wasip3.
+    target: str
+    # The directory b2 builds the lane in, and the lane's column in the report. {version} is the
+    # major version of the compiler `detect` names.
+    lane: str
+    toolset: str
+    # The lines that register the toolset in user-config.jam, in blocks an empty line apart, each
+    # added once. {wasi_sdk} is wasi-sdk's absolute directory, quoted; WASI_TOOLSET, the whole,
+    # stands for the lines of tools/ci/wasi-sdk.jam for the lane's target, and EMSCRIPTEN_TOOLSET
+    # for those of tools/ci/emsdk.jam, each read when the lane is registered.
+    using: str
+    # The compiler whose major version is {version}, or nothing.
+    detect: str = ''
+    options: tuple[str, ...] = ()
+    # Whether the lane needs wasi-sdk and wasmtime.
+    wasm: bool = False
+    # Whether the lane needs emsdk.
+    emsdk: bool = False
+    # Whether the lane needs Node, the CI's pinned one: emscripten's runs its programs with it.
+    node: bool = False
+    # The C and C++ compilers an external dependency is built with, the lane's own, or nothing
+    # for CMake's own choice: Visual Studio's for MSVC, and emscripten's native build of
+    # libsecp256k1, which no program of the lane links.
+    cc: str = ''
+    cxx: str = ''
+    # Whether its b2 runs in a Linux container with no network but the loopback.
+    container: bool = False
+    # Whether one of its libraries needs a library webcpp does not build (EXTERNAL_DEPENDENCIES):
+    # the plan sets it.
+    external: bool = False
+    # The b2 projects it builds: libs/<library>/test and libs/<library>/example of each library,
+    # or, for site-test, /webcpp/site//test alone.
+    projects: tuple[str, ...] = field(default_factory=tuple)
+    # Whether the lane writes --out-xml for the report: every lane does except site-test, whose
+    # npm test and typecheck write none, run as an own lane that names no target does, b2 -a
+    # toolset=<toolset> <projects>, its exit status alone the verdict.
+    reports: bool = True
+
+
+class Failure(Exception):
+    """What stops a command, said to the user, with the exit status it gives."""
+
+    def __init__(self, message: str, status: int = 1) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+# The directory the region wasi-sdk of WASI_SDK_JAM names, which register writes wasi-sdk's own in
+# place of.
+PLACEHOLDER = '/path/to/wasi-sdk'
+
+# What the region emsdk of EMSDK_JAM names, the emsdk's directory and the node, which register
+# writes the action's in place of.
+EMSDK_PLACEHOLDER = '/path/to/emsdk'
+NODE_PLACEHOLDER = '/path/to/node'
+
+
+def region_lines(jam: Path, tag: str, needed: str, what: str, fills: dict[str, str]) -> str:
+    """The lines of jam's region tag, which must hold needed and say what, with each key of fills
+    replaced by its value."""
+    try:
+        text = jam.read_text()
+    except OSError as error:
+        raise Failure(f'cannot read {jam}: {error.strerror}', 2) from error
+    found = re.search(rf'^# tag::{tag}\[\]\n(.*?)^# end::{tag}\[\]$', text,
+                      re.MULTILINE | re.DOTALL)
+    if found is None or needed not in found.group(1):
+        raise Failure(f'{jam} holds no lines tag::{tag}[] to end::{tag}[] that {what}', 2)
+    lines = found.group(1).rstrip('\n')
+    for old, new in fills.items():
+        lines = lines.replace(old, new)
+    return lines
+
+
+def toolset_lines(target: str) -> str:
+    """The lines that register target's toolset: the region wasi-sdk of WASI_SDK_JAM, then the
+    region target, an empty line between the two blocks, with {wasi_sdk} in place of wasi-sdk's
+    directory."""
+    fills = {PLACEHOLDER: '{wasi_sdk}', '$(wasi-sdk)': '{wasi_sdk}'}
+    sdk = region_lines(WASI_SDK_JAM, 'wasi-sdk', PLACEHOLDER,
+                       f'name wasi-sdk\'s directory, {PLACEHOLDER}', fills)
+    toolset = region_lines(WASI_SDK_JAM, target, '$(wasi-sdk)',
+                           f'register clang-{target} against $(wasi-sdk)', fills)
+    return f'{sdk}\n\n{toolset}'
+
+
+def emscripten_lines() -> str:
+    """The lines that register b2's emscripten toolset: the region emsdk of EMSDK_JAM, then the
+    region emscripten, an empty line between the two blocks, with {emsdk} in place of the emsdk's
+    directory and {node} in place of the node."""
+    fills = {EMSDK_PLACEHOLDER: '{emsdk}', '$(emsdk)': '{emsdk}', NODE_PLACEHOLDER: '{node}',
+             '$(node)': '{node}'}
+    sdk = region_lines(EMSDK_JAM, 'emsdk', EMSDK_PLACEHOLDER,
+                       f"name the emsdk's directory, {EMSDK_PLACEHOLDER}", fills)
+    toolset = region_lines(EMSDK_JAM, 'emscripten', '$(emsdk)',
+                           'register emscripten against $(emsdk)', fills)
+    return f'{sdk}\n\n{toolset}'
+
+
+# What a WASI lane's using stands for until it is registered: the lines toolset_lines reads, which
+# a wasi-sdk.jam that does not hold them fails then, naming the file and the tag, and only then.
+WASI_TOOLSET = '{wasi-sdk.jam}'
+
+
+# What the emscripten lane's using stands for until it is registered: the lines emscripten_lines
+# reads, which an emsdk.jam that does not hold them fails then, naming the file and the tag.
+EMSCRIPTEN_TOOLSET = '{emsdk.jam}'
+
+
+def wasm_lane(target: str) -> Lane:
+    return Lane(id=target, name=f'wasm32-{target} (wasi-sdk 34, wasmtime 47.0.3)',
+                os='ubuntu-24.04', target=target, lane=target, toolset=f'clang-{target}',
+                using=WASI_TOOLSET, options=('testing.launcher=wasmtime',), wasm=True)
+
+
+# Every lane the CI knows, by target. GCC and Clang on Linux build with libstdc++, the system's
+# standard library there: Clang on libstdc++ alone catches a regression of xactor's guarantee 28.
+# GCC 14 and Clang 18, on Ubuntu 24.04, run in a container with no network but the loopback, so
+# that a test that reaches beyond the machine fails there (trystero's guarantee 6).
+LANES = (
+    Lane(id='gcc-14', name='GCC 14 (container, no network)', os='ubuntu-24.04', target='native',
+         lane='gcc-14', toolset='gcc-14', using='using gcc : 14 : g++-14 ;', cc='gcc-14',
+         cxx='g++-14', container=True),
+    Lane(id='gcc-15', name='GCC 15', os='ubuntu-26.04', target='native', lane='gcc-15',
+         toolset='gcc-15', using='using gcc : 15 : g++-15 ;', cc='gcc-15', cxx='g++-15'),
+    Lane(id='clang-18', name='Clang 18 (libstdc++, container, no network)', os='ubuntu-24.04',
+         target='native', lane='clang-linux-18', toolset='clang-18',
+         using='using clang : 18 : clang++-18 ;', cc='clang-18', cxx='clang++-18',
+         container=True),
+    Lane(id='clang-22', name='Clang 22 (libstdc++)', os='ubuntu-26.04', target='native',
+         lane='clang-linux-22', toolset='clang-22', using='using clang : 22 : clang++-22 ;',
+         cc='clang-22', cxx='clang++-22'),
+    Lane(id='apple-clang', name='Apple Clang (macOS 15)', os='macos-15', target='native',
+         lane='clang-darwin-{version}', toolset='clang-{version}',
+         using='using clang : {version} : clang++ ;', detect='clang++', cc='clang',
+         cxx='clang++'),
+    Lane(id='msvc-14.3', name='MSVC 14.3 (Visual Studio 2022)', os='windows-2022',
+         target='native', lane='msvc-14.3', toolset='msvc-14.3', using='using msvc : 14.3 ;',
+         options=MSVC_OPTIONS),
+    Lane(id='msvc-14.5', name='MSVC 14.5 (Visual Studio 2026)', os='windows-2025',
+         target='native', lane='msvc-14.5', toolset='msvc-14.5', using='using msvc : 14.5 ;',
+         options=MSVC_OPTIONS),
+    Lane(id='emscripten', name='Emscripten 6.0.11 (node)', os='ubuntu-24.04',
+         target='emscripten', lane='emscripten', toolset='emscripten',
+         using=EMSCRIPTEN_TOOLSET, emsdk=True, node=True),
+    wasm_lane('wasip2'),
+    wasm_lane('wasip3'),
+)
+
+# The site's own tests (site/Jamfile, b2 /webcpp/site//test), run on Clang 18 as an own lane that
+# names no target does: its toolset builds nothing of the site, which is JavaScript and Python,
+# but b2 needs one registered to load the project at all. plan adds it whenever the site is
+# checked out and no single library is named: the site reads every library, so it is the
+# superproject's own lane, never one library's.
+SITE_TEST = Lane(id='site-test', name="The site's own tests", os='ubuntu-24.04', target='site',
+                 lane='site-test', toolset='clang-18', using='using clang : 18 : clang++-18 ;',
+                 cc='clang-18', cxx='clang++-18', projects=('/webcpp/site//test',), reports=False)
+
+
+def environment() -> dict[str, str]:
+    """This process's environment without the variables the Jamroot refuses."""
+    return {name: value for name, value in os.environ.items() if name not in COMPILER_PATHS}
+
+
+def printed(target: str, user_config: Path) -> list[str]:
+    """The lines `b2 -d0 <target>` prints, without b2's own warnings."""
+    command = ['b2', f'--user-config={user_config}', '-d0', target]
+    try:
+        completed = subprocess.run(command, cwd=ROOT, env=environment(), capture_output=True,
+                                   text=True, check=False)
+    except OSError as error:
+        raise Failure(f'cannot run b2: {error.strerror}') from error
+    if completed.returncode != 0:
+        raise Failure(f'{completed.stdout}{completed.stderr}{shlex.join(command)} exited '
+                      f'{completed.returncode}')
+    # b2's own warnings, such as the default toolset it configures when user-config.jam
+    # registers none, as the plan job's does; -d0 does not hide them.
+    return [line for line in completed.stdout.splitlines() if not line.startswith('warning: ')]
+
+
+def declared(user_config: Path) -> list[tuple[str, str]]:
+    """The pairs (library, target) `b2 declared-targets` prints."""
+    pairs = []
+    for line in printed('declared-targets', user_config):
+        words = line.split()
+        if len(words) != 2:
+            raise Failure(f'b2 declared-targets printed {line!r}, not "<library> <target>"')
+        pairs.append((words[0], words[1]))
+    return pairs
+
+
+def declares(pairs: list[tuple[str, str]], target: str, library: str | None) -> bool:
+    """Whether some library of the pairs (library, target) declares target, whatever library,
+    which must declare a target, names."""
+    if target not in TARGETS:
+        raise Failure(f'{target} is no target the CI knows: {", ".join(TARGETS)}', 2)
+    if library is not None and library not in {name for name, _ in pairs}:
+        raise Failure(f'libs/{library} declares no target, or is no library of libs/ '
+                      '(a directory with a build.jam)', 2)
+    return any(declared == target for _, declared in pairs)
+
+
+def plan(pairs: list[tuple[str, str]], library: str | None) -> list[Lane]:
+    """The lanes for the pairs (library, target), of library alone when it is given."""
+    if library is not None:
+        if library not in {name for name, _ in pairs}:
+            raise Failure(f'libs/{library} declares no target, or is no library of libs/ '
+                          '(a directory with a build.jam)', 2)
+        pairs = [(name, target) for name, target in pairs if name == library]
+    if not pairs:
+        raise Failure('no library declares a target: there is nothing to build', 2)
+    unknown = sorted({target for _, target in pairs if target not in TARGETS})
+    if unknown:
+        raise Failure(f'b2 declared-targets names targets the CI does not know: '
+                      f'{", ".join(unknown)}', 2)
+    targets = {target for _, target in pairs}
+    missing = sorted(targets - {lane.target for lane in LANES})
+    if missing:
+        declaring = sorted({name for name, target in pairs if target in missing})
+        raise Failure(f'{", ".join(declaring)} declare {", ".join(missing)}, which the CI has '
+                      'no lane for: a target is never left untested', 2)
+    lanes = []
+    for lane in LANES:
+        libraries = sorted({name for name, target in pairs if target == lane.target})
+        if libraries:
+            projects = tuple(f'libs/{name}/{part}' for name in libraries
+                             for part in ('test', 'example'))
+            external = any(needs_external(name) for name in libraries)
+            lanes.append(replace(lane, projects=projects, external=external))
+    if library is None and SITE_JAMFILE.is_file():
+        lanes.append(SITE_TEST)
+    return lanes
+
+
+# A library of libs/ that a Jamfile uses: <library>/webcpp/<name>//<target>, or a project path
+# /webcpp/<name>.
+USES = re.compile(r'/webcpp/([a-z][a-z0-9_]*)(?=//|[\s;:]|$)', re.MULTILINE)
+
+
+def used(library: str) -> set[str]:
+    """The libraries of libs/ that library's build.jam and Jamfiles name, itself left out."""
+    directory = ROOT / 'libs' / library
+    files = [directory / 'build.jam', *directory.rglob('Jamfile')]
+    names: set[str] = set()
+    for file in files:
+        try:
+            names.update(USES.findall(file.read_text()))
+        except OSError:
+            continue
+    return {name for name in names
+            if name != library and (ROOT / 'libs' / name / 'build.jam').is_file()}
+
+
+def needs_external(library: str) -> bool:
+    """Whether library needs a library webcpp does not build: it is in EXTERNAL_DEPENDENCIES, or
+    a library it uses, at any depth, is."""
+    seen: set[str] = set()
+    pending = [library]
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        if name in EXTERNAL_DEPENDENCIES:
+            return True
+        seen.add(name)
+        pending.extend(used(name))
+    return False
+
+
+def has_external(library: str | None) -> bool:
+    """Whether library, which must be a library of libs/, needs a library webcpp does not build,
+    itself or through one it uses; without one, whether any library of libs/ does."""
+    if library is not None:
+        if not (ROOT / 'libs' / library / 'build.jam').is_file():
+            raise Failure(f'libs/{library} is no library of libs/ (a directory with a build.jam)',
+                          2)
+        return needs_external(library)
+    return any(needs_external(build.parent.name) for build in ROOT.glob('libs/*/build.jam'))
+
+
+# A line of `b2 declared-lanes`: a library, the name of one of its lanes, the directory of the
+# Jamfile that declares it, under the library's test or example directory, the target it runs on,
+# when it names one, and its kind. The job runs `b2 -a <directory>//<lane> ...` from these words,
+# and sets up what the kind needs, so each is checked whole.
+OWN_LANE = re.compile(
+    r'([a-z][a-z0-9_]*) ([A-Za-z0-9][A-Za-z0-9_.-]*) (libs/[^ ]+)(?: ([^ ]+))? ([^ ]+)')
+
+# The kinds of an own lane, as tools/webcpp.jam's webcpp.lane computes them: original, when it
+# runs the original's language (an oracle's twins or cases, a driven test's driver), which the
+# CI's Node runs, and programs, when it runs only what its toolset builds.
+KINDS = ('original', 'programs')
+
+# The lane whose toolset, options and setup an own lane shares, by the target it runs on: the
+# target's own lane, and Clang 18's, the oracle's, for native and for an own lane that names no
+# target (None). Each runs on Linux x86-64.
+OWN_LANE_BASES = {None: 'clang-18', 'native': 'clang-18', 'emscripten': 'emscripten',
+                  'wasip2': 'wasip2', 'wasip3': 'wasip3'}
+
+
+@dataclass(frozen=True)
+class OwnLane:
+    """An own lane: a lane a library declares, on one target or on none, in every directory that
+    declares it there, run as one job."""
+
+    library: str
+    lane: str
+    # The directories whose Jamfiles declare it, sorted: libs/wasi/example and libs/wasi/test.
+    directories: tuple[str, ...]
+    # The target it runs on, or None for one that names none.
+    target: str | None = None
+    # One of KINDS: original when the lane runs the original's language in any of its
+    # directories.
+    kind: str = 'programs'
+
+    @property
+    def id(self) -> str:
+        """Its name in the report, its XML's and its artifact's: <target>.<library>.<lane>, which
+        no lane of LANES is named, so that its column stands beside the target's own."""
+        return f'{self.target}.{self.library}.{self.lane}'
+
+    @property
+    def name(self) -> str:
+        """What the CI shows for its job."""
+        words = [self.library, self.lane, *([self.target] if self.target else [])]
+        return f'Own lane ({", ".join(words)})'
+
+    @property
+    def requests(self) -> list[str]:
+        """The b2 targets that run it, one per directory."""
+        return [f'{directory}//{self.lane}' for directory in self.directories]
+
+
+def parsed_own_lanes(text: str) -> list[OwnLane]:
+    """The own lanes of the lines text holds, as `b2 declared-lanes` prints them, each line
+    checked: one per library, lane and target, with every directory that declares it there, of
+    the kind original when one of them runs the original."""
+    grouped: dict[tuple[str, str, str | None], list[str]] = {}
+    kinds: dict[tuple[str, str, str | None], set[str]] = {}
+    for line in text.splitlines():
+        found = OWN_LANE.fullmatch(line)
+        if found is None:
+            raise Failure(f'b2 declared-lanes printed {line!r}, not "<library> <lane> '
+                          '<directory> [<target>] <kind>"', 2)
+        library, lane, directory, target, kind = found.groups()
+        under = re.fullmatch(rf'libs/{library}/(test|example)(/[A-Za-z0-9_.-]+)*', directory)
+        if under is None or '/..' in directory or '/./' in f'{directory}/':
+            raise Failure(f'b2 declared-lanes printed {line!r}, whose directory is not in '
+                          f'libs/{library}/test or libs/{library}/example', 2)
+        if target is not None and target not in TARGETS:
+            raise Failure(f'b2 declared-lanes printed {line!r}: {target} is not a target; the '
+                          f'targets are {", ".join(TARGETS)}', 2)
+        if kind not in KINDS:
+            raise Failure(f'b2 declared-lanes printed {line!r}: {kind} is not a kind; the kinds '
+                          f'are {", ".join(KINDS)}', 2)
+        directories = grouped.setdefault((library, lane, target), [])
+        if directory not in directories:
+            directories.append(directory)
+        kinds.setdefault((library, lane, target), set()).add(kind)
+    return [OwnLane(library, lane, tuple(sorted(directories)), target,
+                    'original' if 'original' in kinds[(library, lane, target)] else 'programs')
+            for (library, lane, target), directories
+            in sorted(grouped.items(), key=lambda item: (item[0][:2], item[0][2] or ''))]
+
+
+def own_lane_base(target: str | None) -> Lane:
+    """The lane an own lane on target, or on none, shares its toolset and its setup with."""
+    known = {lane.id: lane for lane in LANES}
+    if target not in OWN_LANE_BASES:
+        raise Failure(f'an own lane on {target} needs a lane of that target to share its setup '
+                      'with, and the CI has none', 2)
+    return known[OWN_LANE_BASES[target]]
+
+
+def own_lane_entry(own: OwnLane) -> dict[str, object]:
+    """The own lane as an entry of the own-lanes matrix: its library, its lane and its
+    directories; its target and its id when it names one; and, for every entry, its kind, the name
+    of its job, the image, the setup and the compilers of the lane it shares, and whether its
+    library needs a library webcpp does not build, which the job reads from here alone."""
+    base = own_lane_base(own.target)
+    entry: dict[str, object] = {'library': own.library, 'lane': own.lane,
+                                'directories': list(own.directories)}
+    if own.target is not None:
+        entry.update(platform=own.target, id=own.id)
+    # Node where the lane shares it with its target's own lane, emscripten's, whose programs node
+    # runs, and for a lane of the kind original, natively too: an oracle runs npm and its original
+    # with it, and a driven test its driver. Without the CI's Node, one would run with the
+    # image's own, another version. A lane of programs alone, a served one, needs none.
+    node = base.node or own.kind == 'original'
+    entry.update(kind=own.kind, name=own.name, os=base.os, wasm=base.wasm, emsdk=base.emsdk,
+                 node=node, cc=base.cc, cxx=base.cxx, external=needs_external(own.library),
+                 chrome=(own.library, own.lane) in CHROME_LANES)
+    return entry
+
+
+def own_lanes(user_config: Path, library: str | None) -> list[OwnLane]:
+    """The own lanes the libraries declare, of library alone when it is given, which must be a
+    library of libs/: one that declares no own lane has none, one that does not exist fails. An
+    own lane on a target the CI has no lane to set up fails, by name."""
+    if library is not None and not (ROOT / 'libs' / library / 'build.jam').is_file():
+        raise Failure(f'libs/{library} is no library of libs/ (a directory with a build.jam)', 2)
+    lanes = parsed_own_lanes('\n'.join(printed('declared-lanes', user_config)))
+    lanes = [lane for lane in lanes if library is None or lane.library == library]
+    for own in lanes:
+        try:
+            own_lane_base(own.target)
+        except Failure as failure:
+            raise Failure(f'{own.library} declares its own lane {own.lane} in '
+                          f'{" and ".join(own.directories)} on {own.target}, which the CI cannot '
+                          f'set up: {failure}', 2) from None
+    return lanes
+
+
+def parsed_own_lane(text: str) -> OwnLane:
+    """The OwnLane of an entry of the own-lanes matrix, given as JSON, read again from its words
+    as `b2 declared-lanes` prints them, a line per directory, so that each is checked as the
+    listing checks it."""
+    try:
+        entry = json.loads(text)
+        words = [entry['library'], entry['lane']]
+        directories = entry['directories']
+        target = [entry['platform']] if 'platform' in entry else []
+        kind = entry['kind']
+        if not isinstance(directories, list) or not directories:
+            raise TypeError('directories that are not a list of them')
+        if not all(isinstance(word, str) for word in (*words, *directories, *target, kind)):
+            raise TypeError('a word that is not a string')
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise Failure(f'the own lane is not an entry of the matrix own-lanes writes: {error}',
+                      2) from None
+    lanes = parsed_own_lanes('\n'.join(' '.join([*words, directory, *target, kind])
+                                       for directory in directories))
+    if len(lanes) != 1:
+        raise Failure(f'the own lane {text} is not one entry of the matrix own-lanes writes', 2)
+    return lanes[0]
+
+
+def matrix(lanes: list[Lane]) -> str:
+    """The lanes as the JSON of a job's strategy.matrix, on one line."""
+    return json.dumps({'include': [asdict(lane) for lane in lanes]}, separators=(',', ':'))
+
+
+def parsed_lane(text: str) -> Lane:
+    """The Lane of an entry of the matrix, given as JSON."""
+    try:
+        entry = json.loads(text)
+        entry['options'] = tuple(entry['options'])
+        entry['projects'] = tuple(entry['projects'])
+        return Lane(**entry)
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise Failure(f'the lane is not an entry of the matrix plan writes: {error}', 2) from None
+
+
+def major_version(compiler: str) -> str:
+    """The major version of compiler: 17 for an Apple Clang that says 17.0.0."""
+    try:
+        completed = subprocess.run([compiler, '-dumpversion'], capture_output=True, text=True,
+                                   check=False)
+    except OSError as error:
+        raise Failure(f'cannot run {compiler}: {error.strerror}') from error
+    major = completed.stdout.strip().split('.')[0]
+    if completed.returncode != 0 or not major.isdigit():
+        raise Failure(f'{compiler} -dumpversion printed {completed.stdout.strip()!r}, exit '
+                      f'status {completed.returncode}: no version to name the lane by')
+    return major
+
+
+def resolved(lane: Lane) -> Lane:
+    """lane with its WASI_TOOLSET or EMSCRIPTEN_TOOLSET read, and its {version}, {wasi_sdk},
+    {emsdk} and {node} filled in."""
+    version = major_version(lane.detect) if lane.detect else ''
+    # Quoted, one word of Jam however many spaces the checkout's path holds; the quotes end
+    # where the directory does, so that <archiver>"<wasi-sdk>"/bin/llvm-ar stays one word too.
+    wasi_sdk = f'"{(ROOT / WASI_SDK).as_posix()}"'
+    emsdk = f'"{(ROOT / EMSDK).as_posix()}"'
+    node = f'"{(ROOT / EMSCRIPTEN_NODE).as_posix()}"'
+    using = lane.using
+    if using == WASI_TOOLSET:
+        using = toolset_lines(lane.target)
+    elif using == EMSCRIPTEN_TOOLSET:
+        using = emscripten_lines()
+
+    def fill(text: str) -> str:
+        return (text.replace('{version}', version).replace('{wasi_sdk}', wasi_sdk)
+                .replace('{emsdk}', emsdk).replace('{node}', node))
+
+    return replace(lane, lane=fill(lane.lane), toolset=fill(lane.toolset), using=fill(using))
+
+
+def holds(text: str, lines: str) -> bool:
+    """Whether text holds lines, whole lines one after the other."""
+    held, wanted = text.splitlines(), lines.splitlines()
+    return any(held[start:start + len(wanted)] == wanted
+               for start in range(len(held) - len(wanted) + 1))
+
+
+def register(lane: Lane, user_config: Path) -> None:
+    """Adds each block of the lane's using lines, an empty line apart, to user_config, unless it
+    holds those lines already: the region wasi-sdk, which two WASI lanes share, is added once."""
+    text = user_config.read_text() if user_config.is_file() else ''
+    added = text
+    for block in lane.using.split('\n\n'):
+        if holds(added, block):
+            continue
+        if added and not added.endswith('\n'):
+            added += '\n'
+        added += f'{block}\n'
+    if added == text:
+        return
+    user_config.parent.mkdir(parents=True, exist_ok=True)
+    user_config.write_text(added)
+
+
+def external_arguments(external: bool) -> list[str]:
+    """What b2 is given for a lane whose libraries need libraries webcpp does not build: that the
+    build requires them (webcpp-require-external=on, so that a library is never left out without
+    a word), and -s<VARIABLE>=<dir> for each variable of EXTERNAL_VARIABLES the CI's actions set,
+    on the command line, where a library's build.jam reads them; none of them otherwise."""
+    if not external:
+        return []
+    return ['webcpp-require-external=on',
+            *(f'-s{name}={os.environ[name]}' for name in EXTERNAL_VARIABLES
+              if os.environ.get(name))]
+
+
+def lane_command(lane: Lane, user_config: Path, xml: Path | None, extra: list[str]) -> list[str]:
+    """The lane command: b2, from scratch, for the lane's toolset and projects; writing xml,
+    except when lane.reports is false (site-test), whose exit status alone is the verdict, as an
+    own lane that names no target runs."""
+    if not lane.reports:
+        return ['b2', f'--user-config={user_config}', '-a', f'toolset={lane.toolset}',
+                *external_arguments(lane.external), *lane.options, *extra, *lane.projects]
+    return ['b2', f'--user-config={user_config}', '-a', '--dump-tests', f'--out-xml={xml}',
+            f'toolset={lane.toolset}', *external_arguments(lane.external), *lane.options, *extra,
+            *lane.projects]
+
+
+def own_lane_command(own: OwnLane, user_config: Path, xml: Path | None,
+                     extra: list[str]) -> list[str]:
+    """The own lane's command: b2, from scratch, on <directory>//<lane> for each of its
+    directories; with Clang 18 when it names no target, and otherwise with the toolset and the
+    options of the lane it shares, writing xml, as that lane does."""
+    base = own_lane_base(own.target)
+    external = external_arguments(needs_external(own.library))
+    if own.target is None:
+        return ['b2', f'--user-config={user_config}', '-a', f'toolset={base.toolset}', *external,
+                *extra, *own.requests]
+    return ['b2', f'--user-config={user_config}', '-a', '--dump-tests', f'--out-xml={xml}',
+            f'toolset={base.toolset}', *external, *base.options, *extra, *own.requests]
+
+
+def run_b2(label: str, command: list[str]) -> int:
+    """Prints command after label, runs it from the superproject's root, and returns its exit
+    status."""
+    print(f'{label}: {shlex.join(command)}', flush=True)
+    try:
+        return subprocess.run(command, cwd=ROOT, env=environment(), check=False).returncode
+    except OSError as error:
+        raise Failure(f'cannot run b2: {error.strerror}') from error
+
+
+def recorded(label: str, name: str, xml: Path, status: int) -> int:
+    """Writes the job's outputs, the lane's name and its XML only when b2 wrote it, so that the
+    upload step runs only on a file that is there; and fails when b2, which ran with --out-xml,
+    could not build at all or wrote no XML."""
+    github_output = os.environ.get('GITHUB_OUTPUT')
+    if github_output:
+        with open(github_output, 'a') as output:
+            output.write(f'lane={name}\n')
+            if xml.is_file():
+                output.write(f'xml={xml.as_posix()}\n')
+    if status != 0:
+        raise Failure(f'{label}: b2 exited {status}; with --out-xml it does so only when it '
+                      'cannot build at all, a test failing is the report\'s to say')
+    if not xml.is_file():
+        raise Failure(f'{label}: b2 wrote no {xml}')
+    return 0
+
+
+def fresh_xml(out_dir: Path, name: str) -> Path:
+    """out_dir/<name>.xml, with no file left there by an earlier run."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    xml = out_dir / f'{name}.xml'
+    if xml.exists():
+        xml.unlink()
+    return xml
+
+
+def container_image() -> None:
+    """Builds the image a container lane runs in, from CONTAINER_CONTEXT, with the network its
+    packages are installed from, unless an image of that tag is there: the CI's container action
+    loads the one it built once and cached."""
+    try:
+        present = subprocess.run(['docker', 'image', 'inspect', CONTAINER_IMAGE],
+                                 capture_output=True, check=False).returncode == 0
+    except OSError as error:
+        raise Failure(f'cannot run docker: {error.strerror}') from error
+    if present:
+        print(f'container: {CONTAINER_IMAGE} is there', flush=True)
+        return
+    command = ['docker', 'build', '--tag', CONTAINER_IMAGE, str(CONTAINER_CONTEXT)]
+    print(f'container: {shlex.join(command)}', flush=True)
+    try:
+        status = subprocess.run(command, cwd=ROOT, check=False).returncode
+    except OSError as error:
+        raise Failure(f'cannot run docker: {error.strerror}') from error
+    if status != 0:
+        raise Failure(f'{shlex.join(command)} exited {status}')
+
+
+def contained(command: list[str], mounted: list[Path]) -> list[str]:
+    """command, whose first word is b2, run in the container image with no network but the
+    loopback: b2 by its path, as the user who runs the lane, with ROOT, b2's prefix (the Boost
+    action installs b2 and Boost's headers in one) and each directory of mounted at their own
+    paths, and no variable of the environment."""
+    found = shutil.which(command[0])
+    if found is None:
+        raise Failure(f'cannot find {command[0]} on PATH')
+    b2 = Path(found).resolve()
+    directories: list[Path] = []
+    for directory in (ROOT, b2.parents[1], *mounted):
+        if not any(directory == known or known in directory.parents for known in directories):
+            directories.append(directory)
+    volumes = [word for directory in directories
+               for word in ('--volume', f'{directory}:{directory}')]
+    return ['docker', 'run', '--rm', '--network', 'none', '--user',
+            f'{os.getuid()}:{os.getgid()}', '--workdir', str(ROOT), *volumes,
+            CONTAINER_IMAGE, str(b2), *command[1:]]
+
+
+def run_lane(lane: Lane, user_config: Path, out_dir: Path, extra: list[str]) -> int:
+    """Runs the lane, in its container when it has one, and returns its exit status; one that
+    reports no XML (site-test) by its exit status alone, as an own lane without a target does."""
+    lane = resolved(lane)
+    register(lane, user_config)
+    label = f'lane {lane.lane}'
+    if not lane.reports:
+        status = run_b2(label, lane_command(lane, user_config, None, extra))
+        if status != 0:
+            raise Failure(f'{label}: b2 exited {status}')
+        return 0
+    xml = fresh_xml(out_dir, lane.lane)
+    command = lane_command(lane, user_config, xml, extra)
+    if lane.container:
+        container_image()
+        command = contained(command, [user_config.parent, xml.parent])
+    status = run_b2(label, command)
+    return recorded(label, lane.lane, xml, status)
+
+
+def run_own_lane(own: OwnLane, user_config: Path, out_dir: Path, extra: list[str]) -> int:
+    """Runs the own lane, and returns its exit status."""
+    register(resolved(own_lane_base(own.target)), user_config)
+    if own.target is None:
+        label = f'own lane {" ".join(own.requests)}'
+        status = run_b2(label, own_lane_command(own, user_config, None, extra))
+        if status != 0:
+            raise Failure(f'{label}: b2 exited {status}')
+        return 0
+    xml = fresh_xml(out_dir, own.id)
+    label = f'own lane {own.id}'
+    status = run_b2(label, own_lane_command(own, user_config, xml, extra))
+    return recorded(label, own.id, xml, status)
+
+
+def register_lanes(ids: list[str], user_config: Path) -> None:
+    """Registers the toolsets of the lanes ids in user_config, in their order: the first is b2's
+    default toolset."""
+    known = {lane.id: lane for lane in LANES}
+    unknown = [lane_id for lane_id in ids if lane_id not in known]
+    if unknown:
+        raise Failure(f'no lane {", ".join(unknown)}; the lanes are {", ".join(known)}', 2)
+    # Each read first, so that one that cannot be read leaves user_config as it was.
+    for lane in [resolved(known[lane_id]) for lane_id in ids]:
+        register(lane, user_config)
+
+
+def lane_files(lanes: list[Lane], directory: Path) -> tuple[list[tuple[str, Path]], list[Lane]]:
+    """The (name, file) of each lane's XML under directory/lane-<id>/, and the lanes with none."""
+    found = []
+    missing = []
+    for lane in lanes:
+        files = sorted((directory / f'lane-{lane.id}').glob('*.xml'))
+        if len(files) == 1:
+            found.append((files[0].stem, files[0]))
+        else:
+            missing.append(lane)
+    return found, missing
+
+
+def run_report(lanes: list[Lane], directory: Path, out: Path) -> int:
+    """Runs tools/report/report.py on what the lanes wrote, and returns the verdict: a lane that
+    reports no XML (site-test) is its own job's verdict, never named here, missing or found."""
+    found, missing = lane_files([lane for lane in lanes if lane.reports], directory)
+    status = 0
+    if found:
+        arguments = [argument for name, file in found for argument in ('--lane', f'{name}={file}')]
+        status = subprocess.run([sys.executable, str(REPORT), *arguments, '--out', str(out)],
+                                check=False).returncode
+    for lane in missing:
+        print(f'matrix.py: the lane {lane.id} ({lane.name}) wrote no XML under '
+              f'{directory / f"lane-{lane.id}"}: its job failed before b2 ran, or b2 could not '
+              'build at all', file=sys.stderr)
+    if missing:
+        return 2
+    return status
+
+
+def main(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog='matrix.py',
+                                     description=(__doc__ or '').split('\n', 1)[0])
+    commands = parser.add_subparsers(dest='command', required=True)
+    default_config = ROOT / '.local/user-config.jam'
+
+    planning = commands.add_parser('plan', help='print the JSON matrix of the lanes')
+    planning.add_argument('--library', help='plan the lanes of this library alone')
+    planning.add_argument('--user-config', type=Path, default=default_config)
+
+    owning = commands.add_parser('own-lanes',
+                                 help="print the JSON matrix of the libraries' own lanes")
+    owning.add_argument('--library', help='list the own lanes of this library alone')
+    owning.add_argument('--user-config', type=Path, default=default_config)
+
+    declaring = commands.add_parser(
+        'declares', help='print true when some library declares the target, else false')
+    declaring.add_argument('target', metavar='TARGET', help='a target: emscripten, wasip2')
+    declaring.add_argument('--library', help='the library the CI runs for, which must exist')
+    declaring.add_argument('--user-config', type=Path, default=default_config)
+
+    externals = commands.add_parser(
+        'external', help='print true when some library needs a library webcpp does not build')
+    externals.add_argument('--library', help='the library the CI runs for, which must exist')
+
+    running = commands.add_parser(
+        'lane', help='run one lane of the matrix',
+        epilog='After --, more arguments for b2, such as --build-dir=bin/lane-gcc-15.')
+    running.add_argument('entry', metavar='LANE', help='an entry of the matrix, as JSON')
+    running.add_argument('--user-config', type=Path, default=default_config)
+    running.add_argument('--out-dir', type=Path, default=Path('bin/ci'))
+
+    registering = commands.add_parser(
+        'register', help="register lanes' toolsets in user-config.jam, the first the default")
+    registering.add_argument('ids', nargs='+', metavar='ID', help='a lane id: gcc-14, wasip2')
+    registering.add_argument('--user-config', type=Path, default=default_config)
+
+    own_running = commands.add_parser(
+        'own-lane', help='run one own lane of the own-lanes matrix',
+        epilog='After --, more arguments for b2, such as --build-dir=bin/lane-http.')
+    own_running.add_argument('entry', metavar='OWN-LANE',
+                             help='an entry of the own-lanes matrix, as JSON')
+    own_running.add_argument('--user-config', type=Path, default=default_config)
+    own_running.add_argument('--out-dir', type=Path, default=Path('bin/ci'))
+
+    reporting = commands.add_parser('report', help="merge the lanes' XML into the test matrix")
+    reporting.add_argument('--plan', required=True, metavar='MATRIX',
+                           help='the matrix plan printed, as JSON')
+    reporting.add_argument('--own-lanes', default='{"include":[]}', metavar='MATRIX',
+                           help='the matrix own-lanes printed, as JSON')
+    reporting.add_argument('--lanes', required=True, type=Path, metavar='DIR')
+    reporting.add_argument('--out', required=True, type=Path, metavar='DIR')
+
+    # What follows the first -- goes to b2 as it is: argparse's own reading of -- after a
+    # subcommand differs from one Python to the next.
+    extra: list[str] = []
+    if '--' in arguments:
+        extra = arguments[arguments.index('--') + 1:]
+        arguments = arguments[:arguments.index('--')]
+    options = parser.parse_args(arguments)
+    try:
+        if options.command == 'plan':
+            print(matrix(plan(declared(options.user_config.resolve()), options.library)))
+            return 0
+        if options.command == 'declares':
+            found = declares(declared(options.user_config.resolve()), options.target,
+                             options.library)
+            print('true' if found else 'false')
+            return 0
+        if options.command == 'external':
+            print('true' if has_external(options.library) else 'false')
+            return 0
+        if options.command == 'own-lanes':
+            listed = [own_lane_entry(own)
+                      for own in own_lanes(options.user_config.resolve(), options.library)]
+            print(json.dumps({'include': listed}, separators=(',', ':')))
+            return 0
+        if options.command in ('lane', 'own-lane'):
+            out_dir = options.out_dir if options.out_dir.is_absolute() else ROOT / options.out_dir
+            if options.command == 'lane':
+                return run_lane(parsed_lane(options.entry), options.user_config.resolve(),
+                                out_dir, extra)
+            return run_own_lane(parsed_own_lane(options.entry), options.user_config.resolve(),
+                                out_dir, extra)
+        if options.command == 'register':
+            register_lanes(options.ids, options.user_config.resolve())
+            return 0
+        try:
+            planned = json.loads(options.plan)['include']
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise Failure(f'--plan is not the matrix plan writes: {error}', 2) from None
+        try:
+            owned = json.loads(options.own_lanes)['include']
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise Failure(f'--own-lanes is not the matrix own-lanes writes: {error}', 2) from None
+        lanes = [parsed_lane(json.dumps(entry)) for entry in planned]
+        # An own lane on a target writes XML as a lane does, under its id; one that names none
+        # writes none, and its job is its verdict.
+        for own in (parsed_own_lane(json.dumps(entry)) for entry in owned):
+            if own.target is not None:
+                lanes.append(replace(own_lane_base(own.target), id=own.id, name=own.name,
+                                     lane=own.id))
+        return run_report(lanes, options.lanes, options.out)
+    except Failure as failure:
+        print(f'matrix.py: {failure}', file=sys.stderr)
+        return failure.status
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

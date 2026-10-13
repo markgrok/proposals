@@ -1,0 +1,35 @@
+From 611879351d1f95145131b78556c084ad6871e6e7 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 18:16:41 -0400
+Subject: [PATCH 7/8] site/: the trace, C++ scopes and JavaScript crossings,
+ and the player's sound
+
+---
+ AGENTS.md | 3 ++-
+ site      | 2 +-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index a9ccdf2..c1e1e0c 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1762,7 +1762,8 @@ libraries.json      the catalogue
+ `webcpporg/webcpporg.github.io`, checked out as the submodule `site/`, as a
+ library is under `libs/`: its pages in OpenUI Lang under `pages/`, the React
+ components they are written with and the renderer under `src/`, its wasm's
+-C++ under `app/` and the state machines it runs under `machines/`, its node
++C++ under `app/`, the trace's `WEBCPP_SITE_TRACE_SCOPE` under
++`include/webcpp_site/`, the state machines it runs under `machines/`, its node
+ tools under `tools/`, its tests under `test/`, its `Jamfile`, and its own
+ `AGENTS.md` and `README.md`. A change to it is committed in `site/` on its
+ `main`, then the superproject commits the submodule's new commit, as for a
+diff --git a/site b/site
+index 0b141eb..acf5c1e 160000
+--- a/site
++++ b/site
+@@ -1 +1 @@
+-Subproject commit 0b141eb6e6634ef1594687a0f855b52fb73f284e
++Subproject commit acf5c1ed50e71a5855d8bde4383e9c25663875de
+-- 
+2.55.0
+

@@ -1,0 +1,36 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[#config-exceptions]
+== Exceptions
+
+Every target of webcpp builds with exceptions on, and whether a program uses
+them is the choice of whoever builds it. `<webcpp/config.hpp>` tells that
+choice to every webcpp library with two macros:
+
+`WEBCPP_HAS_EXCEPTIONS`::
+Defined when webcpp has exceptions: when the compiler has them, so that
+Boost.Config defines no `BOOST_NO_EXCEPTIONS`, and the developer has not
+defined `WEBCPP_NO_EXCEPTIONS`. A build without exceptions, such as one
+with `-fno-exceptions`, which b2's `exception-handling=off` gives, has
+none.
+
+`WEBCPP_NO_EXCEPTIONS`::
+Never defined by config: the developer defines it, on the compiler's
+command line (`-DWEBCPP_NO_EXCEPTIONS`) or in a b2 project's requirements
+(`<define>WEBCPP_NO_EXCEPTIONS`), to turn off the exceptions of every webcpp
+library at once, in a build that has them.
+
+Each webcpp library's own macro, `WEBCPP_<LIBRARY>_NO_EXCEPTIONS`, follows
+them, as `MY_LIBRARY_NO_EXCEPTIONS` does in the program of
+<<config-introduction>>: it is defined when `WEBCPP_HAS_EXCEPTIONS` is not,
+and a developer may still define it alone, to turn off the exceptions of
+one library and keep the others'. A program sets `WEBCPP_NO_EXCEPTIONS`
+once, for every webcpp library alike, without knowing which of them throws.
+
+Boost's own exceptions are left as the compiler has them:
+`WEBCPP_NO_EXCEPTIONS` does not define `BOOST_NO_EXCEPTIONS`, and Boost's
+code keeps its exceptions in a build that has them.

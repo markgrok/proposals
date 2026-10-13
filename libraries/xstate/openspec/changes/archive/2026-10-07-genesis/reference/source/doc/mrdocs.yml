@@ -1,0 +1,24 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+#
+# What xstate's reference adds to tools/doc/mrdocs.yml.in, the settings every
+# library's reference shares: only keys of how the reference is presented.
+
+# Each enumerator has a section of its own, with its value and its whole Doc
+# Comment: the enum's table of members would show each enumerator's brief
+# alone, and the details of errc's enumerators say when each error is
+# reported.
+show-enum-constants: true
+
+# A class lists what it inherits from a base this reference documents as a
+# reference to the base's member, never as a copy of it. The two actor
+# logics derive from xactor's actor_logic, which is outside this reference's
+# corpus: a copy would put xactor's Doc Comments in xstate's namespace, where
+# a reference to xactor's status::error names xstate's status::error and
+# one to scheduler::error_of names nothing, and xactor's reference documents
+# them. A base of xstate's own, should one come, keeps its inherited members
+# visible in the class that derives from it, as references.
+inherit-base-members: reference

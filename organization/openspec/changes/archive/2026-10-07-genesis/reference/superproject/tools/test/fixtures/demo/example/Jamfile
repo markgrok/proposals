@@ -1,0 +1,15 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+import webcpp ;
+
+webcpp.targets native wasip2 wasip3 ;
+
+webcpp.example hello.cpp : <library>/webcpp/demo//demo ;
+# It throws and catches, so it needs exceptions, which a user's
+# exception-handling=off does not take from it: built with them whatever the
+# build asks, and analysed by the lint with them alone.
+webcpp.example catches.cpp : <exception-handling>on ;

@@ -1,0 +1,27 @@
+From a9845880441e6391a6bbea44bb422edaab8cdc04 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 16:31:43 -0400
+Subject: [PATCH 23/25] trystero: the interop's unusable-ICE scenario reads the
+ configuration error's message as it is now
+
+The error invalid_configuration says "the configuration is unusable" since the app reports it; the scenario still looked for the room's former message, so it failed whatever the peer reported.
+---
+ test/oracle/interop/run.mjs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/oracle/interop/run.mjs b/test/oracle/interop/run.mjs
+index b98e362..627ba7e 100644
+--- a/test/oracle/interop/run.mjs
++++ b/test/oracle/interop/run.mjs
+@@ -385,7 +385,7 @@ const unusableIceScenario = (name, cppKind) =>
+         const js = await open('js', params)
+         const ok = await until(async () => exchangeComplete(await cpp.events(), false) && exchangeComplete(await js.events(), true), 30_000)
+         if (!ok) return 'the exchange did not complete in 30 s'
+-        const reported = (await cpp.events()).some(e => e.kind === 'error' && e.error === "the room's configuration is unusable")
++        const reported = (await cpp.events()).some(e => e.kind === 'error' && e.error === 'the configuration is unusable')
+         return reported ? null : 'the C++ peer did not report the unusable ICE server'
+     })
+ 
+-- 
+2.55.0
+

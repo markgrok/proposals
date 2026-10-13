@@ -1,0 +1,139 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+# The tests' sources are UTF-8, and hold text past ASCII in u8"", u"" and
+# plain literals: MSVC reads a file without a byte order mark in the system's
+# code page unless it is told otherwise.
+project : requirements <library>/webcpp/document//document
+    <toolset>msvc:<cxxflags>/utf-8 ;
+
+import regex ;
+import webcpp ;
+
+webcpp.targets native emscripten wasip2 wasip3 ;
+
+# Each public header compiles alone on every target, but asio.hpp, the one
+# that includes Boost.Asio, which builds natively only. "[^a]*" leaves it out,
+# and would leave out any other header whose name begins with an a, which the
+# lint then names as compiled alone nowhere.
+webcpp.headers-alone document : ../include
+  : document.hpp "document/[^a]*.hpp" document/detail/*.hpp ;
+webcpp.headers-alone document : ../include : document/asio.hpp : : native ;
+
+# config.hpp defines WEBCPP_DOCUMENT_NO_EXCEPTIONS exactly when webcpp has no
+# exceptions, and keeps it when a developer defines it in a build that has
+# them.
+webcpp.compile config : config_test.cpp ;
+webcpp.compile config_developer_defined : config_test.cpp
+  : <define>WEBCPP_DOCUMENT_NO_EXCEPTIONS
+    <define>WEBCPP_TEST_DOCUMENT_DEVELOPER_DEFINED ;
+# WEBCPP_NO_EXCEPTIONS, which a developer defines for every webcpp library at
+# once, defines WEBCPP_DOCUMENT_NO_EXCEPTIONS in a build that has exceptions.
+webcpp.compile config_all_off : config_test.cpp
+  : <define>WEBCPP_NO_EXCEPTIONS <define>WEBCPP_TEST_DOCUMENT_ALL_OFF ;
+
+webcpp.run errors : errors_test.cpp ;
+# The exception detail::raise throws for each errc: built with exceptions
+# whatever the build asks.
+webcpp.run errors_raise : errors_test.cpp
+  : <exception-handling>on <define>WEBCPP_TEST_DOCUMENT_RAISE ;
+
+# Exact numbers from JSON text, written as JavaScript writes them.
+webcpp.run number : number_test.cpp ;
+# The traits: scalar codecs, encodings, bytes, dates and policies.
+webcpp.run traits : traits_test.cpp ;
+# The heap, its allocator and strings, the regions and the image's header.
+webcpp.run heap : heap_test.cpp ;
+# The selectors' grammar and matcher, apart from any parser.
+webcpp.run selector_grammar : selector_grammar_test.cpp ;
+# The tree: nodes, indices, key order, and changes that find their room first.
+webcpp.run tree : tree_test.cpp ;
+# The literals: values written in C++ before they are stored.
+webcpp.run literal : literal_test.cpp ;
+# Every settable type into an item, and a node back into every readable type.
+webcpp.run convert : convert_test.cpp ;
+# The document and its handles: navigation, reading, writing, equality,
+# iteration.
+webcpp.run value : value_test.cpp ;
+# Object keys in JavaScript's order through the handles, under each order
+# policy.
+webcpp.run order : order_test.cpp ;
+# Images: moved, formatted, opened, refused, the same for the same operations.
+webcpp.run image : image_test.cpp ;
+# stringify and stringify_to, as JSON.stringify writes. A document nested
+# 100,000 levels deep outgrows Emscripten's initial 16 MB, so its memory may
+# grow there.
+webcpp.run stringify : stringify_test.cpp
+  : <toolset>emscripten:<linkflags>-sALLOW_MEMORY_GROWTH ;
+# parse, whole or in chunks, as JSON.parse reads; and the parse that throws. A
+# 64 MB string, an object of 100,000 keys and 800 KB of zeros outgrow
+# Emscripten's initial 16 MB, so its memory may grow.
+webcpp.run parse : parse_test.cpp : <toolset>emscripten:<linkflags>-sALLOW_MEMORY_GROWTH ;
+webcpp.run parse_sugar : parse_test.cpp : <exception-handling>on <define>WEBCPP_TEST_DOCUMENT_SUGAR
+  <toolset>emscripten:<linkflags>-sALLOW_MEMORY_GROWTH ;
+webcpp.run streaming : streaming_test.cpp : <toolset>emscripten:<linkflags>-sALLOW_MEMORY_GROWTH ;
+# Selectors: values delivered as they complete.
+webcpp.run selector : selector_test.cpp ;
+# Streams of documents: each framing, each policy on errors, the limits per
+# document, and every stream split at every byte.
+webcpp.run stream : stream_test.cpp ;
+# async_read_document over a loopback TCP connection; natively only, as
+# asio.hpp builds.
+webcpp.run stream_asio : stream_asio_test.cpp : : native ;
+# JavaScript's array methods.
+webcpp.run array : array_test.cpp ;
+# The sugar that throws, and its refusal in a build without exceptions.
+webcpp.run sugar : sugar_test.cpp : <exception-handling>on ;
+webcpp.compile-diagnostic no_exceptions : no_exceptions_test.cpp : <exception-handling>off ;
+
+# Node as the oracle, from C++: every case of fixtures/cases applied through the
+# document and compared with what Node wrote in fixtures/expected. The fixtures'
+# directory with forward slashes, the whole define quoted, as xstate's
+# test/Jamfile does; wasmtime is given the directory (webcpp.data).
+path-constant FIXTURES : fixtures ;
+local fixtures = [ regex.replace $(FIXTURES) "\\\\" "/" ] ;
+.case-files = [ glob fixtures/cases/*.json fixtures/expected/*.json ] ;
+webcpp.run oracle_cases : oracle_test.cpp
+  : <define>"\"WEBCPP_TEST_DOCUMENT_FIXTURES=\\\"$(fixtures)\\\"\"" <dependency>$(.case-files)
+    [ webcpp.data $(FIXTURES) ] ;
+
+# The benchmarks' smoke pass (bench/bench.cpp): one pass of every operation with
+# Boost.JSON and document over nativejson-benchmark's files, failing when the
+# two answer differently.
+webcpp.run bench : ../bench/bench.cpp
+  : <define>WEBCPP_BENCH_SMOKE <library>/webcpp/third_party//nativejson-benchmark
+    <toolset>emscripten:<linkflags>-sALLOW_MEMORY_GROWTH=1 ;
+
+# A stream of images read into a pool's blocks and opened in place:
+# backpressure, refusals, leases, and no allocation while reading.
+webcpp.run image_stream : image_stream_test.cpp ;
+# Images read and written with Boost.Asio, straight into a pool's blocks.
+webcpp.run image_asio : image_asio_test.cpp : : native ;
+# The containers' interface: typed views, iterators, ranges, keys in order.
+webcpp.run containers : containers_test.cpp : <toolset>emscripten:<linkflags>-sALLOW_MEMORY_GROWTH ;
+# Sealed images: the seal, its check, changes that clear it, the reader.
+webcpp.run seal : seal_test.cpp ;
+# Shared documents: counts, the last holder, copy on write; threads natively.
+webcpp.run shared : shared_test.cpp ;
+# Two processes share a pool in Boost.Interprocess's shared memory, which
+# needs exceptions; the test runs itself again as the second process.
+webcpp.run shared_interprocess : shared_test.cpp
+  : <exception-handling>on <define>WEBCPP_TEST_DOCUMENT_INTERPROCESS : native ;
+
+# Compact images: equal content gives equal bytes, the exact size, a caller's
+# buffer.
+webcpp.run compact : compact_test.cpp ;
+
+# The image format, watched: the compact image of a fixed document, under each
+# traits, equals the golden image of fixtures/format byte for byte, so that a
+# Boost release that changes the layout raises format_version instead of
+# passing unseen (webcpp.data gives wasmtime the fixtures' directory). To write
+# the golden images again, which is right only together with raising
+# format_version, run format_test with --write fixtures/format.
+.format-files = [ glob fixtures/format/*.image ] ;
+webcpp.run format : format_test.cpp
+  : <define>"\"WEBCPP_TEST_DOCUMENT_FIXTURES=\\\"$(fixtures)\\\"\"" <dependency>$(.format-files)
+    [ webcpp.data $(FIXTURES) ] ;

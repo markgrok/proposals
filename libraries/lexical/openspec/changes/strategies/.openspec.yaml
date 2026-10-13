@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-13
+webcpp:
+  library: lexical
+  title: "lexical: one entry point, strategies and Boost.Regex"
+  kind: own
+  port_of: null
+  status: draft
+  release: null
+  implementation: null
+  decided: null

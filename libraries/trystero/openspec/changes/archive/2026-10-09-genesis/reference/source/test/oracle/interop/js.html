@@ -1,0 +1,219 @@
+<!--
+Copyright (c) 2026 WebCpp.org
+
+Distributed under the Boost Software License, Version 1.0. (See
+accompanying file LICENSE_1_0.txt or copy at
+https://www.boost.org/LICENSE_1_0.txt)
+
+A Trystero JS peer of the interop test, which run.mjs opens in headless Chrome.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trystero JS peer</title>
+<script type="importmap">
+{
+    "imports": {
+        "trystero": "/node_modules/trystero/dist/index.mjs",
+        "@trystero-p2p/core": "/node_modules/@trystero-p2p/core/dist/index.mjs",
+        "@trystero-p2p/nostr": "/node_modules/@trystero-p2p/nostr/dist/index.mjs",
+        "@noble/secp256k1": "/node_modules/@noble/secp256k1/index.js"
+    }
+}
+</script>
+</head>
+<body>
+<pre id="log"></pre>
+<script type="module">
+// The JavaScript side of the interop test: Trystero 0.26 doing exactly what the C++ peer does (interop/peer.cpp).
+import {joinRoom, selfId} from 'trystero'
+
+window.events = []
+const record = (kind, fields = {}) => window.events.push({kind, ...fields})
+const log = (category, text) => {
+    const line = `[${(performance.now() / 1000).toFixed(2)}s] ${category}: ${text}`
+    console.log(line)
+    document.getElementById('log').append(line + '\n')
+}
+const params = new URLSearchParams(location.search)
+const relays = params.get('relays')
+// With `malformed-candidate-to` (below), Trystero's own messages to the relays wait 1 s each, so that the C++ peer
+// holds its offer to this peer for at least that long: the malformed candidates, sent at once, reach it then, and it
+// keeps them until the answer arrives, as a candidate of a real negotiation.
+// `hold-sends` holds them the same way, so that a forged answer to the C++ peer's offer reaches it before this
+// peer's own answer.
+const malformedTo = params.get('malformed-candidate-to')
+const sendNow = WebSocket.prototype.send
+if (malformedTo || params.get('hold-sends')) {
+    WebSocket.prototype.send = function (data) {
+        setTimeout(() => sendNow.call(this, data), 1000)
+    }
+}
+// Every RTCPeerConnection the page makes, for window.drop.
+const connections = []
+const PeerConnection = window.RTCPeerConnection
+window.RTCPeerConnection = class extends PeerConnection {
+    constructor(...args) {
+        super(...args)
+        connections.push(this)
+    }
+}
+// With `text-messages`, this peer also sends each C++ peer, once it joins, two text messages on the data channel, as
+// a broken or hostile peer can, then a chat message the C++ peer must still receive. Its channels are found by
+// watching createDataChannel: this peer offers, so it opens them.
+const textMessages = params.get('text-messages')
+const channels = []
+if (textMessages) {
+    const create = RTCPeerConnection.prototype.createDataChannel
+    RTCPeerConnection.prototype.createDataChannel = function (...args) {
+        const channel = create.apply(this, args)
+        channels.push(channel)
+        return channel
+    }
+}
+const checksum = bytes => {
+    let sum = 0
+    for (let i = 0; i < bytes.length; i++) sum = (sum + bytes[i] * (i + 1)) >>> 0
+    return sum
+}
+const sent = (what, peer) => [() => record('sent', {what, peer, error: ''}), e => record('sent', {what, peer, error: String(e)})]
+// Joins the room, with the actions and the handlers every scenario relies on; the page's peer id is Trystero's
+// selfId, the same for every join of the page.
+let room
+const join = () => {
+    room = joinRoom(
+        {
+            appId: params.get('app'),
+            // No ICE server: Chrome gathers its host candidates alone, and asks no public STUN server.
+            rtcConfig: {iceServers: []},
+            ...(params.get('password') ? {password: params.get('password')} : {}),
+            ...(relays ? {relayConfig: {urls: relays.split(',')}} : {}),
+        },
+        params.get('room'),
+        {onJoinError: details => record('error', {peer: details.peerId, error: details.error})}
+    )
+    record('joined', {self: selfId})
+    log('room', 'self id ' + selfId)
+
+    const chat = room.makeAction('chat')
+    const drink = room.makeAction('drink')
+    const file = room.makeAction('file')
+    chat.onMessage = (text, {peerId}) => {
+        record('chat', {from: peerId, text})
+        if (!text.startsWith('echo: ')) chat.send('echo: ' + text, {target: peerId})
+    }
+    drink.onMessage = (value, {peerId}) => record('drink', {from: peerId, value})
+    file.onMessage = (data, {peerId, metadata}) => {
+        const bytes = new Uint8Array(data)
+        record('file', {from: peerId, size: bytes.length, checksum: checksum(bytes), metadata: JSON.stringify(metadata ?? null)})
+    }
+    room.onPeerJoin = peer => {
+        log('room', 'peer joined: ' + peer)
+        record('peer-join', {peer})
+        chat.send('hello from Trystero JS', {target: peer}).then(...sent('chat', peer))
+        drink.send({drink: 'negroni', withIce: true, from: 'js'}, {target: peer}).then(...sent('drink', peer))
+        const big = new Uint8Array(100_000).map((_, i) => (i * 7) % 256)
+        file.send(big, {target: peer, metadata: {name: 'from-js.bin'}}).then(...sent('file', peer))
+        room.ping(peer).then(ms => record('ping', {peer, ms, error: ''}), e => record('ping', {peer, error: String(e)}))
+        if (textMessages) {
+            // "1e300" is no typed array length, and "300000000" one of 300 MB: neither is a frame.
+            const open = channels.filter(c => c.readyState === 'open')
+            for (const channel of open) {
+                channel.send('1e300')
+                channel.send('300000000')
+            }
+            record('text-sent', {peer, channels: open.length})
+            chat.send('after text', {target: peer}).then(...sent('after-text', peer))
+        }
+    }
+    room.onPeerLeave = peer => {
+        log('room', 'peer left: ' + peer)
+        record('peer-leave', {peer})
+    }
+}
+join()
+// With `room2`, this page also joins that room of the same app, as one Trystero JS page does: Trystero keeps one
+// connection per app and peer id, which both rooms share. Its events carry `room: 'second'`.
+if (params.get('room2')) {
+    const second = joinRoom(
+        {
+            appId: params.get('app'),
+            rtcConfig: {iceServers: []},
+            ...(params.get('password') ? {password: params.get('password')} : {}),
+            ...(relays ? {relayConfig: {urls: relays.split(',')}} : {}),
+        },
+        params.get('room2'),
+        {onJoinError: details => record('error', {room: 'second', peer: details.peerId, error: details.error})}
+    )
+    const chat = second.makeAction('chat')
+    const file = second.makeAction('file')
+    chat.onMessage = (text, {peerId}) => record('chat', {room: 'second', from: peerId, text})
+    file.onMessage = (data, {peerId}) => {
+        const bytes = new Uint8Array(data)
+        record('file', {room: 'second', from: peerId, size: bytes.length, checksum: checksum(bytes)})
+    }
+    second.onPeerJoin = peer => {
+        record('peer-join', {room: 'second', peer})
+        chat.send('hello from Trystero JS', {target: peer})
+        file.send(new Uint8Array(100_000).map((_, i) => (i * 7) % 256), {target: peer})
+    }
+    second.onPeerLeave = peer => record('peer-leave', {room: 'second', peer})
+}
+window.leave = () => room.leave().then(() => record('left', {error: ''}))
+// window.drop(): closes every connection the page made, as a network drop ends them; Trystero then meets its peers
+// again, with the same peer id.
+window.drop = () => {
+    for (const connection of connections.splice(0)) connection.close()
+    record('dropped')
+}
+
+// Publishes `count` signals, each from a fresh peer id that starts with `prefix`, on the topic of the room's peer
+// `to`, or on the room's own topic, through a WebSocket of its own to the first relay. Records `kind` once every one is
+// sent.
+const floodWith = async (kind, count, prefix, to, signal) => {
+    const {createEvent} = await import('@trystero-p2p/nostr')
+    const {sha1} = await import('@trystero-p2p/core')
+    const topic = await sha1(['Trystero', params.get('app'), params.get('room'), ...(to ? [to] : [])].join('@'))
+    const socket = new WebSocket(relays.split(',')[0])
+    await new Promise(resolve => (socket.onopen = resolve))
+    for (let i = 0; i < count; ++i) {
+        const peerId = (prefix + Math.random().toString(36).slice(2) + '0000000000').slice(0, 20)
+        sendNow.call(socket, await createEvent(topic, JSON.stringify({peerId, ...signal})))
+    }
+    record(kind, {count})
+}
+
+// window.flood(count, prefix): announcements from fresh ids on the room's topic, what anyone who knows the app and
+// the room ids can send, since announcements are not sealed. Records 'flooded'.
+window.flood = (count, prefix) => floodWith('flooded', count, prefix, null, {})
+
+// window.floodOffers(count, prefix, to): offers from fresh ids to the peer `to` that no key sealed, what anyone who
+// reads the relays can send. Records 'flooded-offers'.
+window.floodOffers = (count, prefix, to) =>
+    floodWith('flooded-offers', count, prefix, to, {offerId: 'forged', offer: 'not a sealed offer'})
+
+// With `malformed-candidate-to`, this peer also sends that peer, until it joins, a candidate whose plaintext is not
+// JSON, sealed under the room's key as Trystero seals a candidate, through a WebSocket of its own to the first relay:
+// what a broken or hostile peer of the room can send. The C++ peer must drop it and go on.
+if (malformedTo && relays) {
+    const {createEvent} = await import('@trystero-p2p/nostr')
+    const {sha1} = await import('@trystero-p2p/core')
+    const {encrypt, genKey} = await import('/node_modules/@trystero-p2p/core/dist/crypto.mjs')
+    const key = genKey(params.get('password') ?? '', params.get('app'), params.get('room'))
+    const topic = await sha1(['Trystero', params.get('app'), params.get('room'), malformedTo].join('@'))
+    const socket = new WebSocket(relays.split(',')[0])
+    socket.onopen = () => {
+        const joined = () => window.events.some(e => e.kind === 'peer-join' && e.peer === malformedTo)
+        const send = async () => {
+            if (joined() || socket.readyState !== 1) return socket.close()
+            const content = JSON.stringify({peerId: selfId, candidate: await encrypt(key, 'not JSON at all')})
+            sendNow.call(socket, await createEvent(topic, content))
+            setTimeout(send, 150)
+        }
+        send()
+    }
+}
+</script>
+</body>
+</html>

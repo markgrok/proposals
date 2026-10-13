@@ -1,0 +1,1093 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+"""Checks tools/webcpp.jam: a program is built only for the targets its Jamfile declares, and only
+once per target; every target builds with exceptions, and a build without them is the user's own
+request, which links the handler on any target and reaches every program but one that declares
+<exception-handling>on; no variant is built without RTTI; an example is compared with its expected
+output, its standard input its .input file or nothing; every public header compiles alone, each call
+of webcpp.headers-alone taking the headers its globs match, with requirements and targets of its
+own, and a header two calls take or a glob that matches none refused; a compile-diagnostic test
+passes only on the error it states, and is skipped on a toolset that is not clang;
+`b2 declared-targets` lists what each library declares; a lane of a library's own is listed once per
+target it runs on, which must be one its Jamfile declares, with its kind, whether it runs the
+original's language; what it names leaves the ordinary lanes, a build of it for another target stops
+by name, and every served program runs in one on every target it is served on; the programs of a
+library are recorded by kind, a link-only program and a driven test among them; a Boost.Test suite
+is built and run natively only, its framework always with exceptions; Boost.JSON's definitions link
+on every target; every program sees C++20 and exceptions, on every target; and a test reads the
+directory webcpp.data gives it, which must be absolute and hold no character the shell would read,
+at the same path on every target, wasmtime being given it on WASI. Each case builds a scratch
+superproject with the fixture library demo. Run with the names of some cases to run only those."""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+import harness
+
+WASIP2 = ('toolset=clang-wasip2', 'testing.launcher=wasmtime')
+WASIP3 = ('toolset=clang-wasip3', 'testing.launcher=wasmtime')
+EMSCRIPTEN = ('toolset=emscripten',)
+
+PASSED = re.compile(r'^\*\*passed\*\* (.*)$', re.MULTILINE)
+
+
+def passed(result):
+    """The tests b2 reports as passed, by name: pass for .../pass.test/.../pass.test."""
+    return {path.rsplit('/', 1)[-1].removesuffix('.test') for path in PASSED.findall(result.stdout)}
+
+
+def output_of(root, name):
+    """The text of the one file named name that b2 wrote under the scratch superproject's bin/."""
+    found = sorted((root / 'bin').rglob(name))
+    assert len(found) == 1, (name, found)
+    return found[0].read_text()
+
+
+def built_with(exceptions, rtti):
+    """The first lines of pass's output: whether its compiler defined __cpp_exceptions and
+    __cpp_rtti, which -fno-exceptions and -fno-rtti leave undefined."""
+    return (f'__cpp_exceptions: {"defined" if exceptions else "undefined"}\n'
+            f'__cpp_rtti: {"defined" if rtti else "undefined"}\n')
+
+
+def stand_in_emscripten(root):
+    """Configures the scratch superproject root with b2's toolset emscripten, whose emcc is a
+    stand-in that runs clang++: enough to see what b2 builds for emscripten without Emscripten."""
+    emcc = root / 'stand-in emcc/emcc'
+    emcc.parent.mkdir()
+    emcc.write_text('#!/bin/sh\nexec clang++ "$@"\n')
+    emcc.chmod(0o755)
+    config = root / '.local/user-config.jam'
+    config.write_text(config.read_text() + f'using emscripten : : "{emcc}" ;\n')
+
+
+NATIVE_DEMO = {'pass', 'fails', 'rejects', 'native_only', 'native_only_compiles', 'alone-demo',
+               'alone-demo-answer', 'suite', 'parses_json'}
+
+WASM_DEMO = {'pass', 'fails', 'rejects', 'alone-demo', 'alone-demo-answer', 'parses_json'}
+
+PLAIN = ('import webcpp ;\n'
+         '\n'
+         'webcpp.run plain : plain.cpp ;\n')
+
+PLAIN_SOURCE = 'int main() { return 0; }\n'
+
+
+def test_native_builds_exactly_the_declared_programs(root):
+    result = harness.run_b2(root, 'libs/demo/test', 'libs/demo/example')
+    harness.expect(result, True)
+    assert passed(result) == NATIVE_DEMO, (passed(result), result.stdout[-4000:])
+    # Each program once, as its Jamfile declares it: with exceptions and with RTTI, and with no
+    # second variant of its own.
+    assert 'noexcept' not in result.stdout, result.stdout[-4000:]
+    assert not [path for path in (root / 'bin').rglob('*') if 'noexcept' in path.name]
+    assert output_of(root, 'pass.output').startswith(built_with(exceptions=True, rtti=True))
+    assert output_of(root, 'hello.output') == 'The answer is 42.\n'
+    assert output_of(root, 'catches.output') == 'caught: boom\n'
+
+
+def test_wasip2_skips_native_only_and_has_exceptions(root):
+    result = harness.run_b2(root, *WASIP2, 'libs/demo/test', 'libs/demo/example')
+    harness.expect(result, True)
+    # native_only, which does not compile for WASI, is not built; catches, an example that throws
+    # and catches, is, as on every target.
+    assert passed(result) == WASM_DEMO, (passed(result), result.stdout[-4000:])
+    assert 'native_only' not in result.stdout, result.stdout[-4000:]
+    assert output_of(root, 'pass.output').startswith(built_with(exceptions=True, rtti=True))
+    assert output_of(root, 'hello.output') == 'The answer is 42.\n'
+    assert output_of(root, 'catches.output') == 'caught: boom\n'
+    # A user's build without exceptions compiles every program with -fno-exceptions alone, and
+    # links the handler of tools/throw_exception.cpp, which prints what was thrown and ends the
+    # program.
+    harness.add_library(
+        root, 'aborts',
+        'import webcpp ;\n'
+        '\n'
+        'webcpp.run-fail aborts : aborts.cpp : : wasip2 ;\n',
+        {'aborts.cpp': '#include <boost/throw_exception.hpp>\n'
+                       '#include <stdexcept>\n'
+                       'int main() { boost::throw_exception(std::runtime_error("planted")); }\n'})
+    result = harness.run_b2(root, '-d+2', *WASIP2, 'exception-handling=off', 'libs/aborts/test')
+    harness.expect(result, True)
+    assert passed(result) == {'aborts'}, (passed(result), result.stdout[-4000:])
+    assert 'throw_exception: planted' in output_of(root, 'aborts.output')
+    compiles = [line for line in result.stdout.splitlines() if ' -c ' in line]
+    assert compiles, result.stdout[-4000:]
+    for line in compiles:
+        assert '-fno-exceptions' in line and '-fwasm-exceptions' not in line, line
+
+
+def test_wasip3_catches_a_throw(root):
+    result = harness.run_b2(root, *WASIP3, 'libs/demo/test', 'libs/demo/example')
+    harness.expect(result, True)
+    assert passed(result) == WASM_DEMO, (passed(result), result.stdout[-4000:])
+    assert output_of(root, 'pass.output').startswith(built_with(exceptions=True, rtti=True))
+    assert output_of(root, 'catches.output') == 'caught: boom\n'
+    # The Jamroot's -mllvm -wasm-use-legacy-eh=false is needed, on each WASI target: without it,
+    # clang encodes the throw with the legacy instructions, which wasmtime refuses to run.
+    jamroot = (root / 'Jamroot').read_text()
+    for version, target in ((2, WASIP2), (3, WASIP3)):
+        shutil.rmtree(root / 'bin')
+        (root / 'Jamroot').write_text(jamroot)
+        harness.replace(root / 'Jamroot',
+                        f'<toolset>clang-wasip{version},<exception-handling>on:<cxxflags>'
+                        '"-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false"',
+                        f'<toolset>clang-wasip{version},<exception-handling>on:<cxxflags>'
+                        '"-fwasm-exceptions"')
+        result = harness.run_b2(root, *target, 'libs/demo/example')
+        harness.expect(result, False, '-caught: boom')
+        assert re.search(r'^\.\.\.failed .*catches\.output', result.stdout, re.MULTILINE), (
+            version, result.stdout[-4000:])
+        program = sorted((root / 'bin').rglob('catches.wasm'))
+        assert len(program) == 1, program
+        refused = subprocess.run(['wasmtime', program[0]], stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True, check=False)
+        assert refused.returncode != 0, (version, refused.stdout)
+        assert 'legacy_exceptions feature required' in refused.stdout, (version, refused.stdout)
+
+
+def test_compile_builds_only_where_declared(root):
+    # native_only_compiles compiles native_only.cpp, which stops with #error when built for WASI.
+    # Declared native, it passes natively and is skipped on wasip2.
+    target = 'libs/demo/test//native_only_compiles'
+    result = harness.run_b2(root, target)
+    harness.expect(result, True)
+    assert passed(result) == {'native_only_compiles'}, (passed(result), result.stdout[-4000:])
+    result = harness.run_b2(root, *WASIP2, target)
+    harness.expect(result, True)
+    assert not passed(result), result.stdout[-4000:]
+    assert 'native_only' not in result.stdout, result.stdout[-4000:]
+    # Declared for wasip2 too, it is compiled there, and a source that does not compile fails it.
+    line = 'webcpp.compile native_only_compiles : native_only.cpp : <library>/webcpp/demo//demo'
+    harness.replace(root / 'libs/demo/test/Jamfile', f'{line} : native ;',
+                    f'{line} : native wasip2 ;')
+    result = harness.run_b2(root, *WASIP2, target)
+    harness.expect(result, False, 'native_only is declared for native only')
+    assert re.search(r'^\.\.\.failed .*native_only_compiles', result.stdout, re.MULTILINE), (
+        result.stdout[-4000:])
+
+
+def test_compile_diagnostic_passes_only_on_its_diagnostic(root):
+    # A source that states, in clang's -verify comments, the error it must stop with: in a header
+    # it includes (@<file>:*, as a header's guard), or on its own line (@+1).
+    guard = '#error "the guard says no"\n'
+    stated = ('// expected-error@guard.hpp:* {{the guard says no}}\n'
+              '#include "guard.hpp"\n'
+              'int main() { return undeclared; }\n')
+    harness.add_library(
+        root, 'diagnostic',
+        'import webcpp ;\n'
+        '\n'
+        'webcpp.targets native wasip2 emscripten ;\n'
+        '\n'
+        'webcpp.compile-diagnostic stated : stated.cpp ;\n'
+        'webcpp.compile-diagnostic inline : inline.cpp ;\n'
+        'webcpp.compile-diagnostic other : other.cpp ;\n'
+        'webcpp.compile-diagnostic compiles : compiles.cpp ;\n',
+        {'guard.hpp': guard, 'stated.cpp': stated,
+         'inline.cpp': '// expected-error@+1 {{stated here}}\n#error "stated here"\n',
+         # Another error than the one stated: the test must not pass on it.
+         'other.cpp': stated.replace('#include "guard.hpp"\n', ''),
+         # No error at all: the stated one never comes.
+         'compiles.cpp': '// expected-error@+1 {{never}}\nint main() { return 0; }\n'})
+    for name in ('stated', 'inline'):
+        result = harness.run_b2(root, f'libs/diagnostic/test//{name}')
+        harness.expect(result, True)
+        assert passed(result) == {name}, (passed(result), result.stdout[-4000:])
+    for name, said in (('other', "expected but not seen"), ('compiles', "expected but not seen")):
+        result = harness.run_b2(root, f'libs/diagnostic/test//{name}')
+        harness.expect(result, False, said)
+        assert re.search(rf'^\.\.\.failed .*{name}\.o', result.stdout, re.MULTILINE), (
+            result.stdout[-4000:])
+    # On wasip2, whose toolset is a clang too, it runs as natively.
+    result = harness.run_b2(root, *WASIP2, 'libs/diagnostic/test//stated')
+    harness.expect(result, True)
+    assert passed(result) == {'stated'}, (passed(result), result.stdout[-4000:])
+    # A toolset that is not b2's clang skips it, as any toolset skips a program not built for its
+    # target: -verify is clang's.
+    stand_in_emscripten(root)
+    result = harness.run_b2(root, *EMSCRIPTEN, 'libs/diagnostic/test')
+    harness.expect(result, True)
+    assert not passed(result), result.stdout[-4000:]
+    assert 'stated' not in result.stdout, result.stdout[-4000:]
+
+
+def test_filter_maps_each_toolset_to_its_target(root):
+    # webcpp.filter called directly, with a toolset's properties and a program's targets: it
+    # returns <build>no when the toolset builds for none of them. Only clang's version names a
+    # target; a clang without one, and gcc whatever its version, build for native.
+    table = [
+        ('<toolset>clang <toolset-clang:version>wasip2', 'wasip2', 'built'),
+        ('<toolset>clang <toolset-clang:version>wasip3', 'wasip3', 'built'),
+        ('<toolset>clang <toolset-clang:version>wasip2', 'native wasip3', 'skipped'),
+        ('<toolset>clang <toolset-clang:version>21', 'native', 'built'),
+        ('<toolset>clang <toolset-clang:version>21', 'wasip2 wasip3', 'skipped'),
+        ('<toolset>clang', 'native', 'built'),
+        ('<toolset>clang', 'wasip2 wasip3', 'skipped'),
+        ('<toolset>gcc <toolset-gcc:version>wasip2', 'native', 'built'),
+        ('<toolset>gcc <toolset-gcc:version>wasip2', 'wasip2', 'skipped'),
+        ('<toolset>emscripten', 'emscripten', 'built'),
+        ('<toolset>emscripten', 'native', 'skipped'),
+        ('<toolset>msvc', 'native', 'built'),
+        ('<toolset>msvc', 'emscripten', 'skipped'),
+    ]
+    jamfile = 'import webcpp ;\n\n'
+    for properties, targets, _ in table:
+        program = ' '.join(f'<webcpp-targets>{target}' for target in targets.split())
+        jamfile += f'ECHO "filter:" [ webcpp.filter {properties} {program} ] ;\n'
+    harness.add_library(root, 'probe', jamfile, {})
+    result = harness.run_b2(root, 'libs/probe/test')
+    harness.expect(result, True)
+    found = [line.removeprefix('filter:').strip() for line in result.stdout.splitlines()
+             if line.startswith('filter:')]
+    expected = ['<build>no' if outcome == 'skipped' else '' for _, _, outcome in table]
+    assert found == expected, [(row, verdict)
+                               for row, verdict, want in zip(table, found, expected)
+                               if verdict != want]
+
+
+def test_undeclared_jamfile_is_native_only(root):
+    stand_in_emscripten(root)
+    harness.add_library(root, 'plain', PLAIN, {'plain.cpp': PLAIN_SOURCE})
+    for target in (WASIP2, WASIP3, EMSCRIPTEN):
+        result = harness.run_b2(root, *target, 'libs/plain/test')
+        harness.expect(result, True)
+        assert not passed(result), (target, result.stdout[-4000:])
+        assert not (root / 'bin/libs/plain').exists(), target
+    result = harness.run_b2(root, 'libs/plain/test')
+    harness.expect(result, True)
+    assert passed(result) == {'plain'}, (passed(result), result.stdout[-4000:])
+
+
+def test_emscripten_builds_only_what_declares_it(root):
+    # The stand-in emcc compiles, so a compile-fail test passes exactly when b2 built it.
+    stand_in_emscripten(root)
+    harness.add_library(root, 'web',
+                        'import webcpp ;\n'
+                        '\n'
+                        'webcpp.compile-fail web : rejects.cpp : : emscripten ;\n'
+                        'webcpp.compile-fail here : rejects.cpp : : native ;\n',
+                        {'rejects.cpp': 'static_assert(false);\n'})
+    result = harness.run_b2(root, *EMSCRIPTEN, 'libs/web/test', 'libs/demo/test')
+    harness.expect(result, True)
+    assert passed(result) == {'web'}, (passed(result), result.stdout[-4000:])
+    result = harness.run_b2(root, 'libs/web/test')
+    harness.expect(result, True)
+    assert passed(result) == {'here'}, (passed(result), result.stdout[-4000:])
+
+
+def test_declared_targets_lists_pairs(root):
+    result = harness.run_b2(root, '-d0', 'declared-targets')
+    harness.expect(result, True)
+    assert result.stdout == 'demo native\ndemo wasip2\ndemo wasip3\n', result.stdout
+    # Sorted and unique across libraries; a program's own targets count.
+    harness.add_library(root, 'plain', PLAIN + 'webcpp.run other : plain.cpp : : wasip3 ;\n',
+                        {'plain.cpp': PLAIN_SOURCE})
+    harness.add_library(root, 'alpha', PLAIN, {'plain.cpp': PLAIN_SOURCE})
+    result = harness.run_b2(root, '-d0', 'declared-targets')
+    harness.expect(result, True)
+    assert result.stdout == ('alpha native\ndemo native\ndemo wasip2\ndemo wasip3\n'
+                             'plain native\nplain wasip3\n'), result.stdout
+    # It reads only Jamfiles: CI plans its lanes on a machine without Boost.
+    harness.configure(root, harness.without_boost())
+    result = harness.run_b2(root, '-d0', 'declared-targets', env_extra={'BOOST_ROOT': None})
+    harness.expect(result, True)
+    assert result.stdout == ('alpha native\ndemo native\ndemo wasip2\ndemo wasip3\n'
+                             'plain native\nplain wasip3\n'), result.stdout
+
+
+def test_a_wrong_declaration_is_refused(root):
+    for declarations, message in (
+        ('webcpp.targets native wasi ;\n',
+         'webcpp.targets: wasi is not a target; the targets are native emscripten wasip2 wasip3'),
+        ('webcpp.run pass : pass.cpp : : native wasm ;\n',
+         "a program's targets: wasm is not a target"),
+        ('webcpp.run pass : pass.cpp ;\nwebcpp.targets native ;\n',
+         'webcpp.targets must come before the first program of its Jamfile'),
+        ('webcpp.targets native ;\nwebcpp.targets wasip2 ;\n',
+         'webcpp.targets is called twice in the same Jamfile'),
+        # A wrong include root would otherwise check no header at all, and pass.
+        ('webcpp.headers-alone demo : include ;\n',
+         'webcpp.headers-alone: include holds neither webcpp/demo.hpp nor a header under'),
+        # A header two calls take would be compiled alone twice, under one name.
+        ('webcpp.headers-alone demo : ../include ;\n'
+         'webcpp.headers-alone demo : ../include : demo/answer.hpp : : wasip2 ;\n',
+         'webcpp.headers-alone demo: webcpp/demo/answer.hpp is taken by two calls'),
+        # A glob that matches no public header restricts the call to nothing.
+        ('webcpp.headers-alone demo : ../include : demo/nothing*.hpp ;\n',
+         'webcpp.headers-alone demo: demo/nothing*.hpp matches no public header'),
+    ):
+        (root / 'libs/demo/test/Jamfile').write_text('import webcpp ;\n\n' + declarations)
+        result = harness.run_b2(root, 'libs/demo/test')
+        harness.expect(result, False, message)
+        # It names the line of the Jamfile.
+        assert 'libs/demo/test/Jamfile:' in result.stdout, result.stdout[-4000:]
+
+
+def test_a_lane_on_targets_is_listed_once_per_target(root):
+    # A lane that names targets is one line of `b2 declared-lanes` per target, which the CI runs
+    # as an own lane for that target; a lane that names none has no target in its line. Each line
+    # ends with the lane's kind: programs, for lanes that run only what the toolset builds.
+    jamfile = root / 'libs/demo/test/Jamfile'
+    jamfile.write_text(jamfile.read_text()
+                       + 'webcpp.lane served : pass parses_json : wasip3 wasip2 ;\n'
+                       + 'webcpp.lane plain : fails ;\n')
+    result = harness.run_b2(root, '-d0', 'declared-lanes')
+    harness.expect(result, True)
+    assert result.stdout == ('demo plain libs/demo/test programs\n'
+                             'demo served libs/demo/test wasip2 programs\n'
+                             'demo served libs/demo/test wasip3 programs\n'), result.stdout
+
+
+def test_a_lanes_kind_says_whether_it_runs_the_original(root):
+    # A lane that runs the original's language, a driven test's driver or an oracle's cases or
+    # twins, is of the kind original, which the CI gives Node; any other is of the kind programs.
+    # A lane may name a program before its rule declares it, and one that holds both kinds runs
+    # the original.
+    harness.add_library(root, 'driven',
+                        'import webcpp ;\n'
+                        '\n'
+                        'webcpp.original node ;\n'
+                        'webcpp.run plain : plain.cpp ;\n'
+                        'webcpp.lane early : later : native ;\n'
+                        'webcpp.drive later : plain.cpp : : drive.mjs ;\n'
+                        'webcpp.drive driven : plain.cpp : : drive.mjs ;\n'
+                        'webcpp.lane driver : driven : native ;\n'
+                        'webcpp.lane mixed : plain driven : native ;\n'
+                        'webcpp.lane simple : plain ;\n',
+                        {'plain.cpp': PLAIN_SOURCE, 'drive.mjs': '', 'package.json': '{}\n',
+                         'package-lock.json': '{}\n'})
+    oracle = root / 'libs/driven/test/oracle'
+    (oracle / 'cases').mkdir(parents=True)
+    for name in ('package.json', 'package-lock.json'):
+        (oracle / name).write_text('{}\n')
+    (oracle / 'Jamfile').write_text('import webcpp ;\n'
+                                    '\n'
+                                    'webcpp.original node ;\n'
+                                    'webcpp.twins ../../example : twins : .mjs ;\n'
+                                    'webcpp.cases c : c.mjs : cases : expected ;\n'
+                                    'webcpp.lane by_cases : cases-c ;\n'
+                                    'webcpp.lane by_twins : twins ;\n'
+                                    'webcpp.lane by_setup : node-modules update-expected ;\n'
+                                    # The kind reads the names the lane gives, not an alias's.
+                                    'alias all : twins cases-c ;\n'
+                                    'webcpp.lane by_alias : all ;\n')
+    result = harness.run_b2(root, '-d0', 'declared-lanes')
+    harness.expect(result, True)
+    assert result.stdout == ('driven by_alias libs/driven/test/oracle programs\n'
+                             'driven by_cases libs/driven/test/oracle original\n'
+                             'driven by_setup libs/driven/test/oracle original\n'
+                             'driven by_twins libs/driven/test/oracle original\n'
+                             'driven driver libs/driven/test native original\n'
+                             'driven early libs/driven/test native original\n'
+                             'driven mixed libs/driven/test native original\n'
+                             'driven simple libs/driven/test programs\n'), result.stdout
+
+
+def test_a_lane_runs_only_on_targets_its_jamfile_declares(root):
+    jamfile = root / 'libs/demo/test/Jamfile'
+    text = jamfile.read_text()
+    for lane, message in (
+        ('webcpp.lane served : pass : wasm ;\n',
+         'webcpp.lane served: wasm is not a target; the targets are native emscripten wasip2 '
+         'wasip3'),
+        ('webcpp.lane served : pass : wasip2 emscripten ;\n',
+         'webcpp.lane served in libs/demo/test/Jamfile: emscripten is not among the targets its '
+         'Jamfile declares, native wasip2 wasip3'),
+        # The lane's targets leave the ordinary lanes, which a target of another project would
+        # not: it is refused, by name.
+        ('webcpp.lane served : ../example//hello : wasip2 ;\n',
+         'webcpp.lane served in libs/demo/test/Jamfile: ../example//hello is not a target of its '
+         'own Jamfile'),
+    ):
+        jamfile.write_text(text + lane)
+        result = harness.run_b2(root, '-d0', 'declared-lanes')
+        harness.expect(result, False, message)
+        # It names the line of the Jamfile.
+        assert 'libs/demo/test/Jamfile:' in result.stdout, result.stdout[-4000:]
+    # A Jamfile without webcpp.targets builds its programs natively alone, and its lanes too.
+    harness.add_library(root, 'plain', PLAIN + 'webcpp.lane served : plain : wasip2 ;\n',
+                        {'plain.cpp': PLAIN_SOURCE})
+    jamfile.write_text(text)
+    result = harness.run_b2(root, '-d0', 'declared-lanes')
+    harness.expect(result, False, 'webcpp.lane served in libs/plain/test/Jamfile: wasip2 is not '
+                   'among the targets its Jamfile declares, native')
+
+
+def test_a_lanes_programs_leave_the_ordinary_lanes(root):
+    # What a lane names is explicit: the ordinary lanes, b2 on the test and example directories,
+    # no longer build it, and the lane does, on each target it names.
+    jamfile = root / 'libs/demo/test/Jamfile'
+    jamfile.write_text(jamfile.read_text()
+                       + 'webcpp.lane served : pass parses_json : native wasip2 ;\n')
+    lanes = harness.run_lanes(root, {
+        'native': ('-a', '--build-dir=bin/native', 'libs/demo/test', 'libs/demo/example'),
+        'wasip2': ('-a', '--build-dir=bin/wasip2', *WASIP2, 'libs/demo/test',
+                   'libs/demo/example'),
+        'native lane': ('-a', '--build-dir=bin/native-lane', 'libs/demo/test//served'),
+        'wasip2 lane': ('-a', '--build-dir=bin/wasip2-lane', *WASIP2, 'libs/demo/test//served'),
+    })
+    for name, result in lanes.items():
+        assert result.returncode == 0, (name, result.stdout[-4000:])
+    served = {'pass', 'parses_json'}
+    assert passed(lanes['native']) == NATIVE_DEMO - served, passed(lanes['native'])
+    assert passed(lanes['wasip2']) == WASM_DEMO - served, passed(lanes['wasip2'])
+    assert passed(lanes['native lane']) == served, passed(lanes['native lane'])
+    assert passed(lanes['wasip2 lane']) == served, passed(lanes['wasip2 lane'])
+
+
+def test_a_lane_built_for_another_target_fails_by_name(root):
+    # A lane that names its targets runs only on them: built for another, natively here, it would
+    # build nothing and pass, so it fails, naming the lane, its targets and the toolset to give.
+    # A lane that names none, as an oracle's, runs on any toolset.
+    jamfile = root / 'libs/demo/test/Jamfile'
+    jamfile.write_text(jamfile.read_text() + 'webcpp.lane served : pass : wasip2 wasip3 ;\n'
+                       + 'webcpp.lane plain : fails ;\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/test//served'), False,
+                   'webcpp.lane served in libs/demo/test/Jamfile runs on wasip2 wasip3, and '
+                   'this build is for native: give toolset=clang-wasip2 or toolset=clang-wasip3, '
+                   'with testing.launcher=wasmtime')
+    harness.expect(harness.run_b2(root, '-a', '--build-dir=bin/wasip2', *WASIP2,
+                                  'libs/demo/test//served'), True, '**passed**')
+    harness.expect(harness.run_b2(root, '--build-dir=bin/wasip3', 'toolset=clang-wasip3',
+                                  'libs/demo/test//plain'), True)
+    harness.expect(harness.run_b2(root, 'libs/demo/test//plain'), True, '**passed**')
+
+
+def served_library(root, lanes):
+    """Adds to root the library web, whose test Jamfile serves a component and one a script
+    builds, both on wasip2 and wasip3, and declares lanes, the Jamfile's lines after them."""
+    harness.add_library(root, 'web',
+                        'import webcpp ;\n'
+                        '\n'
+                        'webcpp.targets native wasip2 wasip3 ;\n'
+                        'webcpp.run plain : plain.cpp ;\n'
+                        'webcpp.serve answers.cpp ;\n'
+                        'webcpp.serve-script by_script : build.sh : answers ;\n' + lanes,
+                        {'plain.cpp': PLAIN_SOURCE, 'answers.cpp': PLAIN_SOURCE,
+                         'answers.requests': 'GET /\n', 'answers.expected': '',
+                         'build.sh': 'exit 1\n'})
+
+
+def test_every_served_program_runs_in_an_own_lane(root):
+    # A served program runs in an own lane on every target it is served on: one that no lane
+    # names, or that a lane runs on fewer targets, fails `b2 declared-lanes`, and with it the
+    # CI's plan, by name, before any job runs.
+    served_library(root, 'webcpp.lane http : answers by_script : wasip2 wasip3 ;\n')
+    result = harness.run_b2(root, '-d0', 'declared-lanes')
+    harness.expect(result, True)
+    assert result.stdout == ('web http libs/web/test wasip2 programs\n'
+                             'web http libs/web/test wasip3 programs\n'), result.stdout
+    jamfile = root / 'libs/web/test/Jamfile'
+    text = jamfile.read_text()
+    for lanes, message in (
+        # Forgotten: named by no lane.
+        ('webcpp.lane http : by_script : wasip2 wasip3 ;\n',
+         'webcpp.serve answers.cpp in libs/web/test/Jamfile is in no own lane; name it in a '
+         'webcpp.lane that names its targets'),
+        ('webcpp.lane http : answers : wasip2 wasip3 ;\n',
+         'webcpp.serve-script by_script in libs/web/test/Jamfile is in no own lane; name it in a '
+         'webcpp.lane that names its targets'),
+        # A lane that names no target runs it nowhere it is served.
+        ('webcpp.lane http : answers by_script ;\n',
+         'webcpp.serve answers.cpp in libs/web/test/Jamfile is in no own lane; name it in a '
+         'webcpp.lane that names its targets'),
+        # A lane on wasip2 alone would drop wasip3 without a word.
+        ('webcpp.lane http : answers by_script : wasip2 ;\n',
+         'webcpp.serve answers.cpp in libs/web/test/Jamfile is built for wasip3, which no own '
+         'lane that names it runs on'),
+    ):
+        jamfile.write_text(text.replace(
+            'webcpp.lane http : answers by_script : wasip2 wasip3 ;\n', lanes))
+        result = harness.run_b2(root, '-d0', 'declared-lanes')
+        harness.expect(result, False, message)
+    # Two lanes may share a program's targets between them.
+    jamfile.write_text(text.replace('webcpp.lane http : answers by_script : wasip2 wasip3 ;\n',
+                                    'webcpp.lane p2 : answers by_script : wasip2 ;\n'
+                                    'webcpp.lane p3 : answers by_script : wasip3 ;\n'))
+    harness.expect(harness.run_b2(root, '-d0', 'declared-lanes'), True)
+
+
+# A target of the scratch superproject's Jamroot that prints what webcpp.jam records of the programs
+# of a library, as tools/doc/doc.jam gives them to counts.py.
+SHOW_PROGRAMS = """
+rule show-programs ( targets * : sources * : properties * )
+{
+    for local program in [ webcpp.programs-of browser_demo ]
+    {
+        ECHO $(program) ;
+    }
+}
+notfile show-programs : @show-programs : : <webcpp-boost-check>off ;
+explicit show-programs ;
+"""
+
+
+def test_programs_of_records_link_and_drive(root):
+    # A link-only program is recorded with the kind link, on its targets, and a driven test with
+    # the kind drive, so that the page's counts see them.
+    shutil.copytree(harness.FIXTURES / 'browser_demo', root / 'libs/browser_demo',
+                    ignore=harness.built)
+    jamroot = root / 'Jamroot'
+    jamroot.write_text(jamroot.read_text() + SHOW_PROGRAMS)
+    result = harness.run_b2(root, '-d0', 'show-programs')
+    harness.expect(result, True)
+    assert sorted(result.stdout.splitlines()) == [
+        'drive driven native emscripten',
+        'example hello native emscripten',
+        'headers-alone alone-browser_demo native emscripten',
+        'headers-alone alone-browser_demo-native native',
+        'headers-alone alone-browser_demo-page emscripten',
+        'link page emscripten',
+        'run catches native emscripten',
+        'run json native emscripten',
+        'run pointer native emscripten',
+        'run reads native emscripten',
+        'run-fail fails native emscripten',
+    ], result.stdout
+
+
+def test_example_mismatch_fails_naming_the_program(root):
+    (root / 'libs/demo/example/hello.expected').write_text('The answer is 41.\n')
+    result = harness.run_b2(root, 'libs/demo/example')
+    harness.expect(result, False, '-The answer is 41.', '+The answer is 42.')
+    assert re.search(r'^\.\.\.failed .*hello\.output', result.stdout, re.MULTILINE), (
+        result.stdout[-4000:])
+    assert not list((root / 'bin').rglob('hello.output')), result.stdout[-4000:]
+
+
+# An example that prints each line of its standard input, numbered, then how many there were.
+ECHOES = ('#include <cstdio>\n'
+          '#include <cstring>\n'
+          '\n'
+          'int main() {\n'
+          '    char line[256];\n'
+          '    int count = 0;\n'
+          '    while (std::fgets(line, sizeof line, stdin) != nullptr) {\n'
+          '        line[std::strcspn(line, "\\n")] = \'\\0\';\n'
+          '        std::printf("%d: %s\\n", ++count, line);\n'
+          '    }\n'
+          '    std::printf("%d lines\\n", count);\n'
+          '}\n')
+
+
+def plant_echoes(root, given, expected):
+    """Adds the example echoes to demo's, with echoes.expected and, unless given is None,
+    echoes.input beside it."""
+    example = root / 'libs/demo/example'
+    (example / 'echoes.cpp').write_text(ECHOES)
+    (example / 'echoes.expected').write_text(expected)
+    if given is not None:
+        (example / 'echoes.input').write_text(given)
+    with (example / 'Jamfile').open('a') as jamfile:
+        jamfile.write('webcpp.example echoes.cpp ;\n')
+
+
+def test_example_reads_its_input(root):
+    # echoes.input, beside echoes, is its standard input, natively and on wasip2 and wasip3,
+    # through wasmtime. The runner finds the input among the sources of echoes.output, so that it
+    # is one of them is pinned here too.
+    expected = '1: first\n2: second\n3: third\n3 lines\n'
+    plant_echoes(root, 'first\nsecond\nthird\n', expected)
+    for request in ((), WASIP2, WASIP3):
+        result = harness.run_b2(root, *request, 'libs/demo/example')
+        harness.expect(result, True)
+        assert output_of(root, 'echoes.output') == expected, (request, result.stdout[-4000:])
+        shutil.rmtree(root / 'bin')
+
+
+def test_example_input_change_reruns(root):
+    plant_echoes(root, 'first\nsecond\nthird\n', '1: first\n2: second\n3: third\n3 lines\n')
+    harness.expect(harness.run_b2(root, 'libs/demo/example'), True)
+    # The next run, without -a, reads the edited input. What the user sees: an example's output
+    # is always made again, so this holds whether or not the input is a source of it; that it is
+    # one is pinned by test_example_reads_its_input.
+    harness.replace(root / 'libs/demo/example/echoes.input', 'second\n', 'changed\n')
+    result = harness.run_b2(root, 'libs/demo/example')
+    harness.expect(result, False, '-2: second', '+2: changed')
+    assert re.search(r'^\.\.\.failed .*echoes\.output', result.stdout, re.MULTILINE), (
+        result.stdout[-4000:])
+
+
+def test_example_without_input_reads_nothing(root):
+    # Without echoes.input, echoes reads an empty standard input, never b2's own: b2's is here a
+    # pipe that stays open, as a terminal does, which an example reading it would wait on forever.
+    plant_echoes(root, None, '0 lines\n')
+    read, write = os.pipe()
+    try:
+        for request in ((), WASIP2, WASIP3):
+            try:
+                result = harness.run_b2(root, *request, 'libs/demo/example', stdin=read,
+                                        timeout=60)
+            except subprocess.TimeoutExpired:
+                raise AssertionError(
+                    f'{request}: an example waited on b2\'s standard input') from None
+            harness.expect(result, True)
+            assert output_of(root, 'echoes.output') == '0 lines\n', (request,
+                                                                     result.stdout[-4000:])
+            shutil.rmtree(root / 'bin')
+    finally:
+        os.close(read)
+        os.close(write)
+
+
+def test_headers_alone_catches_a_missing_include(root):
+    # broken.hpp uses std::string without <string>. demo.hpp includes <string> first, so every
+    # program that includes demo.hpp compiles; only broken.hpp compiled alone does not.
+    (root / 'libs/demo/include/webcpp/demo/broken.hpp').write_text(
+        '#ifndef WEBCPP_DEMO_BROKEN_HPP\n'
+        '#define WEBCPP_DEMO_BROKEN_HPP\n'
+        'namespace webcpp::demo {\n'
+        'inline std::string broken() { return "broken"; }\n'
+        '}\n'
+        '#endif\n')
+    harness.replace(root / 'libs/demo/include/webcpp/demo.hpp',
+                    '#include <webcpp/demo/answer.hpp>\n',
+                    '#include <string>\n\n'
+                    '#include <webcpp/demo/answer.hpp>\n'
+                    '#include <webcpp/demo/broken.hpp>\n')
+    result = harness.run_b2(root, 'libs/demo/test')
+    harness.expect(result, False, 'broken.hpp')
+    assert re.search(r'^\.\.\.failed .*alone-demo-broken', result.stdout, re.MULTILINE), (
+        result.stdout[-4000:])
+    assert passed(result) == NATIVE_DEMO, (passed(result), result.stdout[-4000:])
+
+
+def test_headers_alone_takes_some_headers_with_their_own_requirements_and_targets(root):
+    # Two calls, each taking headers of its own: demo.hpp natively, and every header under demo/
+    # on wasip2 only, compiled with a macro of its own, as a header that builds only for WASI is
+    # with the bindings and the macro it needs.
+    (root / 'libs/demo/test/Jamfile').write_text(
+        'import webcpp ;\n'
+        '\n'
+        'webcpp.targets native wasip2 wasip3 ;\n'
+        '\n'
+        'webcpp.headers-alone demo : ../include : demo.hpp : : native ;\n'
+        'webcpp.headers-alone demo : ../include : demo/*.hpp : <define>WEBCPP_DEMO_PLANTED\n'
+        '  : wasip2 ;\n')
+    for request, expected in (((), {'alone-demo'}), (WASIP2, {'alone-demo-answer'}),
+                              (WASIP3, set())):
+        result = harness.run_b2(root, *request, 'libs/demo/test')
+        harness.expect(result, True)
+        assert passed(result) == expected, (request, passed(result), result.stdout[-4000:])
+    native = compile_lines(root, 'libs/demo/test')
+    assert set(native) == {'alone-demo.cpp'}, native
+    assert '-DWEBCPP_DEMO_PLANTED' not in native['alone-demo.cpp'][0], native
+    wasip2 = compile_lines(root, *WASIP2, 'libs/demo/test')
+    assert set(wasip2) == {'alone-demo-answer.cpp'}, wasip2
+    assert '-DWEBCPP_DEMO_PLANTED' in wasip2['alone-demo-answer.cpp'][0], wasip2
+    # The requirements are the translation unit's: a header that builds only with them fails
+    # alone without them.
+    harness.replace(root / 'libs/demo/include/webcpp/demo/answer.hpp', 'namespace webcpp::demo {\n',
+                    '#ifndef WEBCPP_DEMO_PLANTED\n#error "planted"\n#endif\n\n'
+                    'namespace webcpp::demo {\n')
+    harness.expect(harness.run_b2(root, *WASIP2, 'libs/demo/test'), True)
+    harness.replace(root / 'libs/demo/test/Jamfile', ' : <define>WEBCPP_DEMO_PLANTED\n', ' :\n')
+    result = harness.run_b2(root, '-a', *WASIP2, 'libs/demo/test')
+    harness.expect(result, False, 'answer.hpp:11:2: error: "planted"')
+
+
+def compile_lines(root, *request):
+    """The lines of b2's dry run of request, from scratch, that compile a .cpp file, by the file's
+    name: suite_test.cpp for .../libs/demo/test/suite_test.cpp."""
+    result = harness.run_b2(root, '-n', '-a', *request)
+    harness.expect(result, True)
+    lines = {}
+    for line in result.stdout.splitlines():
+        found = re.search(r'([^/"]+\.cpp)"\s*$', line)
+        if ' -c ' in line and found:
+            lines.setdefault(found.group(1), []).append(line)
+    return lines
+
+
+def test_boost_test_passes_natively(root):
+    result = harness.run_b2(root, 'libs/demo/test//suite')
+    harness.expect(result, True)
+    assert passed(result) == {'suite'}, (passed(result), result.stdout[-4000:])
+    # The suite's own sources are built as a webcpp.run's are, with exceptions and with RTTI.
+    assert built_with(exceptions=True, rtti=True) in output_of(root, 'suite.output')
+    # The framework is one object of its own, which names the module and is compiled with
+    # exceptions, whatever the build request says: without them, a failed BOOST_TEST_REQUIRE
+    # never ends the run, and GCC rejects Boost.Test's unguarded try. A user's own
+    # exception-handling=off reaches the suite's sources alone.
+    for request, without in (((), False), (('exception-handling=off',), True)):
+        lines = compile_lines(root, *request, 'libs/demo/test//suite')
+        framework = lines['boost_test_runner.cpp']
+        assert len(framework) == 1, (request, framework)
+        assert '-DBOOST_TEST_MODULE=suite' in framework[0], framework
+        assert '-fno-exceptions' not in framework[0], framework
+        assert 'BOOST_NO_EXCEPTIONS' not in framework[0], framework
+        sources = lines['suite_test.cpp']
+        assert len(sources) == 1, (request, sources)
+        assert ('-fno-exceptions' in sources[0]) == without, (request, sources)
+        assert 'BOOST_TEST_MODULE' not in sources[0], sources
+        for line in framework + sources:
+            assert '-fno-rtti' not in line, (request, line)
+
+
+RED = ('import webcpp ;\n'
+       '\n'
+       'webcpp.boost-test red-checks : checks_test.cpp ;\n'
+       'webcpp.boost-test red-requires : requires_test.cpp ;\n')
+
+RED_SOURCES = {
+    'checks_test.cpp': ('#include <boost/test/unit_test.hpp>\n'
+                        '\n'
+                        'BOOST_AUTO_TEST_CASE(checks_and_goes_on) {\n'
+                        '    BOOST_TEST(1 + 1 == 3);\n'
+                        '    BOOST_TEST(1 + 1 == 4);\n'
+                        '}\n'),
+    'requires_test.cpp': ('#include <boost/test/unit_test.hpp>\n'
+                          '\n'
+                          'BOOST_AUTO_TEST_CASE(requires_and_stops) {\n'
+                          '    BOOST_TEST_REQUIRE(2 + 2 == 5);\n'
+                          '    BOOST_TEST(2 + 2 == 6);\n'
+                          '}\n'),
+}
+
+
+# Each red suite: its case, the checks its output names, and a check after a failed requirement,
+# which must not run.
+RED_EXPECTED = {
+    'red-checks': ('checks_and_goes_on', ('1 + 1 == 3', '1 + 1 == 4'), None),
+    'red-requires': ('requires_and_stops', ('2 + 2 == 5',), '2 + 2 == 6'),
+}
+
+
+def test_boost_test_failure_is_red_and_named(root):
+    # A failed check, after which its case goes on, and a failed requirement, which ends its
+    # case: each ends the run red, never a hang and never a pass, and its output names the case,
+    # every failed check and the module, whose name has - as _. Boost.Test writes a terminal's
+    # colours even to a file, unless told not to. The same holds whatever the suite's sources are
+    # built with: with exceptions, the default, or with a user's own exception-handling=off; the
+    # framework that reports the failure is unaffected either way (test_boost_test_passes_natively).
+    harness.add_library(root, 'red', RED, RED_SOURCES)
+    for request in ((), ('exception-handling=off',)):
+        result = harness.run_b2(root, *request, 'libs/red/test')
+        harness.expect(result, False)
+        assert not passed(result), (request, result.stdout[-4000:])
+        for suite, (case, checks, unreached) in RED_EXPECTED.items():
+            module = suite.replace('-', '_')
+            assert re.search(rf'^\.\.\.failed .*/{suite}\.test/.*/{suite}\.run\.\.\.$',
+                             result.stdout, re.MULTILINE), (request, suite, result.stdout[-6000:])
+            output = output_of(root, f'{suite}.output')
+            lines = output.splitlines()
+            for check in checks:
+                assert any(f'in "{case}": ' in line and f'check {check} has failed' in line
+                           for line in lines), (request, suite, check, output)
+            assert f'detected in the test module "{module}"' in output, (request, suite, output)
+            assert unreached is None or unreached not in output, (request, suite, output)
+            assert re.search(r'^EXIT STATUS: [1-9]', output, re.MULTILINE), (request, suite, output)
+            assert '\x1b' not in output, (request, suite, output)
+        shutil.rmtree(root / 'bin')
+
+
+SUITES = ('import webcpp ;\n'
+          '\n'
+          'webcpp.targets native wasip2 wasip3 ;\n'
+          '\n'
+          'webcpp.boost-test suite : suite_test.cpp ;\n')
+
+SUITE_SOURCE = ('#ifdef __wasi__\n'
+                '#error "a Boost.Test suite is built for native only"\n'
+                '#endif\n'
+                '\n'
+                '#include <boost/test/unit_test.hpp>\n'
+                '\n'
+                'BOOST_AUTO_TEST_CASE(passes) {\n'
+                '    BOOST_TEST(1 + 1 == 2);\n'
+                '}\n')
+
+
+def test_boost_test_never_built_for_wasm(root):
+    # Its Jamfile declares wasm targets, and the suite is still built for native only: the source
+    # stops with #error for WASI, so a suite the filter should have skipped fails loudly.
+    harness.add_library(root, 'suites', SUITES, {'suite_test.cpp': SUITE_SOURCE})
+    for target in (WASIP2, WASIP3):
+        result = harness.run_b2(root, *target, 'libs/suites/test', 'libs/demo/test//suite')
+        harness.expect(result, True)
+        assert not passed(result), (target, result.stdout[-4000:])
+        assert not (root / 'bin/libs/suites').exists(), target
+        assert 'boost_test_runner' not in result.stdout, (target, result.stdout[-4000:])
+    result = harness.run_b2(root, 'libs/suites/test')
+    harness.expect(result, True)
+    assert passed(result) == {'suite'}, (passed(result), result.stdout[-4000:])
+    # It is recorded for native alone, whatever its Jamfile declares.
+    result = harness.run_b2(root, '-d0', 'declared-targets')
+    harness.expect(result, True)
+    lines = [line for line in result.stdout.splitlines() if line.startswith('suites ')]
+    assert lines == ['suites native'], result.stdout
+
+
+def boost_json_archives(root):
+    """The archives of /webcpp//boost_json that b2 wrote under the scratch superproject's bin/,
+    one per variant built: libboost_json.a, or boost_json.lib with MSVC."""
+    return sorted(path for path in (root / 'bin').rglob('*boost_json.*')
+                  if path.suffix in ('.a', '.lib'))
+
+
+def test_boost_json_on_every_target(root):
+    program = 'libs/demo/test//parses_json'
+    result = harness.run_b2(root, program)
+    harness.expect(result, True)
+    assert passed(result) == {'parses_json'}, (passed(result), result.stdout[-4000:])
+    # The definitions are a library of their own, compiled once per variant built: natively one,
+    # one for each wasm target, in its toolset's directory (clang-darwin-wasip2 on macOS), and one
+    # more natively when a user builds without exceptions.
+    assert len(boost_json_archives(root)) == 1, (boost_json_archives(root), result.stdout[-4000:])
+    for count, (wasm, target) in enumerate((('wasip2', WASIP2), ('wasip3', WASIP3)), start=2):
+        result = harness.run_b2(root, *target, program)
+        harness.expect(result, True)
+        assert passed(result) == {'parses_json'}, (target, passed(result), result.stdout[-4000:])
+        archives = boost_json_archives(root)
+        assert len(archives) == count, (target, archives)
+        assert len([path for path in archives
+                    if any(part.endswith(f'-{wasm}') for part in path.parts)]) == 1, archives
+    result = harness.run_b2(root, 'exception-handling=off', program)
+    harness.expect(result, True)
+    assert passed(result) == {'parses_json'}, (passed(result), result.stdout[-4000:])
+    archives = boost_json_archives(root)
+    assert len(archives) == 4, archives
+    assert len([path for path in archives if 'exception-handling-off' in path.parts]) == 1, (
+        archives)
+    # Without the library, a program that parses JSON does not link.
+    harness.replace(root / 'libs/demo/test/Jamfile', ' <library>/webcpp//boost_json', '')
+    result = harness.run_b2(root, '-a', program)
+    harness.expect(result, False)
+    assert re.search(r'^\.\.\.failed .*parses_json', result.stdout, re.MULTILINE), (
+        result.stdout[-4000:])
+
+
+TOOLCHAIN_JAMFILE = ('import webcpp ;\n'
+                     '\n'
+                     'webcpp.targets native wasip2 wasip3 ;\n'
+                     '\n'
+                     'webcpp.run toolchain : toolchain.cpp ;\n')
+
+TOOLCHAIN_SOURCE = (
+    '#include <boost/config.hpp>\n'
+    '\n'
+    '#include <cstdio>\n'
+    '\n'
+    '#if defined(_MSVC_LANG)\n'
+    'static_assert(_MSVC_LANG >= 202002L, "the build does not compile as C++20");\n'
+    '#else\n'
+    'static_assert(__cplusplus >= 202002L, "the build does not compile as C++20");\n'
+    '#endif\n'
+    '\n'
+    'int main() {\n'
+    '#ifdef BOOST_NO_EXCEPTIONS\n'
+    '    std::puts("no exceptions");\n'
+    '#else\n'
+    '    std::puts("exceptions");\n'
+    '#endif\n'
+    '    return 0;\n'
+    '}\n')
+
+
+def test_every_program_sees_cxx20_and_exceptions_on_every_target(root):
+    # Restores the promise of xstate-cpp's retired toolchain_test.cpp that every program sees
+    # C++20, and checks through Boost.Config's own macro, not the raw compiler ones built_with
+    # reads, that every target the program declares builds it with exceptions, and that a user's
+    # exception-handling=off builds it without them, natively and on wasip2.
+    harness.add_library(root, 'toolchain', TOOLCHAIN_JAMFILE, {'toolchain.cpp': TOOLCHAIN_SOURCE})
+    for request, expected in (((), 'exceptions\n'), (WASIP2, 'exceptions\n'),
+                              (WASIP3, 'exceptions\n'),
+                              (('exception-handling=off',), 'no exceptions\n'),
+                              ((*WASIP2, 'exception-handling=off'), 'no exceptions\n')):
+        result = harness.run_b2(root, *request, 'libs/toolchain/test')
+        harness.expect(result, True)
+        assert passed(result) == {'toolchain'}, (request, passed(result), result.stdout[-4000:])
+        assert output_of(root, 'toolchain.output').startswith(expected), request
+        shutil.rmtree(root / 'bin')
+
+
+def test_a_users_build_without_exceptions_links_the_handler(root):
+    # webcpp builds no variant without exceptions; a user who wants one asks b2 for it, and the
+    # program then compiles without exceptions, links the handler of tools/throw_exception.cpp,
+    # which its throw site needs, and runs, RTTI untouched.
+    result = harness.run_b2(root, 'exception-handling=off', 'libs/demo/test')
+    harness.expect(result, True)
+    assert passed(result) == NATIVE_DEMO, (passed(result), result.stdout[-4000:])
+    assert output_of(root, 'pass.output').startswith(built_with(exceptions=False, rtti=True))
+    assert built_with(exceptions=False, rtti=True) in output_of(root, 'suite.output')
+    # The handler prints what was thrown and ends the program, where a throw would have gone
+    # through std::terminate natively, and trapped the instance on wasip2: so natively and on
+    # wasip2 alike.
+    harness.add_library(
+        root, 'aborts',
+        'import webcpp ;\n'
+        '\n'
+        'webcpp.run-fail aborts : aborts.cpp : : native wasip2 ;\n',
+        {'aborts.cpp': '#include <boost/throw_exception.hpp>\n'
+                       '#include <stdexcept>\n'
+                       'int main() { boost::throw_exception(std::runtime_error("planted")); }\n'})
+    for target in ((), WASIP2):
+        for request, handled in (((), False), (('exception-handling=off',), True)):
+            result = harness.run_b2(root, *target, *request, 'libs/aborts/test')
+            harness.expect(result, True)
+            assert passed(result) == {'aborts'}, (target, request, passed(result),
+                                                  result.stdout[-4000:])
+            assert ('throw_exception: planted' in output_of(root, 'aborts.output')) == handled, (
+                target, request, output_of(root, 'aborts.output'))
+            shutil.rmtree(root / 'bin/libs/aborts')
+    # The request is the user's, and reaches every program but one that declares it needs
+    # exceptions, <exception-handling>on, as catches does: it is built with them, and catches.
+    result = harness.run_b2(root, '-d+2', 'exception-handling=off', 'libs/demo/example')
+    harness.expect(result, True)
+    assert output_of(root, 'catches.output') == 'caught: boom\n'
+    assert output_of(root, 'hello.output') == 'The answer is 42.\n'
+    compiles = {name: [line for line in result.stdout.splitlines()
+                       if ' -c ' in line and f'{name}.cpp"' in line]
+                for name in ('catches', 'hello')}
+    assert len(compiles['catches']) == 1 and '-fno-exceptions' not in compiles['catches'][0], (
+        compiles)
+    assert len(compiles['hello']) == 1 and '-fno-exceptions' in compiles['hello'][0], compiles
+    # Without that declaration, an example that throws does not compile.
+    harness.replace(root / 'libs/demo/example/Jamfile', 'webcpp.example catches.cpp : '
+                    '<exception-handling>on ;', 'webcpp.example catches.cpp ;')
+    harness.expect(harness.run_b2(root, 'exception-handling=off', 'libs/demo/example'), False,
+                   "cannot use 'throw' with exceptions disabled")
+
+
+def test_no_variant_is_built_without_rtti(root):
+    # On every target, and when a user turns exceptions off: no compile line turns RTTI off, and
+    # no build directory says it is.
+    for request in ((), WASIP2, WASIP3, ('exception-handling=off',)):
+        result = harness.run_b2(root, '-n', '-a', *request, 'libs/demo/test',
+                                'libs/demo/example')
+        harness.expect(result, True)
+        compiles = [line for line in result.stdout.splitlines() if ' -c ' in line]
+        assert compiles, (request, result.stdout[-4000:])
+        for line in compiles:
+            assert '-fno-rtti' not in line and 'rtti-off' not in line, (request, line)
+
+
+# A test that reads a file of a directory whose name holds a space, which webcpp.data gives it.
+DATA_JAMFILE = r'''import regex ;
+import webcpp ;
+
+webcpp.targets native wasip2 wasip3 ;
+
+path-constant DATA : "the data" ;
+local data = [ regex.replace $(DATA) "\\\\" "/" ] ;
+webcpp.run reads_data : reads_data.cpp
+  : <define>"\"WEBCPP_TEST_DATA=\\\"$(data)\\\"\"" [ webcpp.data $(DATA) ] ;
+'''
+
+READS_DATA_SOURCE = r'''#include <fstream>
+#include <iostream>
+#include <string>
+
+int main() {
+    std::ifstream file(WEBCPP_TEST_DATA "/answer.txt");
+    std::string line;
+    if (!std::getline(file, line)) {
+        std::cout << "cannot read " WEBCPP_TEST_DATA "/answer.txt\n";
+        return 1;
+    }
+    std::cout << line << '\n';
+    return line == "42" ? 0 : 1;
+}
+'''
+
+
+def add_data_reader(root, jamfile=DATA_JAMFILE):
+    harness.add_library(root, 'data_reader', jamfile, {'reads_data.cpp': READS_DATA_SOURCE})
+    (root / 'libs/data_reader/test/the data').mkdir()
+    (root / 'libs/data_reader/test/the data/answer.txt').write_text('42\n')
+
+
+def test_a_test_reads_its_data_on_every_target(root):
+    add_data_reader(root)
+    for request in ((), WASIP2, WASIP3):
+        result = harness.run_b2(root, '-a', '-d+2', *request, 'libs/data_reader/test')
+        harness.expect(result, True)
+        assert passed(result) == {'reads_data'}, (request, passed(result), result.stdout[-4000:])
+        assert output_of(root, 'reads_data.output').startswith('42\n'), request
+        # wasmtime is given the directory after its own name, quoted whole; natively nothing is.
+        given = re.search(r'wasmtime --dir="[^"]*/the data" ', result.stdout)
+        assert bool(given) == bool(request), (request, result.stdout[-4000:])
+        shutil.rmtree(root / 'bin')
+
+
+def test_without_its_data_a_wasi_test_reads_nothing(root):
+    # The reason webcpp.data exists: natively the program reads the host's files, under wasmtime
+    # it sees none it was not given.
+    add_data_reader(root, DATA_JAMFILE.replace(' [ webcpp.data $(DATA) ]', ''))
+    harness.expect(harness.run_b2(root, '-a', 'libs/data_reader/test'), True)
+    shutil.rmtree(root / 'bin')
+    result = harness.run_b2(root, '-a', *WASIP2, 'libs/data_reader/test')
+    harness.expect(result, False)
+    assert output_of(root, 'reads_data.output').startswith('cannot read '), result.stdout[-4000:]
+
+
+def test_data_must_be_absolute(root):
+    add_data_reader(root, DATA_JAMFILE.replace('[ webcpp.data $(DATA) ]', '[ webcpp.data data ]'))
+    harness.expect(harness.run_b2(root, 'libs/data_reader/test'), False,
+                   'webcpp.data: data is not absolute')
+
+
+def test_data_the_shell_would_read_is_refused(root):
+    # wasmtime's --dir="<directory>" reaches the shell inside double quotes, where these three
+    # would be read rather than passed: each stops the build, naming it, before a broken command.
+    add_data_reader(root)
+    jamfile = root / 'libs/data_reader/test/Jamfile'
+    for character, written in (('"', '\\"'), ('$', '$'), ('`', '`')):
+        jamfile.write_text(DATA_JAMFILE.replace('[ webcpp.data $(DATA) ]',
+                                                f'[ webcpp.data "$(DATA)/a{written}b" ]'))
+        harness.expect(harness.run_b2(root, 'libs/data_reader/test'), False, 'webcpp.data: ',
+                       f'/the data/a{character}b holds a character the shell would read: '
+                       f'{character}')
+
+
+CASES = [
+    test_native_builds_exactly_the_declared_programs,
+    test_wasip2_skips_native_only_and_has_exceptions,
+    test_wasip3_catches_a_throw,
+    test_compile_builds_only_where_declared,
+    test_compile_diagnostic_passes_only_on_its_diagnostic,
+    test_filter_maps_each_toolset_to_its_target,
+    test_undeclared_jamfile_is_native_only,
+    test_emscripten_builds_only_what_declares_it,
+    test_declared_targets_lists_pairs,
+    test_a_wrong_declaration_is_refused,
+    test_a_lane_on_targets_is_listed_once_per_target,
+    test_a_lanes_kind_says_whether_it_runs_the_original,
+    test_a_lane_runs_only_on_targets_its_jamfile_declares,
+    test_a_lanes_programs_leave_the_ordinary_lanes,
+    test_a_lane_built_for_another_target_fails_by_name,
+    test_every_served_program_runs_in_an_own_lane,
+    test_programs_of_records_link_and_drive,
+    test_example_mismatch_fails_naming_the_program,
+    test_example_reads_its_input,
+    test_example_input_change_reruns,
+    test_example_without_input_reads_nothing,
+    test_headers_alone_catches_a_missing_include,
+    test_headers_alone_takes_some_headers_with_their_own_requirements_and_targets,
+    test_boost_test_passes_natively,
+    test_boost_test_failure_is_red_and_named,
+    test_boost_test_never_built_for_wasm,
+    test_boost_json_on_every_target,
+    test_every_program_sees_cxx20_and_exceptions_on_every_target,
+    test_a_users_build_without_exceptions_links_the_handler,
+    test_no_variant_is_built_without_rtti,
+    test_a_test_reads_its_data_on_every_target,
+    test_without_its_data_a_wasi_test_reads_nothing,
+    test_data_must_be_absolute,
+    test_data_the_shell_would_read_is_refused,
+]
+
+
+if __name__ == '__main__':
+    sys.exit(harness.run_cases('webcpp_jam_test', CASES, sys.argv[1:]))

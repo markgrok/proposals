@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-08
+webcpp:
+  library: wasi
+  title: "wasi: the HTTP handler a WebAssembly component exports, for C++ on wasip2 and wasip3"
+  kind: own
+  port_of: null
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/wasi/tree/6e3c529
+  decided: 2026-10-08

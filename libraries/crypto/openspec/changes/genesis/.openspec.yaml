@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-10
+webcpp:
+  library: crypto
+  title: "crypto: authenticated encryption, randomness and secp256k1 over C backends"
+  kind: wrapper
+  port_of: null
+  status: accepted
+  release: null
+  implementation: null
+  decided: 2026-10-11

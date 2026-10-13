@@ -1,0 +1,1099 @@
+<!--
+Copyright (c) 2026 WebCpp.org
+
+Distributed under the Boost Software License, Version 1.0. (See
+accompanying file LICENSE_1_0.txt or copy at
+https://www.boost.org/LICENSE_1_0.txt)
+
+The home page redesigned with the mark the owner chose (Task 8, gate G3): b2b, the web's globe
+embraced by C++'s brackets, the angle brackets in the accent, violet, and the arms and the globe
+in ink (design/logo-b2b.svg, the site's assets/logo.svg). The variants he did not choose stay in
+design/ as the record: logo-a, logo-b and logo-c, logo-b1, logo-b2a and logo-b3, and the blue
+accent's values in the comment below. One self-contained page: no font, image or script is
+fetched. The home is drawn twice, at 360 and at 1280 px, each in a frame scaled to fit the window,
+and laid out by container queries on its own width where the site uses media queries on the
+window's (assets/site.css).
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webcpp home mockup</title>
+<style>
+/*
+ * The tokens: the site's light set here, its dark set below; one accent, violet, the owner's
+ * choice. The accent has a value for text and marks on the light background, one on the dark, and
+ * a fill under white text. Contrast, for text on the background and on the surface, with the blue
+ * he was shown beside it, kept here as the record:
+ * | accent | light (on #ffffff / #f5f5f7) | dark (on #000000 / #1c1c1e) | fill, white text on it |
+ * | violet | #5b3fd9, 6.65 / 6.11          | #9d8cff, 7.63 / 6.18        | #5b3fd9 6.65, #6246ea 5.86 |
+ * | blue   | #0066cc, 5.57 / 5.11          | #3d9fff, 7.60 / 6.16        | #0066cc 5.57, both themes |
+ */
+:root {
+    --accent-light: #5b3fd9;
+    --accent-dark: #9d8cff;
+    --fill-light: #5b3fd9;
+    --fill-dark: #6246ea;
+}
+
+:root {
+    color-scheme: light dark;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --background: #ffffff;
+    --surface: #f5f5f7;
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --rule: #d2d2d7;
+    --accent: var(--accent-light);
+    --accent-fill: var(--fill-light);
+    --on-accent: #ffffff;
+    /* The mockup's own page around the frames. */
+    --canvas: #f5f5f7;
+    --frame: #d2d2d7;
+    --mark-ink: var(--text);
+    --mark-acc: var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --background: #000000;
+        --surface: #1c1c1e;
+        --text: #f5f5f7;
+        --muted: #a1a1a6;
+        --rule: #38383a;
+        --accent: var(--accent-dark);
+        --accent-fill: var(--fill-dark);
+        --canvas: #1c1c1e;
+        --frame: #48484a;
+    }
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --background: #000000;
+    --surface: #1c1c1e;
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --rule: #38383a;
+    --accent: var(--accent-dark);
+    --accent-fill: var(--fill-dark);
+    --canvas: #1c1c1e;
+    --frame: #48484a;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--text);
+    font: 17px/1.5 var(--font);
+    overflow-wrap: break-word;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+.sprite {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+}
+
+svg.mark {
+    display: block;
+    flex: none;
+    overflow: visible;
+}
+
+/* ---- The mockup's own page: what it shows, the controls, the concepts. ---- */
+
+.sheet {
+    max-width: 1680px;
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+}
+
+.intro h1 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+}
+
+.intro p {
+    max-width: 64ch;
+    margin: 0 0 20px;
+    color: var(--muted);
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    margin: 0 0 24px;
+}
+
+.toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.toggle legend {
+    float: left;
+    padding: 0;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.toggle .options {
+    display: flex;
+    padding: 3px;
+    border-radius: 980px;
+    background: var(--background);
+    box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.toggle button {
+    padding: 5px 14px;
+    white-space: nowrap;
+    border: 0;
+    border-radius: 980px;
+    background: none;
+    color: var(--text);
+    font: 500 14px/1.4 var(--font);
+    cursor: pointer;
+}
+
+.toggle button[aria-pressed="true"] {
+    background: var(--accent-fill);
+    color: var(--on-accent);
+}
+
+/* The mark's card: the mark, its favicons and its app icons. */
+
+.concepts {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin: 0 0 40px;
+    padding: 0;
+    list-style: none;
+}
+
+.concept {
+    display: grid;
+    gap: 16px;
+    padding: 20px;
+    border-radius: 20px;
+    background: var(--background);
+    box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.concept-head {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.concept h2 {
+    margin: 0;
+    font-size: 19px;
+    line-height: 1.25;
+}
+
+.concept p {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.4;
+}
+
+.swatch-label {
+    margin: 0 0 6px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+/* The favicon at its own 16 px, in a browser's tab, light and dark, two colours and one. */
+
+.tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.tab {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 9px 9px 0 0;
+    font: 12px/1 var(--font);
+}
+
+.tab.on-light {
+    --mark-ink: #1d1d1f;
+    --mark-acc: var(--accent-light);
+    background: #ffffff;
+    box-shadow: inset 0 0 0 1px #d2d2d7;
+    color: #1d1d1f;
+}
+
+.tab.on-dark {
+    --mark-ink: #f5f5f7;
+    --mark-acc: var(--accent-dark);
+    background: #2c2c2e;
+    color: #f5f5f7;
+}
+
+.tab.one-colour {
+    --mark-acc: var(--mark-ink);
+}
+
+/* The app icon, 512 px drawn at 96: on the accent in one colour, on white and black in two. */
+
+.icons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.icon {
+    display: grid;
+    place-items: center;
+    width: 96px;
+    height: 96px;
+    border-radius: 22px;
+}
+
+.icon svg.mark {
+    width: 60px;
+    height: 60px;
+}
+
+.icon.on-accent {
+    /* The angle brackets black on the accent, 3.16 to 1; the site's #1d1d1f would give 2.53. */
+    --mark-ink: #ffffff;
+    --mark-acc: #000000;
+    background: var(--fill-light);
+}
+
+.icon.on-white {
+    --mark-ink: #1d1d1f;
+    --mark-acc: var(--accent-light);
+    background: #ffffff;
+    box-shadow: inset 0 0 0 1px #d2d2d7;
+}
+
+.icon.on-black {
+    --mark-ink: #f5f5f7;
+    --mark-acc: var(--accent-dark);
+    background: #000000;
+    box-shadow: inset 0 0 0 1px #38383a;
+}
+
+/*
+ * The frames: the home at 360 and 1280 px, side by side once there is room, each zoomed by the
+ * ratio of the room to its width. tan(atan2(a, b)) is a / b as a plain number, the factor zoom
+ * takes, so that no script measures the window.
+ */
+
+.sheet {
+    container: stage / inline-size;
+}
+
+.frames {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.frame figcaption {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.device {
+    overflow: hidden;
+    border-radius: 28px;
+    background: var(--background);
+    box-shadow: 0 0 0 1px var(--frame);
+}
+
+.device.phone {
+    width: 360px;
+    zoom: min(1, tan(atan2(100cqi, 362px)));
+}
+
+.device.desktop {
+    width: 1280px;
+    border-radius: 12px;
+    zoom: tan(atan2(100cqi, 1282px));
+}
+
+/* On a wide screen the card's three parts stand in one row. */
+@container stage (min-width: 900px) {
+    .concept {
+        grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
+        align-items: start;
+        gap: 32px;
+    }
+}
+
+@container stage (min-width: 720px) {
+    .frames {
+        flex-direction: row;
+        align-items: flex-start;
+        gap: 24px;
+    }
+
+    .device.phone,
+    .device.desktop {
+        zoom: min(1, tan(atan2(100cqi - 24px, 1644px)));
+    }
+}
+
+/* ---- The home, as the site will draw it; its breakpoints are on its own width. ---- */
+
+.home {
+    container: home / inline-size;
+    --gutter: 16px;
+    --measure: 1120px;
+    background: var(--background);
+    color: var(--text);
+    font: 17px/1.5 var(--font);
+}
+
+.home .site-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 12px var(--gutter);
+}
+
+.home .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--text);
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+
+.home .brand:hover {
+    text-decoration: none;
+}
+
+.home .brand svg.mark {
+    width: 28px;
+    height: 28px;
+}
+
+.home .site-nav {
+    display: none;
+    gap: 22px;
+    font-size: 14px;
+}
+
+.home .site-nav a {
+    color: var(--text);
+}
+
+.home .site-nav a:hover {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+/* On a phone the navigation folds into a menu, which opens without a script. */
+
+.home .menu {
+    position: relative;
+}
+
+.home .menu summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 2px;
+    color: var(--text);
+    font-size: 15px;
+    list-style: none;
+    cursor: pointer;
+}
+
+.home .menu summary::-webkit-details-marker {
+    display: none;
+}
+
+.home .menu summary svg {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+}
+
+.home .menu-list {
+    position: absolute;
+    right: 0;
+    z-index: 1;
+    display: grid;
+    min-width: 200px;
+    margin-top: 8px;
+    padding: 8px 0;
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--rule);
+}
+
+.home .menu-list a {
+    padding: 8px 20px;
+    color: var(--text);
+}
+
+.home .band {
+    margin: 0;
+    padding: 6px var(--gutter);
+    border-block: 1px solid var(--rule);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+.home .band code {
+    font-family: var(--mono);
+    font-size: 0.92em;
+}
+
+.home .main {
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 0 var(--gutter);
+}
+
+/* The hero: the logo large, its arms closing once round the globe and the angle brackets as the page opens. */
+
+.home .hero {
+    display: grid;
+    gap: 28px;
+    padding: 40px 0 56px;
+}
+
+.home .hero svg.mark {
+    width: 96px;
+    height: 96px;
+}
+
+.home h1,
+.home h2,
+.home .door {
+    text-wrap: balance;
+}
+
+.home p {
+    text-wrap: pretty;
+}
+
+.home .hero h1 {
+    margin: 0 0 16px;
+    font-size: 44px;
+    font-weight: 700;
+    line-height: 1.04;
+    letter-spacing: -0.035em;
+}
+
+.home .hero .lede {
+    max-width: 34em;
+    margin: 0 0 28px;
+    color: var(--muted);
+    font-size: 19px;
+    line-height: 1.4;
+}
+
+.home .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.home .button {
+    padding: 11px 22px;
+    border-radius: 980px;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.home .button:hover {
+    text-decoration: none;
+}
+
+.home .button.primary {
+    background: var(--accent-fill);
+    color: var(--on-accent);
+}
+
+.home .button.secondary {
+    box-shadow: inset 0 0 0 1px var(--accent);
+    color: var(--accent);
+}
+
+.meet use {
+    transform-origin: 50% 50%;
+}
+
+.meet use[data-part="arms"] {
+    animation: embrace 900ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.meet use[data-part="angles"],
+.meet use[data-part="globe"] {
+    animation: appear 900ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes embrace {
+    from {
+        transform: scaleX(1.25);
+    }
+}
+
+@keyframes appear {
+    from {
+        opacity: 0;
+        transform: scale(0.7);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .meet use {
+        animation: none;
+    }
+}
+
+.home section {
+    padding: 48px 0;
+    border-top: 1px solid var(--rule);
+}
+
+.home h2 {
+    margin: 0 0 12px;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+}
+
+.home section > p {
+    max-width: 60ch;
+    margin: 0 0 28px;
+    color: var(--muted);
+}
+
+/*
+ * The targets: one rail runs through the three, the same code reaching each; down the left on a
+ * phone, across the top on a wide screen.
+ */
+
+.home .targets {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.home .targets li {
+    position: relative;
+    padding: 0 0 28px 32px;
+}
+
+.home .targets li:last-child {
+    padding-bottom: 0;
+}
+
+.home .targets li::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 0;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+
+.home .targets li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    top: 19px;
+    bottom: -8px;
+    left: 5px;
+    width: 1px;
+    background: var(--rule);
+}
+
+.home .targets strong {
+    display: block;
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.home .targets p {
+    margin: 2px 0 0;
+    color: var(--muted);
+}
+
+/* The doors: three large lines, each a link as wide as the page. */
+
+.home .doors {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.home .doors a {
+    display: grid;
+    gap: 4px;
+    padding: 20px 0;
+    color: var(--text);
+}
+
+.home .doors li + li a {
+    border-top: 1px solid var(--rule);
+}
+
+.home .doors a:hover {
+    text-decoration: none;
+}
+
+.home .doors a:hover .door {
+    color: var(--accent);
+}
+
+.home .door {
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+}
+
+.home .doors p {
+    margin: 0;
+    color: var(--muted);
+}
+
+.home .examples {
+    padding: 28px 24px;
+    border-radius: 24px;
+    background: var(--surface);
+}
+
+.home section.last {
+    border-top: 0;
+    padding-top: 0;
+}
+
+.home .examples h2 {
+    margin-bottom: 12px;
+}
+
+.home .examples p {
+    max-width: 60ch;
+    margin: 0 0 16px;
+    color: var(--muted);
+}
+
+.home .site-footer {
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 0 var(--gutter) 40px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.home .site-footer p {
+    margin: 0;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+}
+
+@container home (min-width: 768px) {
+    .home {
+        --gutter: 32px;
+    }
+
+    .home .site-nav {
+        display: flex;
+    }
+
+    .home .menu {
+        display: none;
+    }
+
+    .home .hero {
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 48px;
+        padding: 72px 0 88px;
+    }
+
+    .home .hero .mark-wrap {
+        order: 1;
+    }
+
+    .home .hero svg.mark {
+        width: 200px;
+        height: 200px;
+    }
+
+    .home .hero h1 {
+        font-size: 64px;
+    }
+
+    .home .hero .lede {
+        font-size: 22px;
+    }
+
+    .home section {
+        padding: 64px 0;
+    }
+
+    .home h2 {
+        font-size: 36px;
+    }
+
+    .home .targets {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 32px;
+    }
+
+    .home .targets li {
+        padding: 32px 0 0;
+    }
+
+    .home .targets li::before {
+        top: 0;
+    }
+
+    .home .targets li:not(:last-child)::after {
+        top: 5px;
+        right: -32px;
+        bottom: auto;
+        left: 11px;
+        width: auto;
+        height: 1px;
+    }
+
+    .home .doors a {
+        grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+        align-items: baseline;
+        gap: 32px;
+        padding: 28px 0;
+    }
+
+    .home .door {
+        font-size: 36px;
+    }
+
+    .home .doors p {
+        font-size: 19px;
+    }
+
+    .home .examples {
+        padding: 48px;
+        border-radius: 32px;
+    }
+}
+
+@container home (min-width: 1280px) {
+    .home {
+        --gutter: 48px;
+    }
+
+    .home .hero {
+        padding: 96px 0 112px;
+    }
+
+    .home .hero svg.mark {
+        width: 260px;
+        height: 260px;
+    }
+
+    .home .hero h1 {
+        font-size: 84px;
+    }
+
+    .home .hero .lede {
+        font-size: 24px;
+    }
+}
+</style>
+</head>
+<body>
+
+<!--
+The mark in three parts, so that the hero can close the arms round the rest, each part drawing in
+its colour through a custom property, so that one colour or two is a matter of two of them. Each
+joint is cut on the bisector of its angle: the arm ends on it, the angle bracket runs 1 unit past
+it underneath, so that the colours meet on one straight seam and nothing ever shows through it.
+-->
+<svg class="sprite" aria-hidden="true" focusable="false">
+    <defs>
+        <clipPath id="b2-arms"><path clip-rule="evenodd" d="M0 0H64V64H0ZM26 22.9L0 12.13L0 51.87L26 41.1ZM38 22.9L64 12.13L64 51.87L38 41.1Z"/></clipPath>
+        <clipPath id="b2-angles"><path d="M26 21.82L0 11.05L0 52.95L26 42.18ZM38 21.82L64 11.05L64 52.95L38 42.18Z"/></clipPath>
+    </defs>
+    <symbol id="mark-arms" viewBox="0 0 64 64">
+        <path d="M26 7C21 7 19 9 19 14V20L7 32L19 44V50C19 55 21 57 26 57M38 7C43 7 45 9 45 14V20L57 32L45 44V50C45 55 43 57 38 57" clip-path="url(#b2-arms)" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" style="stroke: var(--mark-ink)"/>
+    </symbol>
+    <symbol id="mark-angles" viewBox="0 0 64 64">
+        <path d="M19 20L7 32L19 44M45 20L57 32L45 44" clip-path="url(#b2-angles)" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" style="stroke: var(--mark-acc)"/>
+    </symbol>
+    <symbol id="mark-b2b-globe" viewBox="0 0 64 64">
+        <g fill="none" stroke-width="3.5" stroke-linecap="round" style="stroke: var(--mark-ink)">
+            <circle cx="32" cy="32" r="11"/>
+            <ellipse cx="32" cy="32" rx="4.5" ry="11"/>
+            <path d="M21 32H43"/>
+        </g>
+    </symbol>
+</svg>
+
+<div class="sheet">
+    <header class="intro">
+        <h1>webcpp home mockup</h1>
+        <p>The mark the owner chose, the web's globe embraced by C++'s braces, the angle brackets in
+        violet, and the home page redesigned around it: the same content as the site's, at
+        360&nbsp;px and at 1280&nbsp;px.</p>
+        <div class="controls">
+            <fieldset class="toggle">
+                <legend>Theme</legend>
+                <div class="options">
+                    <button type="button" data-set-theme="auto" aria-pressed="true">Auto</button>
+                    <button type="button" data-set-theme="light" aria-pressed="false">Light</button>
+                    <button type="button" data-set-theme="dark" aria-pressed="false">Dark</button>
+                </div>
+            </fieldset>
+        </div>
+    </header>
+
+    <ul class="concepts">
+        <li class="concept" data-concept="b2b">
+            <div class="concept-head">
+                <svg class="mark" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true"><use href="#mark-angles"/><use href="#mark-arms"/><use href="#mark-b2b-globe"/></svg>
+                <div>
+                    <h2>The mark</h2>
+                    <p>The web embraced by C++: C++'s braces open into the web's angle brackets, in the accent, and hold the web's globe.</p>
+                </div>
+            </div>
+            <div>
+                <p class="swatch-label">Favicon, 16 px</p>
+                <div class="tabs">
+                    <span class="tab on-light"><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-hidden="true"><use href="#mark-angles"/><use href="#mark-arms"/><use href="#mark-b2b-globe"/></svg>webcpp</span>
+                    <span class="tab on-dark"><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-hidden="true"><use href="#mark-angles"/><use href="#mark-arms"/><use href="#mark-b2b-globe"/></svg>webcpp</span>
+                    <span class="tab on-light one-colour"><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-hidden="true"><use href="#mark-angles"/><use href="#mark-arms"/><use href="#mark-b2b-globe"/></svg>webcpp</span>
+                    <span class="tab on-dark one-colour"><svg class="mark" viewBox="0 0 64 64" width="16" height="16" aria-hidden="true"><use href="#mark-angles"/><use href="#mark-arms"/><use href="#mark-b2b-globe"/></svg>webcpp</span>
+                </div>
+            </div>
+            <div>
+                <p class="swatch-label">App icon, 512 px, drawn at 96</p>
+                <div class="icons">
+                    <span class="icon on-accent"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#mark-angles"/><use href="#mark-arms"/><use href="#mark-b2b-globe"/></svg></span>
+                    <span class="icon on-white"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#mark-angles"/><use href="#mark-arms"/><use href="#mark-b2b-globe"/></svg></span>
+                    <span class="icon on-black"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#mark-angles"/><use href="#mark-arms"/><use href="#mark-b2b-globe"/></svg></span>
+                </div>
+            </div>
+        </li>
+    </ul>
+
+    <!-- The two homes are pictures of the site, so their header, navigation, main and footer are plain elements: the mockup's landmarks are its own. -->
+    <div class="frames">
+        <figure class="frame" style="margin: 0">
+            <figcaption>360 px, a phone</figcaption>
+            <div class="device phone">
+                <div class="home">
+                    <div class="site-header">
+                        <a class="brand" href="#home"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use data-part="angles" href="#mark-angles"/><use data-part="arms" href="#mark-arms"/><use data-part="globe" href="#mark-b2b-globe"/></svg>webcpp</a>
+                        <details class="menu">
+                            <summary><svg viewBox="0 0 18 18" fill="none" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 5H16M2 9H16M2 13H16"/></svg>Menu</summary>
+                            <div class="menu-list">
+                                <a href="#libraries">Libraries</a>
+                                <a href="#cpp">C++</a>
+                                <a href="#javascript">JavaScript</a>
+                                <a href="#ai">AI</a>
+                                <a href="#examples">Examples</a>
+                                <a href="#report">Report</a>
+                                <a href="#community">Community</a>
+                                <a href="#search">Search</a>
+                            </div>
+                        </details>
+                    </div>
+                    <p class="band">Preview of main at <code>b6caf67</code>, 2026-10-11</p>
+                    <div class="main">
+                        <div class="hero">
+                            <div class="mark-wrap"><svg class="mark meet" viewBox="0 0 64 64" aria-hidden="true"><use data-part="angles" href="#mark-angles"/><use data-part="arms" href="#mark-arms"/><use data-part="globe" href="#mark-b2b-globe"/></svg></div>
+                            <div>
+                                <h1>Where C++ and the web meet</h1>
+                                <p class="lede">webcpp brings the best of C++ to the web, and the libraries web developers use most to C++, for everyone who builds decentralized applications.</p>
+                                <div class="actions">
+                                    <a class="button primary" href="#libraries">See the libraries</a>
+                                    <a class="button secondary" href="#cpp">Get started</a>
+                                </div>
+                            </div>
+                        </div>
+                        <section>
+                            <h2>The same code, wherever it runs</h2>
+                            <p>Each library is header-only C++20, built and tested with b2 on every target it declares. Each target has its purpose:</p>
+                            <ul class="targets">
+                                <li><strong>The browser</strong><p>Compiled to WebAssembly with Emscripten, beside the page's JavaScript.</p></li>
+                                <li><strong>A server</strong><p>As a WASI component in a WebAssembly container, run by wasmtime or a cloud.</p></li>
+                                <li><strong>Native</strong><p>Compiled by your own compiler, as any C++ library is.</p></li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h2>Where to start</h2>
+                            <ul class="doors">
+                                <li><a href="#cpp"><span class="door">For C++ developers</span><p>Getting started, building for each target, and every library's page.</p></a></li>
+                                <li><a href="#javascript"><span class="door">For JavaScript developers</span><p>What builds for the browser today, and what is coming: C++ called from JavaScript, and back.</p></a></li>
+                                <li><a href="#ai"><span class="door">For AI developers</span><p>llms.txt and libraries.json, the catalogue for agents, and the integrations to come.</p></a></li>
+                            </ul>
+                        </section>
+                        <section class="last">
+                            <div class="examples">
+                                <h2>Examples</h2>
+                                <p>The first example comes with the visualizer: a calculator whose C++ runs in the browser, each step shown as it runs, from the JavaScript that calls into WebAssembly to the C++ inside it. The examples page lists what follows it.</p>
+                                <a href="#examples">What is coming</a>
+                            </div>
+                        </section>
+                    </div>
+                    <div class="site-footer">
+                        <p>webcpp is free software, under the <a href="https://www.boost.org/LICENSE_1_0.txt">Boost Software License 1.0</a>. Its source is <a href="https://github.com/webcpporg/webcpp">on GitHub</a>.</p>
+                    </div>
+                </div>
+            </div>
+        </figure>
+        <figure class="frame" style="margin: 0">
+            <figcaption>1280 px, a desktop</figcaption>
+            <div class="device desktop">
+                <div class="home">
+                    <div class="site-header">
+                        <a class="brand" href="#home"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use data-part="angles" href="#mark-angles"/><use data-part="arms" href="#mark-arms"/><use data-part="globe" href="#mark-b2b-globe"/></svg>webcpp</a>
+                        <div class="site-nav">
+                            <a href="#libraries">Libraries</a>
+                            <a href="#cpp">C++</a>
+                            <a href="#javascript">JavaScript</a>
+                            <a href="#ai">AI</a>
+                            <a href="#examples">Examples</a>
+                            <a href="#report">Report</a>
+                            <a href="#community">Community</a>
+                            <a href="#search">Search</a>
+                        </div>
+                    </div>
+                    <p class="band">Preview of main at <code>b6caf67</code>, 2026-10-11</p>
+                    <div class="main">
+                        <div class="hero">
+                            <div class="mark-wrap"><svg class="mark meet" viewBox="0 0 64 64" aria-hidden="true"><use data-part="angles" href="#mark-angles"/><use data-part="arms" href="#mark-arms"/><use data-part="globe" href="#mark-b2b-globe"/></svg></div>
+                            <div>
+                                <h1>Where C++ and the web meet</h1>
+                                <p class="lede">webcpp brings the best of C++ to the web, and the libraries web developers use most to C++, for everyone who builds decentralized applications.</p>
+                                <div class="actions">
+                                    <a class="button primary" href="#libraries">See the libraries</a>
+                                    <a class="button secondary" href="#cpp">Get started</a>
+                                </div>
+                            </div>
+                        </div>
+                        <section>
+                            <h2>The same code, wherever it runs</h2>
+                            <p>Each library is header-only C++20, built and tested with b2 on every target it declares. Each target has its purpose:</p>
+                            <ul class="targets">
+                                <li><strong>The browser</strong><p>Compiled to WebAssembly with Emscripten, beside the page's JavaScript.</p></li>
+                                <li><strong>A server</strong><p>As a WASI component in a WebAssembly container, run by wasmtime or a cloud.</p></li>
+                                <li><strong>Native</strong><p>Compiled by your own compiler, as any C++ library is.</p></li>
+                            </ul>
+                        </section>
+                        <section>
+                            <h2>Where to start</h2>
+                            <ul class="doors">
+                                <li><a href="#cpp"><span class="door">For C++ developers</span><p>Getting started, building for each target, and every library's page.</p></a></li>
+                                <li><a href="#javascript"><span class="door">For JavaScript developers</span><p>What builds for the browser today, and what is coming: C++ called from JavaScript, and back.</p></a></li>
+                                <li><a href="#ai"><span class="door">For AI developers</span><p>llms.txt and libraries.json, the catalogue for agents, and the integrations to come.</p></a></li>
+                            </ul>
+                        </section>
+                        <section class="last">
+                            <div class="examples">
+                                <h2>Examples</h2>
+                                <p>The first example comes with the visualizer: a calculator whose C++ runs in the browser, each step shown as it runs, from the JavaScript that calls into WebAssembly to the C++ inside it. The examples page lists what follows it.</p>
+                                <a href="#examples">What is coming</a>
+                            </div>
+                        </section>
+                    </div>
+                    <div class="site-footer">
+                        <p>webcpp is free software, under the <a href="https://www.boost.org/LICENSE_1_0.txt">Boost Software License 1.0</a>. Its source is <a href="https://github.com/webcpporg/webcpp">on GitHub</a>.</p>
+                    </div>
+                </div>
+            </div>
+        </figure>
+    </div>
+</div>
+
+<script>
+/**
+ * The one toggle: the theme, the system's or one chosen.
+ */
+const root = document.documentElement
+
+function setTheme(theme) {
+    if (theme === 'auto') {
+        delete root.dataset.theme
+    } else {
+        root.dataset.theme = theme
+    }
+    for (const button of document.querySelectorAll('.toggle [data-set-theme]')) {
+        button.setAttribute('aria-pressed', String(button.dataset.setTheme === theme))
+    }
+}
+
+document.addEventListener('click', event => {
+    const theme = event.target.closest('[data-set-theme]')
+    if (theme) {
+        setTheme(theme.dataset.setTheme)
+    }
+})
+</script>
+</body>
+</html>

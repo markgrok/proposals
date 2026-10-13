@@ -1,0 +1,71 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[#config-targets]
+== Targets
+
+webcpp builds a program for one of four targets, and `<webcpp/config.hpp>`
+defines exactly one macro, which names it, from the macro the compiler
+itself defines for that target:
+
+[cols="2,2,3",options="header"]
+|===
+| Macro | The compiler defines | The target
+
+| `WEBCPP_TARGET_WASIP2`
+| `+__wasip2__+`
+| wasm32-wasip2, a component of WASI 0.2, built with wasi-sdk's clang
+
+| `WEBCPP_TARGET_WASIP3`
+| `+__wasip3__+`
+| wasm32-wasip3, a component of WASI 0.3, built with wasi-sdk's clang
+
+| `WEBCPP_TARGET_EMSCRIPTEN`
+| `+__EMSCRIPTEN__+`
+| Emscripten, for a browser or for node
+
+| `WEBCPP_TARGET_NATIVE`
+| none of the three, nor `+__wasm__+`
+| the host's system, with any compiler for it: GCC, Clang or MSVC
+|===
+
+The macros come from the compiler, never from the build system: a program
+compiled by hand, with a plain `clang++` or with wasi-sdk's, gets the macro
+b2 would give it. The program of <<config-introduction>> chooses by them,
+when it is compiled, the name of where its standard output goes:
+
+[source]
+----
+include::{examples}/config_quick_start.cpp[tag=target,indent=0]
+----
+
+A WebAssembly build for none of the three WebAssembly targets, such as
+wasm32-wasip1 or wasm32-unknown-unknown, is not read as native: the
+compiler defines `+__wasm__+` there, and `<webcpp/config.hpp>` stops the
+build with the error
+
+[listing]
+----
+unsupported target: webcpp builds for wasm32-wasip2, wasm32-wasip3, Emscripten and natively
+----
+
+The header names the target before it includes `<boost/config.hpp>`, so
+that wasm32-unknown-unknown, which has no {cpp} standard library and on
+which Boost.Config stops at a header that is not there, gets this message
+first. A new target will get a macro of its own.
+
+The target macros, and `WEBCPP_HAS_EXCEPTIONS` (<<config-exceptions>>), are
+defined by `<webcpp/config.hpp>` alone. A build that defines one of them
+before the header, on the command line or in a header of its own, stops with the
+error
+
+[listing]
+----
+WEBCPP_TARGET_* and WEBCPP_HAS_EXCEPTIONS are defined by <webcpp/config.hpp> alone
+----
+
+and with nothing more: the rest of the header is skipped, so that no macro
+is defined a second time.

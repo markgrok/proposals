@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-09
+webcpp:
+  library: trystero
+  title: "trystero: serverless WebRTC rooms, wire compatible with Trystero"
+  kind: port
+  port_of: "Trystero 0.26.0"
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/trystero/tree/160f431
+  decided: 2026-10-09

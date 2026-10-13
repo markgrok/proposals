@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-07
+webcpp:
+  library: xactor
+  title: "xactor: a deterministic actor system for C++20"
+  kind: own
+  port_of: null
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/xactor/tree/62f3e77
+  decided: 2026-10-07

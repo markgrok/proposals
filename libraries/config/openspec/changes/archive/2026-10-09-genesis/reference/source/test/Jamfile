@@ -1,0 +1,62 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+project : requirements <library>/webcpp/config//config ;
+
+import webcpp ;
+
+webcpp.targets native wasip2 wasip3 emscripten ;
+
+# config.hpp alone. version.hpp, which is <webcpp/version.hpp> as Boost's is
+# <boost/version.hpp>, lies outside webcpp/config/, so headers-alone does not
+# take it: the test version compiles it alone.
+webcpp.headers-alone config : ../include ;
+
+# version.hpp compiles alone, first, and its two macros name one version.
+webcpp.compile version : version_test.cpp ;
+
+# Exactly one target macro is defined, the one of the toolset the build is
+# for: the toolset tells the test, the compiler tells config.hpp.
+webcpp.compile target : target_test.cpp
+  : <toolset>clang-wasip2:<define>WEBCPP_TEST_TARGET_WASIP2
+    <toolset>clang-wasip3:<define>WEBCPP_TEST_TARGET_WASIP3
+    <toolset>emscripten:<define>WEBCPP_TEST_TARGET_EMSCRIPTEN ;
+
+# WEBCPP_HAS_EXCEPTIONS is defined exactly when webcpp has exceptions: as the
+# build asks, in a build without them, and never once the developer defines
+# WEBCPP_NO_EXCEPTIONS, which leaves Boost's own exceptions as they are.
+webcpp.compile exceptions : exceptions_test.cpp ;
+webcpp.compile exceptions_off : exceptions_test.cpp
+  : <exception-handling>off <define>WEBCPP_TEST_CONFIG_OFF ;
+webcpp.compile exceptions_developer_off : exceptions_test.cpp
+  : <define>WEBCPP_NO_EXCEPTIONS <define>WEBCPP_TEST_CONFIG_DEVELOPER_OFF ;
+
+# The target and WEBCPP_HAS_EXCEPTIONS are config.hpp's to define: any one
+# defined before it stops the build, with config.hpp's message and nothing
+# more. Without warnings as errors, so that a macro config.hpp went on to
+# define again would be a warning -verify sees, not an error it ignores.
+webcpp.compile-diagnostic predefined_target : predefined_test.cpp
+  : <define>WEBCPP_TARGET_NATIVE <warnings-as-errors>off ;
+webcpp.compile-diagnostic predefined_wasip2 : predefined_test.cpp
+  : <define>WEBCPP_TARGET_WASIP2 <warnings-as-errors>off ;
+webcpp.compile-diagnostic predefined_wasip3 : predefined_test.cpp
+  : <define>WEBCPP_TARGET_WASIP3 <warnings-as-errors>off ;
+webcpp.compile-diagnostic predefined_emscripten : predefined_test.cpp
+  : <define>WEBCPP_TARGET_EMSCRIPTEN <warnings-as-errors>off ;
+webcpp.compile-diagnostic predefined_exceptions : predefined_test.cpp
+  : <define>WEBCPP_HAS_EXCEPTIONS <warnings-as-errors>off ;
+
+# A WebAssembly target webcpp does not support stops the build, with
+# config.hpp's message: wasm32-wasip1 on wasi-sdk's clang, and __wasm__
+# alone natively, which every native clang lane runs. wasm32-unknown-unknown
+# has no C++ library, and <boost/config.hpp> stops at a fatal error that ends
+# the compile: config.hpp's message is seen only when it comes first.
+webcpp.compile-diagnostic unsupported_wasip1 : unsupported_test.cpp
+  : <cxxflags>--target=wasm32-wasip1 : wasip2 ;
+webcpp.compile-diagnostic unsupported_wasm32_unknown : unsupported_test.cpp
+  : <cxxflags>--target=wasm32-unknown-unknown : wasip2 ;
+webcpp.compile-diagnostic unsupported_wasm : unsupported_test.cpp
+  : <define>__wasm__ : native ;

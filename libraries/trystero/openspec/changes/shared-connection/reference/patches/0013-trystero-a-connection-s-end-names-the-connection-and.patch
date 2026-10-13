@@ -1,0 +1,266 @@
+From 3c2982f9f7fc0aa06a290a1eb21f8ab33bb2a17b Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 11:07:42 -0400
+Subject: [PATCH 13/25] trystero: a connection's end names the connection, and
+ a room acts only on its own
+
+A room heard every connection's end by the peer alone, so a late end of a connection it was no longer bound to dropped a peer bound to a live one, without detaching it: the connection stayed open with no binding and no idle timer, and the pair never met again. room_endpoint::connection_ended now takes the connection that ended, the app passes the one its slot names, and a binding tells whether it is on a connection by its owner, which a connection made at a freed address does not share.
+---
+ include/webcpp/trystero/detail/app_impl.hpp   | 11 +++-
+ include/webcpp/trystero/detail/connection.hpp |  6 ++
+ include/webcpp/trystero/room.hpp              |  8 ++-
+ test/app_impl_test.cpp                        | 13 +++-
+ test/connection_test.cpp                      | 18 ++++++
+ test/room_test.cpp                            | 63 +++++++++++++++++++
+ 6 files changed, 112 insertions(+), 7 deletions(-)
+
+diff --git a/include/webcpp/trystero/detail/app_impl.hpp b/include/webcpp/trystero/detail/app_impl.hpp
+index fe65580..b89e3fb 100644
+--- a/include/webcpp/trystero/detail/app_impl.hpp
++++ b/include/webcpp/trystero/detail/app_impl.hpp
+@@ -20,6 +20,7 @@
+ #include <webcpp/trystero/protocol/topics.hpp>
+ 
+ #include <boost/asio/any_io_executor.hpp>  // lint-world: names the executor only
++#include <boost/assert.hpp>
+ 
+ #include <array>
+ #include <chrono>
+@@ -50,8 +51,10 @@ public:
+     [[nodiscard]] virtual bool keeps_frames_from(std::string_view peer) const = 0;
+     /** A frame of this room's token from `peer` was kept. */
+     virtual void frame_kept(std::string_view peer) = 0;
+-    /** The app's connection to `peer` ended. */
+-    virtual void connection_ended(std::string_view peer, std::string_view reason) = 0;
++    /** The app's connection `ended` to `peer` ended: not always the one the room is bound to, so a
++     * room acts only on what it holds on `ended` (review of Task 4, I1). */
++    virtual void connection_ended(const std::shared_ptr<connection>& ended, std::string_view peer,
++                                  std::string_view reason) = 0;
+ 
+ protected:
+     room_endpoint() = default;
+@@ -323,6 +326,8 @@ private:
+      * room: those of a connection the last user's release took out of the registry too. */
+     void on_connection_end(const std::shared_ptr<connection>& ended, std::string_view peer_view,
+                            std::string_view reason_view) {
++        // The slot is filled before the connection starts, and its end holds it alive.
++        BOOST_ASSERT(ended);
+         const std::pmr::string peer(peer_view, memory_);
+         const std::pmr::string reason(reason_view, memory_);
+         if (const auto it = connections_.find(peer);
+@@ -338,7 +343,7 @@ private:
+             }
+         }
+         for (const auto& room : rooms) {
+-            room->connection_ended(peer, reason);
++            room->connection_ended(ended, peer, reason);
+         }
+     }
+ 
+diff --git a/include/webcpp/trystero/detail/connection.hpp b/include/webcpp/trystero/detail/connection.hpp
+index 9682226..382ed8e 100644
+--- a/include/webcpp/trystero/detail/connection.hpp
++++ b/include/webcpp/trystero/detail/connection.hpp
+@@ -302,6 +302,12 @@ public:
+     /** The binding's id on its connection, which no other binding of the connection has. */
+     [[nodiscard]] std::uint64_t id() const { return id_; }
+ 
++    /** Whether this binding is on `c`, by identity, alive or not: by the owner, so that a
++     * connection made at the address of one destroyed is not taken for it. */
++    [[nodiscard]] bool is_on(const std::shared_ptr<connection>& c) const {
++        return !connection_.owner_before(c) && !c.owner_before(connection_);
++    }
++
+     /** The connection, until the binding detaches or the connection is gone. */
+     [[nodiscard]] std::shared_ptr<connection> shared_connection() const {
+         return detached_ ? nullptr : connection_.lock();
+diff --git a/include/webcpp/trystero/room.hpp b/include/webcpp/trystero/room.hpp
+index c7e5bdb..d83335f 100644
+--- a/include/webcpp/trystero/room.hpp
++++ b/include/webcpp/trystero/room.hpp
+@@ -733,8 +733,12 @@ public:
+ 
+     void frame_kept(std::string_view /*peer*/) override {}
+ 
+-    void connection_ended(std::string_view peer, std::string_view reason) override {
+-        if (peers_.contains(peer)) {
++    void connection_ended(const std::shared_ptr<connection>& ended, std::string_view peer,
++                          std::string_view reason) override {
++        // The peer may be bound to another connection by now: a late end of an older one is not
++        // its end (review of Task 4, I1).
++        if (const auto it = peers_.find(peer);
++            it != peers_.end() && it->second.link->is_on(ended)) {
+             remove_peer(peer, reason, end_kind::connection_end);
+         }
+     }
+diff --git a/test/app_impl_test.cpp b/test/app_impl_test.cpp
+index 5b325bb..ef69d59 100644
+--- a/test/app_impl_test.cpp
++++ b/test/app_impl_test.cpp
+@@ -62,7 +62,8 @@ void settle(asio::io_context& io) {
+     }
+ }
+ 
+-/** A room as the app sees it, which records every call: "+P", "-P", "kept P", "ended P: why". */
++/** A room as the app sees it, which records every call: "+P", "-P", "kept P", "ended P: why", and
++ * the connection each end names. */
+ class fake_room final : public detail::room_endpoint {
+ public:
+     void presence_changed(std::string_view peer, bool present) override {
+@@ -75,7 +76,9 @@ public:
+         events.push_back("kept " + std::string(peer));
+     }
+ 
+-    void connection_ended(std::string_view peer, std::string_view reason) override {
++    void connection_ended(const std::shared_ptr<detail::connection>& ended, std::string_view peer,
++                          std::string_view reason) override {
++        ended_connections.push_back(ended);
+         events.push_back("ended " + std::string(peer) + ": " + std::string(reason));
+         if (on_end) {
+             on_end();
+@@ -83,6 +86,9 @@ public:
+     }
+ 
+     std::vector<std::string> events;
++    /** The connection each end named, in the order of `events`' ends; weak, so that the record
++     * keeps none alive. */
++    std::vector<std::weak_ptr<detail::connection>> ended_connections;
+     bool keeps = true;
+     /** Called after a connection's end is recorded: a room that leaves the registry there. */
+     std::function<void()> on_end;
+@@ -568,6 +574,9 @@ void an_adoption_from_inside_an_end_under_way() {
+     BOOST_TEST(nested->live());
+     BOOST_TEST(app->find("B") == nested);
+     BOOST_TEST(room->events == (std::vector<std::string>{"ended B: test"}));
++    // The end the rooms hear names the connection that ended, not the peer's new one.
++    webcpp::test::require(BOOST_TEST_EQ(room->ended_connections.size(), 1U));
++    BOOST_TEST(room->ended_connections.front().lock() == c);
+     settle(io);
+     BOOST_TEST(app->find("B") == nested);
+     BOOST_TEST_EQ(room->events.size(), 1U);
+diff --git a/test/connection_test.cpp b/test/connection_test.cpp
+index 15a932f..3090882 100644
+--- a/test/connection_test.cpp
++++ b/test/connection_test.cpp
+@@ -611,6 +611,23 @@ void a_detached_binding_neither_sends_nor_waits() {
+     BOOST_TEST(p.a.c->live());
+ }
+ 
++// A binding names its connection by identity, whether it detached and whether the connection
++// ended: never another connection, nor none.
++void a_binding_is_on_its_connection_alone() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    const link_pair p(tokens, tokens);
++    std::vector<std::vector<std::uint8_t>> got;
++    const auto t1 = make_binding(p.a.c, "T1", got);
++    BOOST_TEST(t1->is_on(p.a.c));
++    BOOST_TEST(!t1->is_on(p.b.c));
++    BOOST_TEST(!t1->is_on(nullptr));
++    t1->detach(false, 1000ms);
++    BOOST_TEST(t1->is_on(p.a.c));
++    p.a.c->end("test");
++    BOOST_TEST(t1->is_on(p.a.c));
++    BOOST_TEST(!t1->is_on(p.b.c));
++}
++
+ // A wait with the channel at or below Trystero's threshold completes at once; one byte above
+ // waits for the drain.
+ void a_wait_at_the_threshold_completes_at_once() {
+@@ -799,6 +816,7 @@ int main() {
+     a_waiter_that_releases_its_binding_during_detach();
+     detach_fails_the_waiters_of_its_binding_alone();
+     a_detached_binding_neither_sends_nor_waits();
++    a_binding_is_on_its_connection_alone();
+     a_wait_at_the_threshold_completes_at_once();
+     a_binding_has_one_turn_per_drain();
+     taking_every_kept_frame_restarts_the_window();
+diff --git a/test/room_test.cpp b/test/room_test.cpp
+index 5a27c78..a16f116 100644
+--- a/test/room_test.cpp
++++ b/test/room_test.cpp
+@@ -121,6 +121,34 @@ void advance(fixture& f, std::chrono::milliseconds by) {
+     }
+ }
+ 
++/** An app and a room of it, made as the standalone room makes them, for a case that reaches the
++ * app's connections or calls the room as its app does. The case abandons the room before the
++ * fixture goes. */
++struct app_room {
++    std::shared_ptr<trystero::detail::app_impl> app;
++    std::shared_ptr<trystero::detail::room_impl> room;
++};
++
++app_room make_app_room(fixture& f, std::string_view self_id, std::string_view room_id,
++                       std::chrono::milliseconds idle_timeout = std::chrono::milliseconds{
++                           123'333}) {
++    auto* m = std::pmr::get_default_resource();
++    const std::pmr::polymorphic_allocator<> alloc(m);
++    app_room out;
++    out.app =
++        std::allocate_shared<trystero::detail::app_impl>(alloc, f.io.get_executor(), f.net,
++                                                         trystero::app_config{
++                                                             .app_id = app_id,
++                                                             .self_id = std::pmr::string(self_id),
++                                                             .relay_urls = {relay_a, relay_b},
++                                                             .idle_timeout = idle_timeout,
++                                                         });
++    out.room = std::allocate_shared<trystero::detail::room_impl>(
++        alloc, out.app, trystero::room_options{}, room_id, m);
++    out.room->start();
++    return out;
++}
++
+ void two_peers_join_and_exchange_every_payload_format() {
+     fixture f;
+     // "A..." sorts below "z...", so A offers and z answers; the other test below swaps nothing but
+@@ -1378,6 +1406,40 @@ void malformed_envelopes_end_the_connection() {
+     BOOST_TEST_EQ(leaves, 0);
+ }
+ 
++// A room acts on the end of the connection its peer is bound to, and on no other (review of Task 4,
++// I1): a late end of the peer's first connection keeps the peer, bound to the second; the second's
++// end removes it.
++void a_late_end_of_another_connection_keeps_the_peer() {
++    fixture f{true};
++    const std::string b_id = "UUUUUUUUUUUUUUUUUUUU";
++    const auto a = make_app_room(f, "TTTTTTTTTTTTTTTTTTTT", "late");
++    std::vector<std::size_t> pcs;
++    f.net.on_made = [&](std::size_t pc, std::span<const trystero::backend::ice_server>) {
++        pcs.push_back(pc);
++    };
++    trystero::room b(f.io.get_executor(), f.net, config(b_id), "late");
++    int b_joins = 0;
++    int b_leaves = 0;
++    b.on_peer_join([&](std::string_view) { ++b_joins; });
++    b.on_peer_leave([&](std::string_view) { ++b_leaves; });
++    webcpp::test::require(BOOST_TEST(
++        run_until(f, [&] { return a.room->active_peers().size() == 1 && b_joins == 1; })));
++    const auto first = a.app->find(b_id);
++    webcpp::test::require(BOOST_TEST(first != nullptr));
++    f.net.fail(pcs.front());
++    webcpp::test::require(BOOST_TEST(
++        run_until(f, [&] { return a.room->active_peers().size() == 1 && b_joins == 2; }, 30s)));
++    const auto second = a.app->find(b_id);
++    webcpp::test::require(BOOST_TEST(second != nullptr && second != first));
++    a.room->connection_ended(first, b_id, "a late end of the first connection");
++    advance(f, 5s);
++    BOOST_TEST_EQ(a.room->active_peers().size(), 1U);
++    BOOST_TEST_EQ(b_leaves, 1);
++    second->end("test");
++    BOOST_TEST(a.room->active_peers().empty());
++    a.room->abandon();
++}
++
+ }  // namespace
+ 
+ int main() {
+@@ -1413,5 +1475,6 @@ int main() {
+     a_connections_end_is_seen_and_the_peers_meet_again();
+     a_frame_of_an_unknown_token_is_dropped();
+     malformed_envelopes_end_the_connection();
++    a_late_end_of_another_connection_keeps_the_peer();
+     return boost::report_errors();
+ }
+-- 
+2.55.0
+

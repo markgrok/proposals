@@ -1,0 +1,69 @@
+From a34506608dfbc81f7c8bd8753ca2ed8ad21004d5 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 15:12:14 -0400
+Subject: [PATCH 21/25] trystero: the errors already_joined and too_many_rooms
+
+---
+ include/webcpp/trystero/error.hpp |  8 +++++++-
+ test/room_test.cpp                | 13 +++++++++++++
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/include/webcpp/trystero/error.hpp b/include/webcpp/trystero/error.hpp
+index c40df3f..81345a4 100644
+--- a/include/webcpp/trystero/error.hpp
++++ b/include/webcpp/trystero/error.hpp
+@@ -64,6 +64,10 @@ enum class error {
+      * WebRTC refuses; the room goes on without it, and `room::on_error` reports it with no peer.
+      */
+     invalid_configuration,
++    /** The app already holds a room of that id; a room is joined once per app. */
++    already_joined,
++    /** The app already holds as many rooms as a peer accepts, 64 of them. */
++    too_many_rooms,
+ };
+ 
+ /**
+@@ -117,7 +121,9 @@ private:
+             case error::handshake_timed_out: return "the handshake timed out";
+             case error::handshake_failed: return "the handshake failed";
+             case error::backend_failure: return "the WebRTC backend refused an operation";
+-            case error::invalid_configuration: return "the room's configuration is unusable";
++            case error::invalid_configuration: return "the configuration is unusable";
++            case error::already_joined: return "the app has already joined a room of that id";
++            case error::too_many_rooms: return "the app holds as many rooms as a peer accepts, 64";
+         }
+         return "unknown webcpp.trystero error";
+     }
+diff --git a/test/room_test.cpp b/test/room_test.cpp
+index 509b572..8712d2c 100644
+--- a/test/room_test.cpp
++++ b/test/room_test.cpp
+@@ -1332,6 +1332,18 @@ void a_room_left_with_no_idle_time_sends_its_presence() {
+     BOOST_TEST_EQ(seen, 1);
+ }
+ 
++// The errors' values are fixed and never reused; their messages name what failed.
++void the_errors_have_their_values() {
++    BOOST_TEST_EQ(static_cast<int>(trystero::error::already_joined), 14);
++    BOOST_TEST_EQ(static_cast<int>(trystero::error::too_many_rooms), 15);
++    BOOST_TEST_EQ(make_error_code(trystero::error::already_joined).message(),
++                  "the app has already joined a room of that id");
++    BOOST_TEST_EQ(make_error_code(trystero::error::too_many_rooms).message(),
++                  "the app holds as many rooms as a peer accepts, 64");
++    BOOST_TEST_EQ(make_error_code(trystero::error::invalid_configuration).message(),
++                  "the configuration is unusable");
++}
++
+ }  // namespace
+ 
+ int main() {
+@@ -1371,5 +1383,6 @@ int main() {
+     a_withdrawn_presence_is_a_departure();
+     a_kick_by_the_last_room_ends_the_connection();
+     a_room_left_with_no_idle_time_sends_its_presence();
++    the_errors_have_their_values();
+     return boost::report_errors();
+ }
+-- 
+2.55.0
+

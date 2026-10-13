@@ -1,0 +1,114 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+# MSVC deprecates std::getenv, which room_test.cpp reads, for a getenv_s of
+# its own (C4996), an error under /WX: the tests keep the standard's. A test
+# of rooms over Asio holds more sections than MSVC's object format allows by
+# default (C1128, measured in room, native_websocket, native_peer_connection
+# and native_room): /bigobj.
+project : requirements <library>/webcpp/trystero//trystero
+  <toolset>msvc:<define>_CRT_SECURE_NO_WARNINGS <toolset>msvc:<cxxflags>/bigobj ;
+
+import webcpp ;
+
+webcpp.targets native emscripten ;
+
+# The headers that build on both targets, the native backend's, against
+# libdatachannel and OpenSSL, and the browser backend's, on emscripten. The
+# native timer (backend.hpp), sealer and WebSockets compile without
+# exceptions, so the lint analyses them so too. data_channel.hpp and
+# peer_connection.hpp declare nothing without exceptions, so they are
+# compiled with them whatever the build asks: libdatachannel reports errors
+# by throwing.
+webcpp.headers-alone trystero : ../include
+  : trystero.hpp trystero/*.hpp trystero/protocol/*.hpp trystero/detail/*.hpp ;
+webcpp.headers-alone trystero : ../include
+  : trystero/native/backend.hpp trystero/native/sealer.hpp
+    trystero/native/websocket.hpp
+  : <library>/webcpp/trystero//native : native ;
+webcpp.headers-alone trystero : ../include
+  : trystero/native/data_channel.hpp trystero/native/peer_connection.hpp
+  : <library>/webcpp/trystero//native <exception-handling>on : native ;
+webcpp.headers-alone trystero : ../include : trystero/browser/*.hpp : : emscripten ;
+
+# config.hpp defines WEBCPP_TRYSTERO_NO_EXCEPTIONS exactly when webcpp has no
+# exceptions, and keeps it when a developer defines it in a build that has
+# them.
+webcpp.compile config : config_test.cpp ;
+webcpp.compile config_developer_defined : config_test.cpp
+  : <define>WEBCPP_TRYSTERO_NO_EXCEPTIONS <define>WEBCPP_TEST_TRYSTERO_DEVELOPER_DEFINED ;
+# WEBCPP_NO_EXCEPTIONS, which a developer defines for every webcpp library at
+# once, defines WEBCPP_TRYSTERO_NO_EXCEPTIONS in a build that has exceptions.
+webcpp.compile config_all_off : config_test.cpp
+  : <define>WEBCPP_NO_EXCEPTIONS <define>WEBCPP_TEST_TRYSTERO_ALL_OFF ;
+
+# The protocol against what Trystero JS computed, which the original's oracle
+# wrote into fixtures/expected/expected.json, and whole rooms over the memory
+# backend of support/memory_backend.hpp: on both targets. The native
+# backend's tests, over libdatachannel and OpenSSL, run natively only. Two
+# need exceptions whatever the build asks: the types of data_channel.hpp,
+# peer_connection.hpp and backend.hpp exist only with them, since
+# libdatachannel reports errors by throwing.
+# tag::both-targets[]
+webcpp.run protocol : protocol_test.cpp : <testing.input-file>fixtures/expected/expected.json ;
+webcpp.run room : room_test.cpp ;
+# end::both-targets[]
+webcpp.run native_sealer : native_sealer_test.cpp
+  : <library>/webcpp/trystero//native <testing.input-file>fixtures/expected/expected.json : native ;
+# The WebSocket test is built with the standard libraries' own checks, libc++'s
+# extensive hardening and libstdc++'s assertions, so that a completion that
+# touches a container its socket cleared fails at once, not one run in many.
+webcpp.run native_websocket : native_websocket_test.cpp
+  : <library>/webcpp/trystero//native
+    <define>_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
+    <define>_GLIBCXX_ASSERTIONS
+  : native ;
+webcpp.run native_timer : native_timer_test.cpp : <library>/webcpp/trystero//native : native ;
+# tag::native[]
+webcpp.run native_peer_connection : native_peer_connection_test.cpp
+  : <library>/webcpp/trystero//native <exception-handling>on : native ;
+webcpp.run native_room : native_room_test.cpp
+  : <library>/webcpp/trystero//native <exception-handling>on : native ;
+# end::native[]
+
+# Every allocation of two rooms that exchange a payload goes through the
+# resources of their configurations, and the global operator new and the C
+# library's allocation functions see none. Its two counting resources hold
+# 64 MiB each, beyond Emscripten's 16 MiB unless the memory grows.
+# tag::allocation[]
+webcpp.run allocation : allocation_test.cpp : <toolset>emscripten:<linkflags>-sALLOW_MEMORY_GROWTH ;
+# end::allocation[]
+
+# The browser backend's own tests, under node, which has the page's
+# WebSocket, Web Crypto and microtasks but no WebRTC.
+# tag::browser[]
+webcpp.run browser_event_loop : browser_event_loop_test.cpp : : emscripten ;
+webcpp.run browser_websocket : browser_websocket_test.cpp : : emscripten ;
+webcpp.run browser_websocket_bound : browser_websocket_bound_test.cpp : : emscripten ;
+webcpp.run browser_websocket_late_events : browser_websocket_late_events_test.cpp : : emscripten ;
+webcpp.run browser_sealer : browser_sealer_test.cpp : : emscripten ;
+webcpp.run browser_data_channel : browser_data_channel_test.cpp : : emscripten ;
+webcpp.run browser_peer_connection : browser_peer_connection_test.cpp : : emscripten ;
+# end::browser[]
+
+# The same, built without exceptions, as a program that uses the browser
+# backend may be: no exception may enter WebAssembly there either.
+# tag::no-exceptions[]
+webcpp.run browser_event_loop_no_exceptions : browser_event_loop_test.cpp
+  : <exception-handling>off : emscripten ;
+webcpp.run browser_websocket_no_exceptions : browser_websocket_test.cpp
+  : <exception-handling>off : emscripten ;
+webcpp.run browser_websocket_bound_no_exceptions : browser_websocket_bound_test.cpp
+  : <exception-handling>off : emscripten ;
+webcpp.run browser_websocket_late_events_no_exceptions : browser_websocket_late_events_test.cpp
+  : <exception-handling>off : emscripten ;
+webcpp.run browser_sealer_no_exceptions : browser_sealer_test.cpp
+  : <exception-handling>off : emscripten ;
+webcpp.run browser_data_channel_no_exceptions : browser_data_channel_test.cpp
+  : <exception-handling>off : emscripten ;
+webcpp.run browser_peer_connection_no_exceptions : browser_peer_connection_test.cpp
+  : <exception-handling>off : emscripten ;
+# end::no-exceptions[]

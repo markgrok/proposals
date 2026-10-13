@@ -1,0 +1,21 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+import webcpp ;
+
+webcpp.targets native wasip2 wasip3 ;
+
+webcpp.run pass : pass.cpp : <library>/webcpp/demo//demo ;
+webcpp.run-fail fails : fails.cpp : <library>/webcpp/demo//demo ;
+webcpp.compile-fail rejects : rejects.cpp : <library>/webcpp/demo//demo ;
+webcpp.run native_only : native_only.cpp : <library>/webcpp/demo//demo : native ;
+webcpp.compile native_only_compiles : native_only.cpp : <library>/webcpp/demo//demo : native ;
+webcpp.headers-alone demo : ../include ;
+# A Boost.Test suite: built and run natively only.
+webcpp.boost-test suite : suite_test.cpp : <library>/webcpp/demo//demo ;
+# Parses JSON on every target, with the definitions of Boost.JSON.
+webcpp.run parses_json : parses_json.cpp
+  : <library>/webcpp/demo//demo <library>/webcpp//boost_json ;

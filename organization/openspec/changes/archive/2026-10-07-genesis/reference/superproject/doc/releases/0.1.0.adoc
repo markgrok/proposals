@@ -1,0 +1,178 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[#webcpp-0-1-0]
+= webcpp 0.1.0
+
+In preparation: no tag names this version yet, and its libraries' entries
+are their changelogs' "Unreleased" sections.
+
+[#webcpp-0-1-0-new-libraries]
+== New Libraries
+
+* link:{library-pages}config/{library-page}[config]: webcpp's configuration,
+which every library includes first: the target, exceptions and the version,
+from R.
+* link:{library-pages}document/{library-page}[document]: a header-only JSON
+document for {cpp}20 that behaves as JavaScript does, exact in decimal, in one
+relocatable binary image, with a JavaScript module, from R.
+* link:{library-pages}idna/{library-page}[idna]: a header-only library of
+internationalized domain names for {cpp}20: Punycode, UTS 46 and IDNA2008
+validity over Unicode 17.0.0 tables, from R.
+* link:{library-pages}lexical/{library-page}[lexical]: header-only
+validators of JSON Schema's string formats for {cpp}20, allocating nothing,
+each also a Boost.URL grammar rule, from R.
+* link:{library-pages}pratt/{library-page}[pratt]: a header-only
+Pratt-parsing engine for {cpp}20, with a decimal calculator built on it,
+from R.
+* link:{library-pages}trystero/{library-page}[trystero]: a port of
+Trystero 0.26.0, serverless WebRTC rooms wire-compatible with the original,
+for {cpp}20, from R.
+* link:{library-pages}wasi/{library-page}[wasi]: a header-only HTTP handler
+for {cpp}20 programs built as WebAssembly components, covering WASI 0.2 and
+WASI 0.3, from R.
+* link:{library-pages}xactor/{library-page}[xactor]: a header-only,
+deterministic actor system for {cpp}20, from R.
+* link:{library-pages}xstate/{library-page}[xstate]: a header-only port of
+XState's state machines and actors for {cpp}20, from R.
+
+[#webcpp-0-1-0-updated-libraries]
+== Updated Libraries
+
+None.
+
+[#webcpp-0-1-0-removed-libraries]
+== Removed Libraries
+
+None.
+
+[#webcpp-0-1-0-tools-and-build]
+== Tools and build
+
+* *Breaking change:* changed wasip2 programs to build with exceptions, as
+wasip3 does; whether a program uses them is its developer's choice.
+* Added emscripten as a tested target (Emscripten 6.0.11 under Node):
+tests, link-only programs and driven tests, in CI and in own lanes.
+* Added the lint rule `bare-throw`: a library header raises only through
+`boost::throw_exception`.
+* Changed the lint to analyse every aggregate, test and example without
+exceptions too, so a library keeps compiling without them.
+* Changed CI to run one own-lane job per library, lane and target,
+installing Node only where needed; `b2 declared-lanes` prints each lane's
+kind.
+* Fixed an own lane that served nothing or missed a target passing
+silently; it now fails by name.
+* Fixed `serve.py` leaving wasmtime running when it is killed.
+* Changed the lint's compilation database to include every program an own
+lane builds, served programs included.
+* Fixed the Node package installer leaving a stray link or a traceback
+when an install is killed or refused.
+* Added the names `target`, `has`, `no`, `lib`, `version` and `test`, alone
+or before `_`, to those no library may take.
+* Added the lint rule refusing an unescaped `+__X__+` in a Doc Comment's
+code span.
+* Added each version's release notes to the index page, newest first.
+* Added the lint rule `changelog`: every changelog line keeps its form.
+* Added `b2 check-release`, `b2 whats-new` and `b2 dist`, which check,
+announce and package a release.
+* Added `third_party/`, third-party code pinned as submodules: first the
+JSON Schema Test Suite, which a test reads on every target through
+`/webcpp/third_party//json-schema-test-suite`.
+* Changed the lint to never read third-party code under `third_party/libs/`.
+* Added `webcpp.generated`, which checks a library's generated files against
+their Python generator, and `update-generated`, their only writer.
+* Added `--files` to `tools/oracle/compare.py`, which compares two files
+byte for byte.
+* Added `/webcpp//boost_url`, Boost.URL built from Boost's sources for every
+target, read from `BOOST_SOURCE` or `.local/boost-source`; another Boost
+version's tree is refused.
+* Changed the CI's Boost action to keep the sources of Boost's compiled
+libraries; `install.sh source <dir>` fills a local tree.
+* Changed the lint to never analyse a source outside the tree, such as
+Boost's.
+* Added `/webcpp//boost_charconv`, Boost.Charconv built from Boost's sources
+for every target.
+* Added `/webcpp//boost_locale`, Boost.Locale without ICU built from Boost's
+sources for every target; a program that uses it needs exceptions.
+* Added `/webcpp//boost_cobalt`, Boost.Cobalt built from Boost's sources for
+native programs, which need exceptions.
+* Fixed a lane's alias and a library's generated files running the
+configuration check of Boost, which neither needs.
+* Added `webcpp.data`, which gives a test a directory of the host's at the
+same path on every target, through wasmtime's `--dir` on WASI.
+* Added `b2 site` and `b2 site-serve`: the whole site, every library's page
+and the report under its header, into `bin/site/`, every link checked, then
+served.
+* Added the site's tests, `b2 /webcpp/site//test`, and a CI lane that runs
+them.
+* Changed CI to publish the site, never indexed, at
+https://webcpporg.github.io/; the old address
+https://webcpporg.github.io/webcpp/ redirects there.
+* Added `/webcpp//emscripten-reference`, which reads a library's reference as
+Emscripten's `em++` compiles it, with the emsdk of `-sWEBCPP_EMSDK=<dir>` or
+`.local/emsdk`.
+* Changed the lint to analyse headers and programs that build only on
+emscripten, with the options `em++` gives them, or only against a native
+dependency.
+* Changed the CI's docs and lint jobs to install emsdk only when a library
+declares emscripten.
+* Changed the lint's analysis without exceptions to leave out, by name, a
+header whose headers-alone call declares `<exception-handling>on`.
+* Changed the lint's `*this` rule to allow an assignment operator however
+its signature is split, a prefix increment or decrement, and a function
+marked `lint-std`.
+* Changed the lint's `io_context::run` rule to find an `io_context` named
+through a namespace alias, and to accept a reason after `lint-run:`.
+* Changed the lint's world rule to name `getentropy`, `getrandom`,
+`arc4random`, `RAND_bytes` and `<sys/random.h>`.
+* Changed the lint's licence rule to check `.js`, `.adoc` and `.html` files
+too.
+* Added `webcpp.external`, which finds a library webcpp does not build
+through `-s<VARIABLE>=<dir>`, `.local/` or the system, and leaves out a
+library that needs a missing one.
+* Added `webcpp-require-external=on`, which stops the build on a missing
+external library instead, as the CI and the lint build.
+* Changed the index to name a library a build leaves out, with the reason
+and no link.
+* Changed `b2 install` to put each library's licence files beside its
+headers.
+* Added `+{library-root}+`, through which a library's page shows a tagged
+region of a file its own git tracks, a test's or an example's as {cpp}.
+* Added doc-check rules: a rendered page holds no em dash, no link inside
+inline code, and no replacement of Asciidoctor's inside inline code.
+* Changed every library's reference to list only a derived class's own
+members (`inherit-base-members: never`).
+* Changed a page's counts to read with a thousands separator, as 1,111.
+* Changed the CI's GCC 14 and Clang 18 lanes to run in a container built
+from Ubuntu's archive snapshot, with no network but the loopback.
+* Added a pinned chrome-headless-shell to the CI, for the own lanes whose
+driver meets a browser.
+* Added the CI actions `secp256k1`, `libdatachannel` and `openssl`, which
+build trystero's external libraries, pinned, with each lane's compilers.
+* Changed the Node package installer to run `npm ci` with `DO_NOT_TRACK=1`,
+so that no install script reports an install.
+* Changed CI to run the lint and the tests of the tools in eight shards each,
+at once.
+* Added `--shard K/N` to the tests of the tools, which runs the K-th of N
+slices of a suite's cases.
+* Fixed the site refusing the report's page of a failure: its title now fits
+in 70 characters, and no line of its output ends in whitespace.
+* Changed the libraries' CI to check out the superproject's submodules without
+theirs, so a pinned third-party repository's own submodules are not fetched.
+
+[#webcpp-0-1-0-compilers-tested]
+== Compilers tested
+
+* GCC 14 (container, no network)
+* GCC 15
+* Clang 18 (libstdc{plus}{plus}, container, no network)
+* Clang 22 (libstdc{plus}{plus})
+* Apple Clang (macOS 15)
+* MSVC 14.3 (Visual Studio 2022)
+* MSVC 14.5 (Visual Studio 2026)
+* Emscripten 6.0.11 (node)
+* wasm32-wasip2 (wasi-sdk 34, wasmtime 47.0.3)
+* wasm32-wasip3 (wasi-sdk 34, wasmtime 47.0.3)

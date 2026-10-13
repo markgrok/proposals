@@ -1,0 +1,947 @@
+From afcc8e376cdda7c20bfae43d18617ca9eba97e4b Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 07:55:37 -0400
+Subject: [PATCH 03/25] trystero: a connection shared by bindings, routed by
+ room token
+
+---
+ include/webcpp/trystero/detail/connection.hpp | 521 ++++++++++++++++++
+ test/Jamfile                                  |   2 +
+ test/connection_test.cpp                      | 384 +++++++++++++
+ 3 files changed, 907 insertions(+)
+ create mode 100644 include/webcpp/trystero/detail/connection.hpp
+ create mode 100644 test/connection_test.cpp
+
+diff --git a/include/webcpp/trystero/detail/connection.hpp b/include/webcpp/trystero/detail/connection.hpp
+new file mode 100644
+index 0000000..dfee06b
+--- /dev/null
++++ b/include/webcpp/trystero/detail/connection.hpp
+@@ -0,0 +1,521 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++#ifndef WEBCPP_TRYSTERO_DETAIL_CONNECTION_HPP
++#define WEBCPP_TRYSTERO_DETAIL_CONNECTION_HPP
++
++#include <webcpp/trystero/config.hpp>
++
++#include <webcpp/trystero/backend.hpp>
++#include <webcpp/trystero/detail/action_wire.hpp>
++#include <webcpp/trystero/detail/log.hpp>
++#include <webcpp/trystero/handler.hpp>
++#include <webcpp/trystero/protocol/envelope.hpp>
++
++#include <algorithm>
++#include <chrono>
++#include <cstdint>
++#include <deque>
++#include <functional>
++#include <map>
++#include <memory>
++#include <memory_resource>
++#include <set>
++#include <span>
++#include <string>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++namespace webcpp::trystero::detail {
++
++/** What a connection asks of its app. Every handler is in the app's resource, and every one is
++ * set. */
++struct connection_callbacks {
++    /** The remote advertised (`present`) or withdrew a room's token. */
++    handler<void(std::string_view peer, std::string_view token, bool present)> presence;
++    /** Whether to keep a frame of `token`, which no room bound to this connection has: the app
++     * says no for a token of no room of it, and for a room whose dropping window runs. */
++    handler<bool(std::string_view peer, std::string_view token)> keeps;
++    /** A frame of `token` was kept. */
++    handler<void(std::string_view peer, std::string_view token)> kept;
++    /** The connection ended, with the reason; called once. */
++    handler<void(std::string_view peer, std::string_view reason)> ended;
++};
++
++// clang-tidy reports a class's destructor at its first declaration: binding is final, and nothing
++// destroys it through channel_link, whose destructor is protected.
++class binding;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
++
++/**
++ * One remote peer's connection, shared by every room of the app bound to it: it decodes each
++ * frame's envelope, routes a room frame to the binding of its token, keeps a few frames for a room
++ * of the app not bound yet, and records the rooms the remote advertises.
++ *
++ * | Frame                               | Done                                                      |
++ * | does not decode                     | the connection ends, for every room                       |
++ * | presence(1, T), T new               | recorded; a 65th distinct token ends the connection       |
++ * | presence(0, T)                      | forgotten; frames kept for T dropped                      |
++ * | room frame, T bound                 | to the binding of T                                       |
++ * | room frame, T kept by the app       | kept: 64 per connection, all dropped 10 s after the first |
++ * | room frame, any other T             | dropped                                                   |
++ *
++ * Tip: it holds plain pointers to its bindings, which remove themselves before they go, so that it
++ * keeps nothing of a room's resource after the room has ended (the spec's section 4.1).
++ */
++class connection : public std::enable_shared_from_this<connection> {
++public:
++    /** The most distinct tokens a remote may advertise at once. */
++    static constexpr std::size_t max_remote_rooms = 64;
++    /** The most frames kept for rooms not bound yet. */
++    static constexpr std::size_t max_kept_frames = 64;
++    /** How long after the first kept frame every kept frame is dropped. */
++    static constexpr std::chrono::milliseconds kept_frames_ttl{10'000};
++
++    /** A connection to `peer` over its negotiated connection and open channel, in `memory`, the
++     * app's resource. */
++    connection(backend::factory& factory, std::string_view peer,
++               std::shared_ptr<backend::peer_connection> pc,
++               std::shared_ptr<backend::data_channel> channel, connection_callbacks cb, logger log,
++               std::pmr::memory_resource* memory)
++        : factory_(factory),
++          memory_(memory),
++          peer_(peer, memory),
++          pc_(std::move(pc)),
++          channel_(std::move(channel)),
++          cb_(std::move(cb)),
++          log_(std::move(log)),
++          remote_tokens_(memory),
++          bound_(memory),
++          kept_(memory),
++          drain_order_(memory),
++          attached_(memory) {}
++
++    connection(const connection&) = delete;
++    connection& operator=(const connection&) = delete;
++
++    /** Takes over the channel's and the connection's events, which replaces the handlers a room's
++     * negotiation set, and advertises `tokens`. */
++    void start(std::span<const std::string_view> tokens) {
++        const auto weak = weak_from_this();
++        const std::pmr::polymorphic_allocator<> allocator(memory_);
++        channel_->set_handlers({
++            .open = {},
++            .message =
++                {
++                    std::allocator_arg,
++                    allocator,
++                    [weak](backend::bytes frame) {
++                        if (const auto self = weak.lock()) {
++                            self->on_message(std::move(frame));
++                        }
++                    },
++                },
++            .close =
++                {
++                    std::allocator_arg,
++                    allocator,
++                    [weak] {
++                        if (const auto self = weak.lock()) {
++                            self->end("data channel closed");
++                        }
++                    },
++                },
++            .buffered_amount_low =
++                {
++                    std::allocator_arg,
++                    allocator,
++                    [weak] {
++                        if (const auto self = weak.lock()) {
++                            self->on_drained(true);
++                        }
++                    },
++                },
++        });
++        pc_->set_handlers({
++            .ice_candidate = {},
++            .data_channel = {},
++            .state =
++                {
++                    std::allocator_arg,
++                    allocator,
++                    [weak](backend::connection_state state) {
++                        if (const auto self = weak.lock()) {
++                            self->on_state(state);
++                        }
++                    },
++                },
++        });
++        log_("webrtc", "connection with ", peer_, " adopted");
++        for (const auto token : tokens) {
++            send_presence(token, true);
++        }
++    }
++
++    /** The remote peer's id. */
++    [[nodiscard]] std::string_view peer() const { return peer_; }
++
++    /** Not stale, as Trystero says it: not ended, and its channel neither closing nor closed. A
++     * connection is adopted once its channel is open, so "still opening" does not arise here
++     * (review M6). */
++    [[nodiscard]] bool live() const { return !ended_ && channel_->is_open(); }
++
++    /** How many frames are kept for rooms not bound yet. */
++    [[nodiscard]] std::size_t kept_count() const { return kept_.size(); }
++
++    /** Whether the remote advertises the room of `token`. */
++    [[nodiscard]] bool advertised(std::string_view token) const {
++        return remote_tokens_.contains(token);
++    }
++
++    /** Tells the remote this peer joined (`present`) or left the room of `token`. */
++    void send_presence(std::string_view token, bool present) {
++        if (!ended_ && channel_->is_open()) {
++            channel_->send(protocol::presence_frame(token, present, memory_));
++        }
++    }
++
++    /** Sends a frame as it is; false when the connection ended or its channel is no longer open.
++     */
++    bool send(std::span<const std::uint8_t> frame) {
++        if (ended_ || !channel_->is_open()) {
++            return false;
++        }
++        channel_->send(frame);
++        return true;
++    }
++
++    /** The bytes the channel buffers; 0 once the connection ended. */
++    [[nodiscard]] std::size_t buffered_amount() const {
++        return ended_ ? 0 : channel_->buffered_amount();
++    }
++
++    /** Registers a room's binding by its token, and keeps the connection from idling. */
++    void attach(binding& b);
++
++    /** Removes a binding; with none left, ends the connection after a kick or a zero idle time,
++     * else after `idle_timeout`. */
++    void detach(binding& b, bool after_kick, std::chrono::milliseconds idle_timeout);
++
++    /** Gives the binding a place in the drain order, once. */
++    void wait_drained(binding& b) {
++        if (std::ranges::find(drain_order_, &b) == drain_order_.end()) {
++            drain_order_.push_back(&b);
++        }
++    }
++
++    /** The frames kept for `token`, in their order; they are no longer kept. */
++    std::pmr::deque<backend::bytes> take_kept(std::string_view token) {
++        std::pmr::deque<backend::bytes> out(memory_);
++        for (auto it = kept_.begin(); it != kept_.end();) {
++            if (it->first == token) {
++                out.push_back(std::move(it->second));
++                it = kept_.erase(it);
++            } else {
++                ++it;
++            }
++        }
++        if (kept_.empty()) {
++            kept_timer_.reset();
++            // A cleared deque keeps blocks (libc++ keeps up to two): a new one frees them (I5).
++            kept_ = decltype(kept_)(memory_);
++        }
++        return out;
++    }
++
++    /** Ends the connection for every room, once: its handlers cleared, its bindings let go, the
++     * connection and its channel closed, `ended` called last. */
++    void end(std::string_view reason);
++
++private:
++    friend class binding;
++    void remove(binding& b);
++    void on_message(backend::bytes&& frame);
++    void on_state(backend::connection_state state);
++    void on_drained(bool open);
++    void keep(std::string_view token, backend::bytes&& frame);
++
++    backend::factory& factory_;
++    std::pmr::memory_resource* memory_;
++    std::pmr::string peer_;
++    std::shared_ptr<backend::peer_connection> pc_;
++    std::shared_ptr<backend::data_channel> channel_;
++    connection_callbacks cb_;
++    logger log_;
++    std::pmr::set<std::pmr::string, std::less<>> remote_tokens_;
++    std::pmr::map<std::pmr::string, binding*, std::less<>> bound_;
++    std::pmr::deque<std::pair<std::pmr::string, backend::bytes>> kept_;
++    std::shared_ptr<backend::timer> kept_timer_;
++    std::shared_ptr<backend::timer> idle_timer_;
++    std::shared_ptr<backend::timer> disconnect_timer_;
++    std::pmr::deque<binding*> drain_order_;
++    std::pmr::set<binding*> attached_;
++    bool ended_ = false;
++};
++
++/**
++ * A room's use of one connection: the action wire's link to a peer, whose frames carry the room's
++ * token. It lives in the room's resource and owns its drain waiters; the connection holds only a
++ * pointer to it, which it removes when it detaches.
++ */
++class binding final : public channel_link, public std::enable_shared_from_this<binding> {
++public:
++    /** Binds the room of `token` to `c`, which hands it every room frame of the token. */
++    binding(const std::shared_ptr<connection>& c, std::string_view token,
++            handler<void(backend::bytes&&, std::span<const std::uint8_t>)> deliver,
++            std::pmr::memory_resource* room_memory)
++        : connection_(c),
++          token_(token, room_memory),
++          deliver_(std::move(deliver)),
++          waiters_(room_memory) {
++        c->attach(*this);
++    }
++
++    binding(const binding&) = delete;
++    binding& operator=(const binding&) = delete;
++
++    /** Leaves the connection quietly: its waiters freed uncalled, its place in the connection
++     * forgotten, and nothing ended, idled, closed or called back, since it may run while the
++     * io_context is destroyed (review I10; the spec's section 4.2, M10). */
++    ~binding() {
++        if (std::exchange(detached_, true)) {
++            return;
++        }
++        waiters_.clear();
++        deliver_ = {};
++        if (const auto c = connection_.lock()) {
++            c->remove(*this);
++        }
++    }
++
++    /** The room's token. */
++    [[nodiscard]] std::string_view token() const { return token_; }
++
++    /** The connection, until the binding detaches or the connection is gone. */
++    [[nodiscard]] std::shared_ptr<connection> shared_connection() const {
++        return detached_ ? nullptr : connection_.lock();
++    }
++
++    bool send(std::span<const std::uint8_t> room_frame) override {
++        const auto c = shared_connection();
++        return c && c->send(room_frame);
++    }
++
++    [[nodiscard]] std::size_t buffered_amount() const override {
++        const auto c = shared_connection();
++        return c ? c->buffered_amount() : 0;
++    }
++
++    void wait_drained(handler<void(bool)> done) override {
++        const auto c = shared_connection();
++        if (!c || !c->live()) {
++            done(false);
++            return;
++        }
++        if (c->buffered_amount() <= backend::data_channel::low_threshold) {
++            done(true);
++            return;
++        }
++        waiters_.push_back(std::move(done));
++        c->wait_drained(*this);
++    }
++
++    /** A room frame of this binding's token, from the connection. */
++    void deliver(backend::bytes&& frame, std::span<const std::uint8_t> action) {
++        if (!detached_) {
++            deliver_(std::move(frame), action);
++        }
++    }
++
++    /** This binding's turn at a drain: each of its waiters, in its order. */
++    void drained(bool open) {
++        for (auto& w : std::exchange(waiters_, decltype(waiters_)(waiters_.get_allocator()))) {
++            w(open);
++        }
++    }
++
++    /** Leaves the connection: every waiter is told `false` and freed, the delivery dropped, and
++     * the connection idles or ends when no binding is left. */
++    void detach(bool after_kick, std::chrono::milliseconds idle_timeout) {
++        if (std::exchange(detached_, true)) {
++            return;
++        }
++        drained(false);
++        deliver_ = {};
++        if (const auto c = connection_.lock()) {
++            c->detach(*this, after_kick, idle_timeout);
++        }
++    }
++
++private:
++    std::weak_ptr<connection> connection_;
++    std::pmr::string token_;
++    handler<void(backend::bytes&&, std::span<const std::uint8_t>)> deliver_;
++    std::pmr::vector<handler<void(bool)>> waiters_;
++    bool detached_ = false;
++};
++
++inline void connection::attach(binding& b) {
++    bound_.insert_or_assign(std::pmr::string(b.token(), memory_), &b);
++    attached_.insert(&b);
++    idle_timer_.reset();
++}
++
++/** Forgets a binding, and nothing else: its maps, its place in the drain order. */
++inline void connection::remove(binding& b) {
++    if (const auto it = bound_.find(b.token()); it != bound_.end() && it->second == &b) {
++        bound_.erase(it);
++    }
++    attached_.erase(&b);
++    std::erase(drain_order_, &b);
++}
++
++inline void connection::detach(binding& b, bool after_kick,
++                               std::chrono::milliseconds idle_timeout) {
++    remove(b);
++    if (ended_ || !bound_.empty()) {
++        return;
++    }
++    if (after_kick || idle_timeout <= std::chrono::milliseconds::zero()) {
++        end(after_kick ? "its last room kicked the peer" : "no room left");
++        return;
++    }
++    idle_timer_ = factory_.make_timer(memory_);
++    idle_timer_->start(
++        idle_timeout,
++        {std::allocator_arg, std::pmr::polymorphic_allocator<>(memory_), [weak = weak_from_this()] {
++             if (const auto self = weak.lock()) {
++                 self->end("idle");
++             }
++         }});
++}
++
++inline void connection::end(std::string_view reason_view) {
++    if (ended_) {
++        return;
++    }
++    ended_ = true;
++    // The reason may be a view into what the calls below free.
++    const std::pmr::string reason(reason_view, memory_);
++    log_("webrtc", "connection with ", peer_, " ended: ", reason);
++    const auto self = shared_from_this();
++    idle_timer_.reset();
++    kept_timer_.reset();
++    disconnect_timer_.reset();
++    channel_->set_handlers({});
++    pc_->set_handlers({});
++    channel_->close();
++    pc_->close();
++    // The bindings are let go before anyone is told: a room may destroy its binding, or itself,
++    // from inside `ended` (Trystero's clear, C/shared-peer.mjs:170-180). A waiter's failure may
++    // detach another binding of the snapshot: each is checked first (review M5).
++    bound_.clear();
++    const auto order = std::exchange(drain_order_, std::pmr::deque<binding*>(memory_));
++    for (auto* b : order) {
++        if (attached_.contains(b)) {
++            b->drained(false);
++        }
++    }
++    attached_.clear();
++    kept_ = decltype(kept_)(memory_);
++    auto ended = std::move(cb_.ended);
++    ended(peer_, reason);
++}
++
++inline void connection::on_message(backend::bytes&& frame) {
++    const auto envelope = protocol::decode_envelope(frame);
++    if (!envelope) {
++        end("invalid or incompatible room frame");
++        return;
++    }
++    // The app may end this connection from inside any call below: it stays alive until it returns.
++    const auto self = shared_from_this();
++    const std::string_view token = envelope->token;  // into `frame`, which outlives every use
++    if (envelope->type == protocol::envelope::kind::presence) {
++        if (envelope->present) {
++            if (!remote_tokens_.contains(token) && remote_tokens_.size() >= max_remote_rooms) {
++                end("too many advertised rooms");
++                return;
++            }
++            remote_tokens_.emplace(token);
++        } else {
++            if (const auto it = remote_tokens_.find(token); it != remote_tokens_.end()) {
++                remote_tokens_.erase(it);
++            }
++            std::erase_if(kept_, [token](const auto& k) { return k.first == token; });
++        }
++        cb_.presence(peer_, token, envelope->present);
++        return;
++    }
++    if (const auto it = bound_.find(token); it != bound_.end()) {
++        const auto action = envelope->payload;
++        it->second->deliver(std::move(frame), action);
++        return;
++    }
++    if (cb_.keeps(peer_, token) && !ended_) {
++        keep(token, std::move(frame));
++    }
++}
++
++inline void connection::keep(std::string_view token, backend::bytes&& frame) {
++    if (kept_.size() >= max_kept_frames) {
++        return;
++    }
++    kept_.emplace_back(std::pmr::string(token, memory_), std::move(frame));
++    if (!kept_timer_) {
++        // All kept frames go 10 s after the first, as Trystero's (C/shared-peer.mjs:425-428).
++        kept_timer_ = factory_.make_timer(memory_);
++        kept_timer_->start(kept_frames_ttl,
++                           {std::allocator_arg, std::pmr::polymorphic_allocator<>(memory_),
++                            [weak = weak_from_this()] {
++                                if (const auto self = weak.lock()) {
++                                    self->kept_ = decltype(self->kept_)(self->memory_);
++                                    self->kept_timer_.reset();
++                                }
++                            }});
++    }
++    // `token` may be a view into the frame just kept, which the app may take from inside the call.
++    const std::pmr::string kept_token(kept_.back().first, memory_);
++    cb_.kept(peer_, kept_token);
++}
++
++inline void connection::on_state(backend::connection_state state) {
++    using backend::connection_state;
++    if (state == connection_state::failed || state == connection_state::closed) {
++        end(state == connection_state::failed ? "connection failed" : "connection closed");
++    } else if (state == connection_state::disconnected) {
++        // Trystero waits five seconds before treating a disconnection as the end.
++        if (!disconnect_timer_) {
++            disconnect_timer_ = factory_.make_timer(memory_);
++        }
++        disconnect_timer_->start(std::chrono::milliseconds(5000),
++                                 {std::allocator_arg, std::pmr::polymorphic_allocator<>(memory_),
++                                  [weak = weak_from_this()] {
++                                      if (const auto self = weak.lock()) {
++                                          self->end("connection lost");
++                                      }
++                                  }});
++    } else if (disconnect_timer_) {
++        disconnect_timer_->cancel();
++    }
++}
++
++inline void connection::on_drained(bool open) {
++    // Every binding waiting at this drain gets its turn, in the order it began to wait. A turn may
++    // detach another binding of the snapshot, even destroy it: each is checked before its turn
++    // (review M5).
++    const auto self = shared_from_this();
++    const auto order = std::exchange(drain_order_, std::pmr::deque<binding*>(memory_));
++    for (auto* b : order) {
++        if (attached_.contains(b)) {
++            b->drained(open);
++        }
++    }
++}
++
++}  // namespace webcpp::trystero::detail
++
++#endif
+diff --git a/test/Jamfile b/test/Jamfile
+index a881696..9dccb02 100644
+--- a/test/Jamfile
++++ b/test/Jamfile
+@@ -53,6 +53,8 @@ webcpp.run protocol : protocol_test.cpp : <testing.input-file>fixtures/expected/
+ webcpp.run room : room_test.cpp ;
+ # The memory backend's hooks, which the tests of shared connections drive.
+ webcpp.run memory_backend : memory_backend_test.cpp ;
++# The shared connection alone, over a memory pair.
++webcpp.run connection : connection_test.cpp ;
+ # end::both-targets[]
+ webcpp.run native_sealer : native_sealer_test.cpp
+   : <library>/webcpp/trystero//native <testing.input-file>fixtures/expected/expected.json : native ;
+diff --git a/test/connection_test.cpp b/test/connection_test.cpp
+new file mode 100644
+index 0000000..69b796b
+--- /dev/null
++++ b/test/connection_test.cpp
+@@ -0,0 +1,384 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The shared connection alone, over a memory pair: routing by token, kept frames, presence, the
++// bound on advertised rooms, malformed frames, and the order of the drain waiters.
++
++#include <webcpp/trystero/detail/connection.hpp>
++#include <webcpp/trystero/protocol/envelope.hpp>
++
++#include "support/memory_backend.hpp"
++
++#include <boost/asio/io_context.hpp>
++#include <boost/core/lightweight_test.hpp>
++
++#include <chrono>
++#include <cstdint>
++#include <functional>
++#include <memory>
++#include <memory_resource>
++#include <span>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "require.hpp"
++
++namespace asio = boost::asio;
++namespace trystero = webcpp::trystero;
++namespace detail = webcpp::trystero::detail;
++using namespace std::chrono_literals;
++
++namespace {
++
++bool run_until(asio::io_context& io, const std::function<bool()>& done,
++               std::chrono::milliseconds limit = 5s) {
++    const auto end = std::chrono::steady_clock::now() + limit;
++    while (!done() && std::chrono::steady_clock::now() < end) {
++        io.run_for(10ms);  // lint-run: the memory network posts to it
++        if (io.stopped()) {
++            io.restart();
++        }
++    }
++    return done();
++}
++
++/** What one side's connection reported. */
++struct side {
++    std::shared_ptr<detail::connection> c;
++    std::vector<std::string> presence;  // "+T" or "-T"
++    std::vector<std::string> kept;
++    std::string ended;
++};
++
++detail::connection_callbacks callbacks(side& s) {
++    auto* m = std::pmr::get_default_resource();
++    const std::pmr::polymorphic_allocator<> a(m);
++    return {
++        .presence =
++            {
++                std::allocator_arg,
++                a,
++                [&s](std::string_view, std::string_view t, bool present) {
++                    s.presence.push_back((present ? "+" : "-") + std::string(t));
++                },
++            },
++        .keeps =
++            {
++                std::allocator_arg,
++                a,
++                [](std::string_view, std::string_view t) { return t != "nobody"; },
++            },
++        .kept =
++            {
++                std::allocator_arg,
++                a,
++                [&s](std::string_view, std::string_view t) { s.kept.emplace_back(t); },
++            },
++        .ended =
++            {
++                std::allocator_arg,
++                a,
++                [&s](std::string_view, std::string_view why) { s.ended = why; },
++            },
++    };
++}
++
++/** Two connections over a memory pair, each started with the tokens given. */
++struct link_pair {
++    asio::io_context io;
++    trystero::test::memory_network net{io};
++    side a;
++    side b;
++
++    link_pair(std::span<const std::string_view> a_tokens,
++              std::span<const std::string_view> b_tokens);
++};
++
++link_pair::link_pair(std::span<const std::string_view> a_tokens,
++                     std::span<const std::string_view> b_tokens) {
++    net.virtual_clock = true;  // the keep timer waits for advance()
++    auto* m = std::pmr::get_default_resource();
++    const std::pmr::polymorphic_allocator<> alloc(m);
++    const auto offerer = net.make_peer_connection({}, m);
++    const auto answerer = net.make_peer_connection({}, m);
++    auto offer_end = offerer->create_data_channel("data");
++    std::shared_ptr<trystero::backend::data_channel> answer_end;
++    answerer->set_handlers({
++        .ice_candidate = {},
++        .data_channel =
++            [&answer_end](std::shared_ptr<trystero::backend::data_channel> c) {
++                answer_end = std::move(c);
++            },
++        .state = {},
++    });
++    std::pmr::string offer(m);
++    std::pmr::string answer(m);
++    offerer->set_local_description([&offer](trystero::backend::error_code, std::string_view,
++                                            std::string_view sdp) { offer = sdp; });
++    webcpp::test::require(BOOST_TEST(run_until(io, [&] { return !offer.empty(); })));
++    answerer->set_remote_description("offer", offer, [](trystero::backend::error_code) {});
++    answerer->set_local_description([&answer](trystero::backend::error_code, std::string_view,
++                                              std::string_view sdp) { answer = sdp; });
++    webcpp::test::require(BOOST_TEST(run_until(io, [&] { return !answer.empty(); })));
++    offerer->set_remote_description("answer", answer, [](trystero::backend::error_code) {});
++    webcpp::test::require(BOOST_TEST(run_until(
++        io, [&] { return offer_end->is_open() && answer_end && answer_end->is_open(); })));
++    a.c = std::allocate_shared<detail::connection>(alloc, net, "B", offerer, offer_end,
++                                                   callbacks(a), detail::logger{}, m);
++    b.c = std::allocate_shared<detail::connection>(alloc, net, "A", answerer, answer_end,
++                                                   callbacks(b), detail::logger{}, m);
++    a.c->start(a_tokens);
++    b.c->start(b_tokens);
++}
++
++/** A binding of `token` on `c`, which records the action of every frame delivered to it. */
++std::shared_ptr<detail::binding> make_binding(const std::shared_ptr<detail::connection>& c,
++                                              std::string_view token,
++                                              std::vector<std::vector<std::uint8_t>>& got) {
++    auto* m = std::pmr::get_default_resource();
++    const std::pmr::polymorphic_allocator<> alloc(m);
++    return std::allocate_shared<detail::binding>(
++        alloc, c, token,
++        trystero::handler<void(trystero::backend::bytes&&, std::span<const std::uint8_t>)>(
++            std::allocator_arg, alloc,
++            [&got](trystero::backend::bytes&&, std::span<const std::uint8_t> action) {
++                got.emplace_back(action.begin(), action.end());
++            }),
++        m);
++}
++
++void start_advertises_every_token() {
++    const std::array<std::string_view, 2> a_tokens{"T1", "T2"};
++    const std::array<std::string_view, 1> b_tokens{"T1"};
++    link_pair p(a_tokens, b_tokens);
++    BOOST_TEST(
++        run_until(p.io, [&] { return p.b.presence.size() == 2 && p.a.presence.size() == 1; }));
++    BOOST_TEST(p.b.presence == (std::vector<std::string>{"+T1", "+T2"}));
++    BOOST_TEST(p.a.presence == (std::vector<std::string>{"+T1"}));
++    BOOST_TEST(p.b.c->advertised("T1") && p.b.c->advertised("T2") && !p.b.c->advertised("T3"));
++    BOOST_TEST(p.a.c->advertised("T1") && !p.a.c->advertised("T2"));
++}
++
++void a_withdrawn_token_is_forgotten() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    link_pair p(tokens, tokens);
++    webcpp::test::require(BOOST_TEST(run_until(p.io, [&] { return p.b.c->advertised("T1"); })));
++    p.a.c->send_presence("T1", false);
++    BOOST_TEST(run_until(p.io, [&] { return !p.b.c->advertised("T1"); }));
++    BOOST_TEST(p.b.presence == (std::vector<std::string>{"+T1", "-T1"}));
++}
++
++void a_bound_token_reaches_its_binding_and_another_is_kept() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    link_pair p(tokens, tokens);
++    std::vector<std::vector<std::uint8_t>> got;
++    const auto bound = make_binding(p.b.c, "T1", got);
++    auto* m = std::pmr::get_default_resource();
++    const std::array<std::uint8_t, 2> action{2, 0};
++    p.a.c->send(trystero::protocol::room_frame("T1", action, m));
++    p.a.c->send(trystero::protocol::room_frame("T2", action, m));
++    p.a.c->send(trystero::protocol::room_frame("nobody", action, m));
++    BOOST_TEST(run_until(p.io, [&] { return got.size() == 1 && p.b.kept.size() == 1; }));
++    BOOST_TEST(got.at(0) == (std::vector<std::uint8_t>{2, 0}));
++    BOOST_TEST_EQ(p.b.kept.at(0), "T2");
++    BOOST_TEST_EQ(p.b.c->kept_count(), 1U);
++    BOOST_TEST_EQ(p.b.c->take_kept("T2").size(), 1U);
++    BOOST_TEST_EQ(p.b.c->kept_count(), 0U);
++    BOOST_TEST(p.b.c->take_kept("nobody").empty());
++}
++
++void a_withdrawn_token_drops_its_kept_frames() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    link_pair p(tokens, tokens);
++    auto* m = std::pmr::get_default_resource();
++    const std::array<std::uint8_t, 2> action{2, 0};
++    p.a.c->send(trystero::protocol::room_frame("T2", action, m));
++    p.a.c->send(trystero::protocol::room_frame("T3", action, m));
++    webcpp::test::require(BOOST_TEST(run_until(p.io, [&] { return p.b.kept.size() == 2; })));
++    p.a.c->send_presence("T2", false);
++    BOOST_TEST(run_until(p.io, [&] { return p.b.presence.size() == 2; }));
++    BOOST_TEST_EQ(p.b.c->kept_count(), 1U);
++    BOOST_TEST(p.b.c->take_kept("T2").empty());
++    BOOST_TEST_EQ(p.b.c->take_kept("T3").size(), 1U);
++}
++
++void a_65th_advertised_token_ends_the_connection() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    link_pair p(tokens, tokens);
++    auto* m = std::pmr::get_default_resource();
++    // T1 and 63 more: 64 tokens, the most a remote may advertise.
++    for (int i = 0; i < 63; ++i) {
++        p.a.c->send(trystero::protocol::presence_frame("X" + std::to_string(i), true, m));
++    }
++    webcpp::test::require(BOOST_TEST(run_until(p.io, [&] { return p.b.presence.size() == 64; })));
++    BOOST_TEST(p.b.ended.empty());
++    p.a.c->send(trystero::protocol::presence_frame("X0", true, m));  // known: not a new token
++    p.a.c->send(trystero::protocol::presence_frame("X63", true, m));
++    BOOST_TEST(run_until(p.io, [&] { return !p.b.ended.empty(); }));
++    BOOST_TEST_EQ(p.b.ended, "too many advertised rooms");
++    BOOST_TEST_EQ(p.b.presence.size(), 65U);
++    BOOST_TEST(!p.b.c->live());
++    BOOST_TEST(run_until(p.io, [&] { return p.a.ended == "data channel closed"; }));
++}
++
++void a_malformed_frame_ends_the_connection() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    link_pair p(tokens, tokens);
++    const std::array<std::uint8_t, 4> bad{3, 0, 1, 'x'};
++    p.a.c->send(bad);
++    BOOST_TEST(run_until(p.io, [&] { return !p.b.ended.empty(); }));
++    BOOST_TEST_EQ(p.b.ended, "invalid or incompatible room frame");
++}
++
++void kept_frames_are_bounded_and_dropped_after_10_s() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    link_pair p(tokens, tokens);
++    auto* m = std::pmr::get_default_resource();
++    const std::array<std::uint8_t, 2> action{2, 0};
++    for (int i = 0; i < 65; ++i) {
++        p.a.c->send(trystero::protocol::room_frame("T2", action, m));
++    }
++    BOOST_TEST(run_until(p.io, [&] { return p.b.kept.size() == 64; }));
++    BOOST_TEST(p.net.advance(9'999ms));
++    BOOST_TEST_EQ(p.b.kept.size(), 64U);  // the 65th, beyond the bound, was not kept
++    BOOST_TEST_EQ(p.b.c->kept_count(), 64U);
++    BOOST_TEST(p.net.advance(1ms));  // 10 s after the first was kept
++    BOOST_TEST_EQ(p.b.c->kept_count(), 0U);
++    BOOST_TEST(p.b.c->take_kept("T2").empty());
++}
++
++// A connection whose channel is closing or closed is not live, so the app does not reuse it
++// (review M6).
++void a_closing_channel_is_not_live() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    link_pair p(tokens, tokens);
++    BOOST_TEST(p.a.c->live());
++    p.net.fail(p.net.peer_of(0));
++    BOOST_TEST(run_until(p.io, [&] { return !p.a.c->live(); }));
++    BOOST_TEST(run_until(p.io, [&] { return !p.a.ended.empty() && !p.b.ended.empty(); }));
++    BOOST_TEST_EQ(p.b.ended, "connection failed");
++}
++
++// The bindings waiting at one drain each get their turn, in the order they began to wait, and a
++// binding destroyed by an earlier turn gets none (review M5).
++void drain_turns_follow_the_order_of_waiting() {
++    const std::array<std::string_view, 3> tokens{"T1", "T2", "T3"};
++    link_pair p(tokens, tokens);
++    webcpp::test::require(BOOST_TEST(run_until(p.io, [&] { return p.b.presence.size() == 3; })));
++    std::vector<std::vector<std::uint8_t>> got;
++    const auto t1 = make_binding(p.a.c, "T1", got);
++    const auto t2 = make_binding(p.a.c, "T2", got);
++    auto t3 = make_binding(p.a.c, "T3", got);
++    p.net.channel_capacity = 1;
++    auto* m = std::pmr::get_default_resource();
++    // Frames the other side drops, past the threshold: 5 x 16,000 bytes.
++    const std::vector<std::uint8_t> payload(16'000, 0);
++    for (int i = 0; i < 5; ++i) {
++        BOOST_TEST(t1->send(trystero::protocol::room_frame("nobody", payload, m)));
++    }
++    webcpp::test::require(
++        BOOST_TEST_GT(t1->buffered_amount(), trystero::backend::data_channel::low_threshold));
++    std::vector<std::string> turns;
++    const std::pmr::polymorphic_allocator<> alloc(m);
++    t2->wait_drained({std::allocator_arg, alloc,
++                      [&turns](bool open) { turns.emplace_back(open ? "T2" : "!T2"); }});
++    t1->wait_drained({std::allocator_arg, alloc, [&turns, &t3](bool open) {
++                          turns.emplace_back(open ? "T1" : "!T1");
++                          t3.reset();
++                      }});
++    t3->wait_drained({std::allocator_arg, alloc,
++                      [&turns](bool open) { turns.emplace_back(open ? "T3" : "!T3"); }});
++    t2->wait_drained({std::allocator_arg, alloc,
++                      [&turns](bool open) { turns.emplace_back(open ? "T2'" : "!T2'"); }});
++    BOOST_TEST(run_until(p.io, [&] { return turns.size() >= 3; }));
++    run_until(p.io, [] { return false; }, 50ms);
++    BOOST_TEST(turns == (std::vector<std::string>{"T2", "T2'", "T1"}));
++    BOOST_TEST(!t3);
++    BOOST_TEST(p.a.ended.empty() && p.b.ended.empty());
++}
++
++// A connection's end fails every waiting binding's drain, once.
++void the_end_fails_every_drain_waiter() {
++    const std::array<std::string_view, 2> tokens{"T1", "T2"};
++    link_pair p(tokens, tokens);
++    std::vector<std::vector<std::uint8_t>> got;
++    const auto t1 = make_binding(p.a.c, "T1", got);
++    const auto t2 = make_binding(p.a.c, "T2", got);
++    p.net.channel_capacity = 1;
++    auto* m = std::pmr::get_default_resource();
++    const std::vector<std::uint8_t> payload(16'000, 0);
++    for (int i = 0; i < 5; ++i) {
++        t1->send(trystero::protocol::room_frame("nobody", payload, m));
++    }
++    std::vector<std::string> turns;
++    const std::pmr::polymorphic_allocator<> alloc(m);
++    t1->wait_drained({std::allocator_arg, alloc,
++                      [&turns](bool open) { turns.emplace_back(open ? "T1" : "!T1"); }});
++    t2->wait_drained({std::allocator_arg, alloc,
++                      [&turns](bool open) { turns.emplace_back(open ? "T2" : "!T2"); }});
++    p.a.c->end("test");
++    BOOST_TEST(turns == (std::vector<std::string>{"!T1", "!T2"}));
++    BOOST_TEST_EQ(p.a.ended, "test");
++    BOOST_TEST(!t1->send(trystero::protocol::room_frame("T1", payload, m)));
++    t1->wait_drained({std::allocator_arg, alloc,
++                      [&turns](bool open) { turns.emplace_back(open ? "T1" : "!T1"); }});
++    BOOST_TEST_EQ(turns.size(), 3U);
++    BOOST_TEST_EQ(turns.back(), "!T1");
++}
++
++// The last binding to detach ends the connection after a kick, or with no idle time; otherwise
++// after the idle time, which a new binding cancels.
++void the_last_binding_ends_or_idles_the_connection() {
++    const std::array<std::string_view, 1> tokens{"T1"};
++    std::vector<std::vector<std::uint8_t>> got;
++    {
++        const link_pair p(tokens, tokens);
++        const auto t1 = make_binding(p.a.c, "T1", got);
++        const auto t2 = make_binding(p.a.c, "T2", got);
++        t1->detach(true, 1000ms);
++        BOOST_TEST(p.a.ended.empty());  // T2 is still bound
++        t2->detach(true, 1000ms);
++        BOOST_TEST_EQ(p.a.ended, "its last room kicked the peer");
++    }
++    {
++        const link_pair p(tokens, tokens);
++        const auto t1 = make_binding(p.a.c, "T1", got);
++        t1->detach(false, 0ms);
++        BOOST_TEST_EQ(p.a.ended, "no room left");
++    }
++    {
++        link_pair p(tokens, tokens);
++        const auto t1 = make_binding(p.a.c, "T1", got);
++        t1->detach(false, 1000ms);
++        BOOST_TEST(p.net.advance(999ms));
++        const auto t2 = make_binding(p.a.c, "T2", got);  // cancels the idle timer
++        BOOST_TEST(p.net.advance(10'000ms));
++        BOOST_TEST(p.a.ended.empty());
++        t2->detach(false, 1000ms);
++        BOOST_TEST(p.net.advance(999ms));
++        BOOST_TEST(p.a.ended.empty());
++        BOOST_TEST(p.net.advance(1ms));
++        BOOST_TEST_EQ(p.a.ended, "idle");
++    }
++}
++
++}  // namespace
++
++int main() {
++    start_advertises_every_token();
++    a_withdrawn_token_is_forgotten();
++    a_bound_token_reaches_its_binding_and_another_is_kept();
++    a_withdrawn_token_drops_its_kept_frames();
++    a_65th_advertised_token_ends_the_connection();
++    a_malformed_frame_ends_the_connection();
++    kept_frames_are_bounded_and_dropped_after_10_s();
++    a_closing_channel_is_not_live();
++    drain_turns_follow_the_order_of_waiting();
++    the_end_fails_every_drain_waiter();
++    the_last_binding_ends_or_idles_the_connection();
++    return boost::report_errors();
++}
+-- 
+2.55.0
+

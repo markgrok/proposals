@@ -1,0 +1,36 @@
+From a5005aee4a4af250eb2febba805a25e903d554ea Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 15:06:35 -0400
+Subject: [PATCH 3/8] site/: a refused event is a value, and the wasm's tests
+ run as their own npm script
+
+---
+ AGENTS.md | 4 ++--
+ site      | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 8f8d539..e8a545d 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1762,8 +1762,8 @@ tools under `tools/`, its tests under `test/`, its `Jamfile`, and its own
+ `main`, then the superproject commits the submodule's new commit, as for a
+ library. What the superproject holds of the site is `tools/site/` and
+ `tools/ci/assemble.py`. Its tests are `b2 /webcpp/site//test`, the site's own
+-(the native test of `app/`, then its npm `test` and `typecheck`, with its wasm
+-built), and `tools/site/*_test.py` with
++(the native test of `app/`, then its npm `test`, `test:wasm`, the tests of
++its wasm, once it is built, and `typecheck`), and `tools/site/*_test.py` with
+ `tools/ci/assemble_test.py`, among the tools' tests.
+ 
+ ### CI
+diff --git a/site b/site
+index df15129..3d19571 160000
+--- a/site
++++ b/site
+@@ -1 +1 @@
+-Subproject commit df15129785a936a45c58636550fa20aef7403334
++Subproject commit 3d1957161423dc4ea224a48a16876472fc8a3c76
+-- 
+2.55.0
+

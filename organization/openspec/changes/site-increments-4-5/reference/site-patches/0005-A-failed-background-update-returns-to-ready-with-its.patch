@@ -1,0 +1,518 @@
+From 0b141eb6e6634ef1594687a0f855b52fb73f284e Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 17:52:56 -0400
+Subject: [PATCH 5/7] A failed background update returns to ready with its
+ reason shown, and dev_test's requests no longer race keep-alive
+
+---
+ app/site_app.cpp          | 10 ++++++++++
+ app/site_app.hpp          |  1 +
+ app/test/install_test.cpp | 20 +++++++++++++++++++
+ assets/site.css           |  6 +++++-
+ machines/install.json     |  5 +++--
+ src/install.tsx           | 19 ++++++++++++++----
+ src/install_flow.ts       | 20 +++++++++++++++----
+ src/sw.ts                 | 29 +++++++++++++++++++--------
+ test/dev_test.mjs         |  9 +++++++--
+ test/install_test.mjs     | 42 ++++++++++++++++++++++++++++++++++++++-
+ test/oracle.mjs           |  1 +
+ test/sw_test.mjs          | 36 +++++++++++++++++++++++++++++++++
+ test/wasm/install.mjs     | 14 ++++++++++++-
+ 13 files changed, 189 insertions(+), 23 deletions(-)
+
+diff --git a/app/site_app.cpp b/app/site_app.cpp
+index eefd4ba..dd7df5b 100644
+--- a/app/site_app.cpp
++++ b/app/site_app.cpp
+@@ -100,6 +100,14 @@ xstate::result<boost::json::object> set_reason(const xstate::action_args& args)
+     return boost::json::object{{"reason", *reason}};
+ }
+ 
++xstate::result<boost::json::object> set_update_error(const xstate::action_args& args) {
++    const boost::json::value* reason = event_member(args, "reason");
++    if (reason == nullptr || !reason->is_string()) {
++        return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
++    }
++    return boost::json::object{{"updateError", *reason}};
++}
++
+ xstate::result<boost::json::object> offer_reload(const xstate::action_args& /*args*/) {
+     return boost::json::object{{"reload", true}};
+ }
+@@ -137,6 +145,8 @@ webcpp::xstate::implementations site_implementations() {
+     registry.actions.emplace("addDone", xstate::assign_action{.assignment = add_done});
+     registry.actions.emplace("setReason", xstate::assign_action{.assignment = set_reason});
+     registry.actions.emplace("offerReload", xstate::assign_action{.assignment = offer_reload});
++    registry.actions.emplace("setUpdateError",
++                             xstate::assign_action{.assignment = set_update_error});
+     registry.guards.emplace("isSpeed", is_speed);
+     registry.guards.emplace("wasDeclined", was_declined);
+     return registry;
+diff --git a/app/site_app.hpp b/app/site_app.hpp
+index 333970f..ef475a1 100644
+--- a/app/site_app.hpp
++++ b/app/site_app.hpp
+@@ -35,6 +35,7 @@ namespace webcpp_site {
+  | `addDone` | assign | `done` + the event's `bytes` |
+  | `setReason` | assign | `reason` = the event's `reason` |
+  | `offerReload` | assign | `reload` = true |
++ | `setUpdateError` | assign | `updateError` = the event's `reason` |
+  | `wasDeclined` | guard | the event's `declined` is its `version` |
+ */
+ webcpp::xstate::implementations site_implementations();
+diff --git a/app/test/install_test.cpp b/app/test/install_test.cpp
+index 75c1deb..787924d 100644
+--- a/app/test/install_test.cpp
++++ b/app/test/install_test.cpp
+@@ -102,6 +102,7 @@ void starts_checking(std::string_view config) {
+     BOOST_TEST_EQ(context_member(checking, "version"), boost::json::value(""));
+     BOOST_TEST_EQ(context_member(checking, "reason"), boost::json::value(""));
+     BOOST_TEST_EQ(context_member(checking, "reload"), boost::json::value(false));
++    BOOST_TEST_EQ(context_member(checking, "updateError"), boost::json::value(""));
+ }
+ 
+ void complete_is_ready(std::string_view config) {
+@@ -201,6 +202,24 @@ void a_new_version_updates_then_offers_a_reload(std::string_view config) {
+     }
+ }
+ 
++void a_failed_update_is_ready_with_its_error(std::string_view config) {
++    const boost::json::value ready = after(
++        config, {
++                    R"({"type": "COMPLETE"})",
++                    R"({"type": "NEW_VERSION"})",
++                    R"({"type": "UPDATE_FAILED", "reason": "x.js is not what precache.json says"})",
++                });
++    if (!is_in(ready, "ready")) {
++        return;
++    }
++    BOOST_TEST_EQ(context_member(ready, "updateError"),
++                  boost::json::value("x.js is not what precache.json says"));
++    BOOST_TEST_EQ(context_member(ready, "reload"), boost::json::value(false));
++    is_in(after(config,
++                {R"({"type": "COMPLETE"})", R"({"type": "UPDATE_FAILED", "reason": "offline"})"}),
++          "ready");
++}
++
+ void an_event_no_state_takes_moves_nothing(std::string_view config) {
+     is_in(after(config,
+                 {
+@@ -232,6 +251,7 @@ int main(int argc, char* argv[]) {
+     installs_counting_the_bytes(config);
+     a_failure_asks_again_with_its_reason(config);
+     a_new_version_updates_then_offers_a_reload(config);
++    a_failed_update_is_ready_with_its_error(config);
+     an_event_no_state_takes_moves_nothing(config);
+     return boost::report_errors();
+ }
+diff --git a/assets/site.css b/assets/site.css
+index fa4ea88..9491ec7 100644
+--- a/assets/site.css
++++ b/assets/site.css
+@@ -490,9 +490,9 @@ header.site > .install > p:first-child {
+     flex: 1 1 240px;
+ }
+ 
++/* Under the message on a phone; from 768px, where the actions share the message's line, under both. */
+ header.site > .install .install-note {
+     flex-basis: 100%;
+-    order: 1;
+     color: var(--muted);
+     font-size: 14px;
+ }
+@@ -620,6 +620,10 @@ header.site > .install-offer summary {
+         flex-wrap: wrap;
+     }
+ 
++    header.site > .install .install-note {
++        order: 1;
++    }
++
+     header.site > .install-offer {
+         display: flex;
+         justify-content: flex-end;
+diff --git a/machines/install.json b/machines/install.json
+index ca5d5b8..9452bbc 100644
+--- a/machines/install.json
++++ b/machines/install.json
+@@ -1,7 +1,7 @@
+ {
+     "id": "install",
+     "initial": "checking",
+-    "context": {"version": "", "missing": 0, "done": 0, "reason": "", "reload": false},
++    "context": {"version": "", "missing": 0, "done": 0, "reason": "", "reload": false, "updateError": ""},
+     "states": {
+         "checking": {
+             "on": {
+@@ -32,7 +32,8 @@
+         },
+         "updating": {
+             "on": {
+-                "UPDATED": {"target": "ready", "actions": "offerReload"}
++                "UPDATED": {"target": "ready", "actions": "offerReload"},
++                "UPDATE_FAILED": {"target": "ready", "actions": "setUpdateError"}
+             }
+         },
+         "declined": {}
+diff --git a/src/install.tsx b/src/install.tsx
+index f74c583..5831a37 100644
+--- a/src/install.tsx
++++ b/src/install.tsx
+@@ -127,9 +127,10 @@ function AppOffer({app, showPrompt}: {app: 'prompt' | 'ios'; showPrompt(): void}
+ 
+ /**
+  * The site's offer to install itself for instant and offline use, which the Header holds: the
+- * question, with the size to download; the progress; the reload a new version offers; and, once the
+- * site is installed, the browser's way to install the app. It shows nothing until the flow has
+- * something to say, so the page the build renders, and the one the browser hydrates, hold none.
++ * question, with the size to download; the progress; the reload a new version offers, or why it
++ * could not be downloaded; and, once the site is installed, the browser's way to install the app.
++ * It shows nothing until the flow has something to say, so the page the build renders, and the one
++ * the browser hydrates, hold none.
+  */
+ export const InstallPrompt = defineComponent({
+     name: 'InstallPrompt',
+@@ -140,7 +141,7 @@ export const InstallPrompt = defineComponent({
+         const offers = useOffers()
+         const [closed, setClosed] = useState(false)
+         const view = installView(state, offers)
+-        if (view === null || (closed && view.kind === 'installed')) {
++        if (view === null || (closed && (view.kind === 'installed' || view.kind === 'update-failed'))) {
+             return null
+         }
+         switch (view.kind) {
+@@ -171,6 +172,16 @@ export const InstallPrompt = defineComponent({
+                         </p>
+                     </section>
+                 )
++            case 'update-failed':
++                return (
++                    <section className="install" aria-label="The new version">
++                        <p role="status">The new version of this site could not be downloaded. This one still works, and the next page tries again.</p>
++                        <p className="install-note">{view.reason}</p>
++                        <p className="install-actions">
++                            <button type="button" className="quiet" onClick={() => setClosed(true)}>Close</button>
++                        </p>
++                    </section>
++                )
+             case 'installed':
+                 return (
+                     <section className="install" aria-label="Installed">
+diff --git a/src/install_flow.ts b/src/install_flow.ts
+index 8c4278e..186e686 100644
+--- a/src/install_flow.ts
++++ b/src/install_flow.ts
+@@ -18,6 +18,8 @@
+ //               sends DECLINE and remembers the version;
+ //   installing  the worker's PROGRESS, INSTALLED and FAILED, as events; INSTALLED then asks the
+ //               browser to keep the cache (navigator.storage.persist);
++//   updating    the worker's UPDATED, or UPDATE_FAILED with its reason, which the page shows, also
++//               when the new worker stops without saying why; the next page tries again;
+ //   ready       with a reload offered, Reload has the waiting worker take over, then reloads.
+ //
+ // A browser without a service worker or the Cache API, one that refuses to register the worker,
+@@ -31,7 +33,7 @@ import {
+ } from './precache.ts'
+ 
+ /** The install machine's context (machines/install.json). */
+-export type InstallContext = {version: string; missing: number; done: number; reason: string; reload: boolean}
++export type InstallContext = {version: string; missing: number; done: number; reason: string; reload: boolean; updateError: string}
+ 
+ /** Where the version the reader declined is kept. */
+ export type DeclinedMemory = {get(): string | null; set(version: string): void}
+@@ -80,6 +82,7 @@ export type InstallView =
+     | {kind: 'asking'; bytes: number; reason: string}
+     | {kind: 'installing'; done: number; bytes: number}
+     | {kind: 'reload'}
++    | {kind: 'update-failed'; reason: string}
+     | {kind: 'installed'; app: 'prompt' | 'ios' | null}
+     | {kind: 'app'; app: 'prompt' | 'ios'}
+     | null
+@@ -129,7 +132,7 @@ function workerOf(registration: RegistrationLike, version: string, ready: (state
+                     resolve(worker)
+                 } else if (worker.state === 'redundant') {
+                     worker.removeEventListener('statechange', step)
+-                    reject(new Error('the service worker of this version stopped before it could install the site'))
++                    reject(new Error('the service worker of this version stopped before it had cached the site'))
+                 }
+             }
+             worker.addEventListener('statechange', step)
+@@ -199,6 +202,8 @@ export function runInstall(env: InstallEnvironment, changed: (state: MachineStat
+             }
+         } else if (data.type === 'FAILED' && typeof data.reason === 'string') {
+             send({type: 'FAILED', reason: data.reason})
++        } else if (data.type === 'UPDATE_FAILED' && typeof data.reason === 'string') {
++            send({type: 'UPDATE_FAILED', reason: data.reason})
+         }
+     }
+ 
+@@ -245,8 +250,12 @@ export function runInstall(env: InstallEnvironment, changed: (state: MachineStat
+             send({type: 'COMPLETE'})
+             send({type: 'NEW_VERSION'})
+             const updated = (worker: string) => worker === 'installed' || worker === 'activating' || worker === 'activated'
+-            workerOf(registered, version, updated).then(() => send({type: 'UPDATED'}), () => {
+-                // The update failed: the installed version keeps serving, and the next page tries again.
++            // A worker that fails says why first (UPDATE_FAILED); this account of it is only for one
++            // that stopped without a word, while the flow still waits in updating.
++            workerOf(registered, version, updated).then(() => send({type: 'UPDATED'}), (error: unknown) => {
++                if (value() === 'updating') {
++                    send({type: 'UPDATE_FAILED', reason: messageOf(error)})
++                }
+             })
+         } else {
+             send({type: 'MISSING', bytes, version, declined: env.declined.get()})
+@@ -319,6 +328,9 @@ export function installView(state: MachineState, offers: InstallOffers): Install
+             if (context.reload) {
+                 return {kind: 'reload'}
+             }
++            if (context.updateError) {
++                return {kind: 'update-failed', reason: context.updateError}
++            }
+             if (context.done > 0) {
+                 return {kind: 'installed', app}
+             }
+diff --git a/src/sw.ts b/src/sw.ts
+index 5cfbebf..eeaea31 100644
+--- a/src/sw.ts
++++ b/src/sw.ts
+@@ -5,15 +5,20 @@
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+ // The site's service worker, bundled to sw.js at the site's root (tools/build.mjs). The page
+-// registers it as sw.js?version=<v>, the version of the precache.json it read (install_flow.ts),
+-// so that each build of the site has a worker of its own, which serves that build's cache alone
+-// (precache.ts says how the caches are laid out):
++// registers it as sw.js?version=<v>, the version of the precache.json it read (install_flow.ts).
++// The browser compares a registration's script URL before its bytes, so a new version's URL makes
++// a new worker although sw.js is the same file from build to build: each build of the site has a
++// worker of its own, which serves that build's cache alone (precache.ts says how the caches are
++// laid out):
+ //
+ //   install    with no install of the site yet, nothing: the reader has not been asked; the worker
+ //              takes over at once. With an earlier version installed, the new version's files,
+ //              those unchanged copied from the earlier cache and only those whose SHA-256 differs
+ //              fetched, each checked, PROGRESS posted to the pages; the worker then waits for the
+-//              reader's reload (SKIP_WAITING), the old one still serving the pages open;
++//              reader's reload (SKIP_WAITING), the old one still serving the pages open. An update
++//              that fails (a fetch, a file whose SHA-256 is not the list's, a full disk) posts
++//              UPDATE_FAILED with the reason and fails the install: the old version keeps serving,
++//              and the next page's registration tries again, fetching only what is still missing;
+ //   activate   removes the caches of every other version of the scope's site;
+ //   fetch      a file of the installed list from the cache, without the network; any other
+ //              same-origin GET from the network, precache.json first among them, and from the
+@@ -37,6 +42,7 @@ export type WorkerMessage =
+     | {type: 'PROGRESS'; version: string; bytes: number}
+     | {type: 'INSTALLED'; version: string}
+     | {type: 'FAILED'; version: string; reason: string}
++    | {type: 'UPDATE_FAILED'; version: string; reason: string}
+ 
+ /** The part of a Request the worker reads. */
+ export type WorkerRequest = {url: string; method: string; mode: string}
+@@ -229,13 +235,18 @@ export function serviceWorker(env: WorkerEnvironment): ServiceWorkerHandlers {
+                 await env.skipWaiting()
+                 return
+             }
+-            const files = await fetchList()
+             const pages = await env.clients.matchAll({type: 'window', includeUncontrolled: true})
+-            await fill(files, bytes => {
++            const post = (message: WorkerMessage) => {
+                 for (const page of pages) {
+-                    page.postMessage({type: 'PROGRESS', version, bytes})
++                    page.postMessage(message)
+                 }
+-            })
++            }
++            try {
++                await fill(await fetchList(), bytes => post({type: 'PROGRESS', version, bytes}))
++            } catch (error) {
++                post({type: 'UPDATE_FAILED', version, reason: messageOf(error)})
++                throw error
++            }
+         },
+         async activate() {
+             const prefix = cachePrefix(env.scope)
+@@ -302,6 +313,8 @@ function listen(scope: WorkerScope): void {
+         clients: scope.clients,
+         skipWaiting: () => scope.skipWaiting(),
+     })
++    // A failed update rejects the install, which is what keeps the version from installing; the
++    // browser then logs the rejection in the worker's console, and the pages show its reason.
+     scope.addEventListener('install', event => event.waitUntil(handlers.install()))
+     scope.addEventListener('activate', event => event.waitUntil(handlers.activate()))
+     scope.addEventListener('fetch', event => {
+diff --git a/test/dev_test.mjs b/test/dev_test.mjs
+index 5d29e6e..596fd68 100644
+--- a/test/dev_test.mjs
++++ b/test/dev_test.mjs
+@@ -19,10 +19,15 @@ import test from 'node:test'
+ import {build, pointTo} from '../tools/dev.mjs'
+ import {serve} from '../tools/serve.mjs'
+ 
+-/** The answer to GET `path`. */
++/**
++ * The answer to GET `path`, on a connection of its own.
++ * Tip: node's default agent keeps a socket alive for the next request, and build() blocks this
++ * process in execFileSync, under load longer than the server's keep-alive timeout: the server then
++ * closes the idle socket as the next request reuses it, and that request fails with ECONNRESET.
++ */
+ function get(port, path) {
+     return new Promise((resolve, reject) => {
+-        request({host: '127.0.0.1', port, path}, response => {
++        request({host: '127.0.0.1', port, path, agent: false}, response => {
+             const chunks = []
+             response.on('data', chunk => chunks.push(chunk))
+             response.on('end', () => resolve({status: response.statusCode,
+diff --git a/test/install_test.mjs b/test/install_test.mjs
+index d2abf73..acd7cde 100644
+--- a/test/install_test.mjs
++++ b/test/install_test.mjs
+@@ -239,6 +239,45 @@ test('a new version updates in the background, then offers a reload, which the w
+     assert.equal(visit.effects.reloaded, 1)
+ })
+ 
++/** A page of an installed site whose new version's worker is installing. */
++async function updating() {
++    const caches = new FakeCaches()
++    await installed(caches, files)
++    const changed = {...files, 'assets/site.js': 'two()'}
++    const next = listOf(changed)
++    const container = new FakeContainer()
++    container.controller = new FakeWorker(script(list.version), 'activated')
++    container.registration.active = container.controller
++    const worker = new FakeWorker(script(next.version), 'installing')
++    container.registration.installing = worker
++    const visit = page({caches, container, net: network(changed)})
++    await settled()
++    assert.equal(visit.last().value, 'updating')
++    return {visit, worker, next}
++}
++
++test('a failed update goes back to ready with the worker\'s reason, which the page shows, and offers no reload', async () => {
++    const {visit, worker, next} = await updating()
++    visit.container.emit({type: 'UPDATE_FAILED', version: 'another version', reason: 'not this page\'s'})
++    assert.equal(visit.last().value, 'updating')
++    visit.container.emit({type: 'UPDATE_FAILED', version: next.version, reason: 'assets/site.js is not what precache.json says'})
++    worker.become('redundant')
++    await settled()
++    assert.deepEqual(visit.states.map(state => state.value), ['checking', 'ready', 'updating', 'ready'])
++    assert.equal(visit.last().context.updateError, 'assets/site.js is not what precache.json says')
++    assert.equal(visit.last().context.reload, false)
++    assert.deepEqual(installView(visit.last(), {prompt: false, ios: false}),
++        {kind: 'update-failed', reason: 'assets/site.js is not what precache.json says'})
++})
++
++test('a new worker that stops without saying why is a failed update too', async () => {
++    const {visit, worker} = await updating()
++    worker.become('redundant')
++    await settled()
++    assert.equal(visit.last().value, 'ready')
++    assert.match(visit.last().context.updateError, /stopped/)
++})
++
+ test('a page served by the old version while the new one already waits offers the reload at once', async () => {
+     const caches = new FakeCaches()
+     await installed(caches, files)
+@@ -283,7 +322,7 @@ test('stop deletes the machine and leaves the page\'s messages alone', async ()
+ })
+ 
+ test('installView: what the prompt shows for each state, and the offers once the site is ready', () => {
+-    const snapshot = (value, context = {}) => ({value, context: {version: 'v', missing: 6_200_000, done: 0, reason: '', reload: false, ...context}, status: 'active'})
++    const snapshot = (value, context = {}) => ({value, context: {version: 'v', missing: 6_200_000, done: 0, reason: '', reload: false, updateError: '', ...context}, status: 'active'})
+     const none = {prompt: false, ios: false}
+     assert.equal(installView(null, none), null)
+     assert.equal(installView({error: 'no wasm'}, none), null)
+@@ -296,6 +335,7 @@ test('installView: what the prompt shows for each state, and the offers once the
+     assert.deepEqual(installView(snapshot('ready', {done: 6_200_000}), none), {kind: 'installed', app: null})
+     assert.deepEqual(installView(snapshot('ready', {done: 6_200_000}), {prompt: true, ios: false}), {kind: 'installed', app: 'prompt'})
+     assert.equal(installView(snapshot('ready'), none), null)
++    assert.deepEqual(installView(snapshot('ready', {updateError: 'offline'}), {prompt: true, ios: false}), {kind: 'update-failed', reason: 'offline'})
+     assert.deepEqual(installView(snapshot('ready'), {prompt: true, ios: false}), {kind: 'app', app: 'prompt'})
+     assert.deepEqual(installView(snapshot('ready'), {prompt: false, ios: true}), {kind: 'app', app: 'ios'})
+ })
+diff --git a/test/oracle.mjs b/test/oracle.mjs
+index 89fad92..347a4ca 100644
+--- a/test/oracle.mjs
++++ b/test/oracle.mjs
+@@ -22,6 +22,7 @@ export const implementations = {
+         addDone: assign({done: ({context, event}) => context.done + event.bytes}),
+         setReason: assign({reason: ({event}) => event.reason}),
+         offerReload: assign({reload: true}),
++        setUpdateError: assign({updateError: ({event}) => event.reason}),
+     },
+     guards: {
+         isSpeed: ({event}) => [0.5, 1, 2].includes(event.speed),
+diff --git a/test/sw_test.mjs b/test/sw_test.mjs
+index 860c5f1..12290c1 100644
+--- a/test/sw_test.mjs
++++ b/test/sw_test.mjs
+@@ -135,6 +135,42 @@ test('install for a new version fetches only the files whose sha256 differs from
+     assert.deepEqual(calls, [], 'the new version waits for the reader\'s reload, the old one serving the open pages')
+ })
+ 
++test('an update whose file is not what the list says fails, telling the pages why, and keeps what it cached for the next try', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const v2 = {...v1, 'libraries/index.html': '<h1>Libraries, more</h1>', 'assets/new.js': 'added()'}
++    const list = listOf(v2)
++    const net = network({...v2, 'assets/new.js': 'tampered()'}, list)
++    const {sw, posted, calls} = worker(list.version, caches, net)
++    await assert.rejects(sw.install(), /assets\/new\.js is not what precache\.json says/)
++    const failed = posted.filter(message => message.type === 'UPDATE_FAILED')
++    assert.equal(failed.length, 1)
++    assert.equal(failed[0].version, list.version)
++    assert.match(failed[0].reason, /assets\/new\.js is not what precache\.json says/)
++    assert.deepEqual(calls, [])
++    const cache = await caches.open(cacheName(scope, list.version))
++    assert.equal(await cache.match(`${scope}precache.json`), undefined, 'not complete, so never served')
++    assert.equal(await text(cache.match(`${scope}libraries/index.html`)), '<h1>Libraries, more</h1>')
++
++    const fixed = network(v2, list)
++    const again = worker(list.version, caches, fixed)
++    await again.sw.install()
++    assert.deepEqual(fixed.requested.sort(), [`${scope}assets/new.js`, `${scope}precache.json`],
++        'the next try fetches only what failed')
++    assert.deepEqual(again.posted.filter(message => message.type === 'UPDATE_FAILED'), [])
++})
++
++test('an update whose list cannot be read fails, telling the pages why', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const net = network(v1)
++    net.offline = true
++    const {sw, posted} = worker('f'.repeat(64), caches, net)
++    await assert.rejects(sw.install(), TypeError)
++    assert.deepEqual(posted.map(message => [message.type, message.version]), [['UPDATE_FAILED', 'f'.repeat(64)]])
++    assert.match(posted[0].reason, /Failed to fetch/)
++})
++
+ test('activate removes the caches of the versions no longer listed, keeps another scope\'s, and claims the pages', async () => {
+     const caches = new FakeCaches()
+     await installed(caches, v1)
+diff --git a/test/wasm/install.mjs b/test/wasm/install.mjs
+index 8c3e099..a17a959 100644
+--- a/test/wasm/install.mjs
++++ b/test/wasm/install.mjs
+@@ -59,7 +59,19 @@ test('the install flow runs in the wasm as it runs in XState: asked, installed,
+     ])
+     assert.deepEqual(values.map(snapshot => snapshot.value),
+         ['checking', 'asking', 'installing', 'installing', 'installing', 'ready', 'updating', 'ready'])
+-    assert.deepEqual(values.at(-1).context, {version: 'v2', missing: 6_200_000, done: 6_200_000, reason: '', reload: true})
++    assert.deepEqual(values.at(-1).context, {version: 'v2', missing: 6_200_000, done: 6_200_000, reason: '', reload: true, updateError: ''})
++})
++
++test('a failed update goes back to ready with its error, in the wasm as in XState', async () => {
++    const app = await siteApp()
++    const values = play(app, [
++        {type: 'COMPLETE'}, {type: 'UPDATE_FAILED', reason: 'too early'}, {type: 'NEW_VERSION'},
++        {type: 'UPDATE_FAILED', reason: 'assets/site.css is not what precache.json says'}, {type: 'UPDATED'},
++    ])
++    assert.deepEqual(values.map(snapshot => snapshot.value), ['checking', 'ready', 'ready', 'updating', 'ready', 'ready'])
++    assert.equal(values[2].context.updateError, '', 'ready takes no UPDATE_FAILED')
++    assert.equal(values[4].context.updateError, 'assets/site.css is not what precache.json says')
++    assert.equal(values[5].context.reload, false, 'nor an UPDATED after it')
+ })
+ 
+ test('every other transition of the flow agrees with XState, and an event no state takes moves nothing', async () => {
+-- 
+2.55.0
+

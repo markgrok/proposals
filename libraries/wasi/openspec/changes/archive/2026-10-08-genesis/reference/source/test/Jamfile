@@ -1,0 +1,71 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+project : requirements <library>/webcpp/wasi//wasi ;
+
+import webcpp ;
+
+webcpp.targets wasip2 wasip3 ;
+
+# Each public header compiles alone: the entry point, and the convenience
+# header that includes it, only on wasip2 and wasip3, with the bindings and
+# the macro of each; the response and the configuration, which include
+# nothing of the component ABI, natively too.
+webcpp.headers-alone wasi : ../include : wasi.hpp wasi/http/entrypoint.hpp
+  : <library>/webcpp/wasi//http ;
+webcpp.headers-alone wasi : ../include : wasi/config.hpp wasi/http/response.hpp
+  : : native wasip2 wasip3 ;
+
+# config.hpp defines WEBCPP_WASI_NO_EXCEPTIONS exactly when the build has no
+# exceptions, and keeps it when a developer defines it in a build that has
+# them, natively and on both WASI targets.
+webcpp.compile config : config_test.cpp : : native wasip2 wasip3 ;
+webcpp.compile config_developer_defined : config_test.cpp
+  : <define>WEBCPP_WASI_NO_EXCEPTIONS <define>WEBCPP_TEST_WASI_DEVELOPER_DEFINED
+  : native wasip2 wasip3 ;
+# WEBCPP_NO_EXCEPTIONS, which a developer defines for every webcpp library at
+# once, defines WEBCPP_WASI_NO_EXCEPTIONS in a build that has exceptions.
+webcpp.compile config_all_off : config_test.cpp
+  : <define>WEBCPP_NO_EXCEPTIONS <define>WEBCPP_TEST_WASI_ALL_OFF
+  : native wasip2 wasip3 ;
+
+# The response's defaults, and that it owns its body, natively and on both
+# WASI targets.
+webcpp.run response : response_test.cpp : : native wasip2 wasip3 ;
+
+# Components served by wasmtime, whose answers are their .expected: each
+# method reaches the main by name and the target verbatim; a body longer than
+# one write arrives whole; content-type is sent only when set, and no other
+# header; two translation units that both include the entry point link into
+# one program, since the header defines only inline functions and macros; and
+# a content type that views the target arrives as the target reads, since the
+# handler frees the request only once the response is written; and a status
+# outside 100-599, or a content type the host refuses, answers an internal
+# error.
+webcpp.serve http_methods.cpp : <library>/webcpp/wasi//http ;
+webcpp.serve http_long_body.cpp : <library>/webcpp/wasi//http ;
+webcpp.serve http_no_content_type.cpp : <library>/webcpp/wasi//http ;
+webcpp.serve http_two_units.cpp : <library>/webcpp/wasi//http <source>http_two_units_answer.cpp ;
+webcpp.serve http_content_type_of_target.cpp : <library>/webcpp/wasi//http ;
+webcpp.serve http_bad_status.cpp : <library>/webcpp/wasi//http ;
+webcpp.serve http_bad_content_type.cpp : <library>/webcpp/wasi//http ;
+
+# The served tests run in a lane of their own, http, on wasip2 and on wasip3,
+# which the library's ordinary lanes leave out:
+# `b2 toolset=clang-wasip2 testing.launcher=wasmtime libs/wasi/test//http`.
+webcpp.lane http
+  : http_methods http_long_body http_no_content_type http_two_units
+    http_content_type_of_target http_bad_status http_bad_content_type
+  : wasip2 wasip3 ;
+
+# The entry point refuses a translation unit that defines neither target's
+# macro, and one that defines both, with its guard's error and no other: with
+# the bindings of the target, and without /webcpp/wasi//http, which would
+# define its macro.
+webcpp.compile-diagnostic neither_target_refused : neither_target_refused.cpp
+  : <library>/webcpp/wasi//http-bindings ;
+webcpp.compile-diagnostic both_targets_refused : both_targets_refused.cpp
+  : <library>/webcpp/wasi//http-bindings <define>WEBCPP_WASI_HTTP_P2 <define>WEBCPP_WASI_HTTP_P3 ;

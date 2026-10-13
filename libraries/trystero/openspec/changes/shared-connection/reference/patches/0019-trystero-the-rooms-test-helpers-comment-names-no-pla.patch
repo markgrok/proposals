@@ -1,0 +1,26 @@
+From 400bf3917add2d8f0ff03bb1ecb8db41a1ba00cb Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 12:27:11 -0400
+Subject: [PATCH 19/25] trystero: the rooms' test helpers' comment names no
+ plan task
+
+---
+ test/support/rooms.hpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/support/rooms.hpp b/test/support/rooms.hpp
+index a30b1b3..7c73cd8 100644
+--- a/test/support/rooms.hpp
++++ b/test/support/rooms.hpp
+@@ -35,7 +35,7 @@
+ #include <string_view>
+ 
+ // The rooms' shared test helpers: a memory network with two relays, a watcher of a room's relay
+-// traffic, a flood of announcements, and the virtual clock's own waits (Task 1, Task 4). A case
++// traffic, a flood of announcements, and the virtual clock's own waits. A case
+ // of room_test.cpp, connection_test.cpp or shared_test.cpp includes this header for them.
+ namespace webcpp::trystero::test {
+ 
+-- 
+2.55.0
+

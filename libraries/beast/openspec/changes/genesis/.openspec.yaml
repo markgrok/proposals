@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-10
+webcpp:
+  library: beast
+  title: "beast: Boost.Beast natively, the browser's WebSocket and fetch on Emscripten"
+  kind: wrapper
+  port_of: null
+  status: draft
+  release: null
+  implementation: null
+  decided: null

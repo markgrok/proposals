@@ -1,0 +1,129 @@
+From d6322946c69000e5478ee8ec3dc9b0e8132e3cb7 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 13:45:36 -0400
+Subject: [PATCH 10/10] tools: the bare throw rule leaves the JavaScript of an
+ EM_JS function or an EM_ASM block alone
+
+---
+ doc/releases/0.1.0.adoc |  2 ++
+ tools/lint/lint_test.py | 18 ++++++++++++++++--
+ tools/lint/rules.py     | 38 ++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 54 insertions(+), 4 deletions(-)
+
+diff --git a/doc/releases/0.1.0.adoc b/doc/releases/0.1.0.adoc
+index 68232ee..a9bdcab 100644
+--- a/doc/releases/0.1.0.adoc
++++ b/doc/releases/0.1.0.adoc
+@@ -165,6 +165,8 @@ exceptions, which would link the `jspi` variant with them.
+ exceptions, such as an `asyncify` variant's.
+ * Fixed a test ending through `webcpp::test::exit_status` printing
+ Emscripten's notice that the runtime is kept alive.
++* Changed the lint rule `bare-throw` to leave alone the JavaScript of an
++`EM_JS` function or an `EM_ASM` block.
+ 
+ [#webcpp-0-1-0-compilers-tested]
+ == Compilers tested
+diff --git a/tools/lint/lint_test.py b/tools/lint/lint_test.py
+index 2b18245..021921e 100755
+--- a/tools/lint/lint_test.py
++++ b/tools/lint/lint_test.py
+@@ -1385,8 +1385,9 @@ def test_bare_throw(root):
+     # A library header raises through boost::throw_exception alone. A throw in a template that
+     # nothing instantiates, which no build compiles, fails, and so does a rethrow inside the
+     # region a build with exceptions compiles; what only reads as a throw does not: the
+-    # function, a string, a comment, a Doc Comment, a raw string, noexcept(false), and a name
+-    # that holds the word. A test or an example may throw: catches.cpp does.
++    # function, a string, a comment, a Doc Comment, a raw string, noexcept(false), a name
++    # that holds the word, and JavaScript's throw in an EM_JS body, after which C++ is read
++    # again. A test or an example may throw: catches.cpp does.
+     header = 'libs/demo/include/webcpp/demo/raising.hpp'
+     write(root, header, CPP + '\n'
+           '#ifndef WEBCPP_DEMO_RAISING_HPP\n'
+@@ -1402,6 +1403,18 @@ def test_bare_throw(root):
+           '#define WEBCPP_DEMO_NO_EXCEPTIONS\n'
+           '#endif\n'
+           '\n'
++          '#ifdef __EMSCRIPTEN__\n'
++          '#include <emscripten/em_js.h>\n'
++          '\n'
++          '// clang-format off\n'
++          'EM_JS(void, planted_javascript, (int kind), {\n'
++          '    if (kind === 1) {\n'
++          '        throw new Error("a JavaScript throw");\n'
++          '    }\n'
++          '});\n'
++          '// clang-format on\n'
++          '#endif\n'
++          '\n'
+           'namespace webcpp::demo {\n'
+           '\n'
+           '/** Returns the count it is given, refusing a negative one.\n'
+@@ -1475,6 +1488,7 @@ def test_bare_throw(root):
+     ], spared=(at(root, header, 'say throw'), at(root, header, 'throws, the one way'),
+                at(root, header, 'boost::throw_exception('), at(root, header, 'R"(throw'),
+                at(root, header, 'noexcept(false)'), at(root, header, 'std::rethrow_exception('),
++               at(root, header, 'throw new Error'),
+                'libs/demo/example/catches.cpp:'))
+ 
+ 
+diff --git a/tools/lint/rules.py b/tools/lint/rules.py
+index cc76314..1fb6897 100755
+--- a/tools/lint/rules.py
++++ b/tools/lint/rules.py
+@@ -448,6 +448,38 @@ def doc_code_spans(path: str, text: str) -> Iterator[Finding]:
+ LIBRARY_HEADER = re.compile(r'(libs|tools/test/fixtures)/[^/]+/include/.+\.(hpp|hxx|hh|h|ipp|inl)')
+ 
+ 
++# Emscripten's macros whose arguments end with JavaScript: the body of an EM_JS function, the code
++# of an EM_ASM block. The tokens of C++ read it, and a throw there is JavaScript's.
++JAVASCRIPT_MACROS = frozenset({
++    'EM_JS', 'EM_ASYNC_JS', 'EM_ASM', 'EM_ASM_INT', 'EM_ASM_PTR', 'EM_ASM_DOUBLE',
++    'MAIN_THREAD_EM_ASM', 'MAIN_THREAD_EM_ASM_INT', 'MAIN_THREAD_EM_ASM_PTR',
++    'MAIN_THREAD_EM_ASM_DOUBLE', 'MAIN_THREAD_ASYNC_EM_ASM',
++})
++
++
++def outside_javascript(tokens: list[Token]) -> list[Token]:
++    """The tokens, but those of each call of a macro of JAVASCRIPT_MACROS, from its name to the
++    parenthesis that closes it."""
++    kept: list[Token] = []
++    index = 0
++    while index < len(tokens):
++        kind, word, _ = tokens[index]
++        opens = tokens[index + 1:index + 2] and tokens[index + 1][1] == '('
++        if kind != 'word' or word not in JAVASCRIPT_MACROS or not opens:
++            kept.append(tokens[index])
++            index += 1
++            continue
++        depth = 0
++        index += 1
++        while index < len(tokens):
++            if tokens[index][0] == 'other':
++                depth += {'(': 1, ')': -1}.get(tokens[index][1], 0)
++            index += 1
++            if depth == 0:
++                break
++    return kept
++
++
+ def bare_throw(path: str, text: str) -> Iterator[Finding]:
+     """A library's public header holds no throw expression, outside its comments and its
+     literals: an exception is raised through boost::throw_exception, which a build without
+@@ -455,10 +487,12 @@ def bare_throw(path: str, text: str) -> Iterator[Finding]:
+     build with exceptions compiles is refused too, and so is a rethrow, throw;, which
+     std::rethrow_exception replaces. The words noexcept, throws and throw_exception are other
+     words. Unlike the build without exceptions that clang-tidy analyses, this reads a template
+-    that nothing instantiates."""
++    that nothing instantiates. The JavaScript of an EM_JS function or an EM_ASM block is not
++    read: a throw there is JavaScript's."""
+     if not LIBRARY_HEADER.fullmatch(path):
+         return
+-    tokens = [token for token in cpp_tokens(text) if not token[0].endswith('-comment')]
++    tokens = outside_javascript(
++        [token for token in cpp_tokens(text) if not token[0].endswith('-comment')])
+     for index, (kind, word, line) in enumerate(tokens):
+         if kind != 'word' or word != 'throw':
+             continue
+-- 
+2.55.0
+

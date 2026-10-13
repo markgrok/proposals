@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-12
+webcpp:
+  library: document
+  title: "document: a JSON document for C++20 that behaves as JavaScript does, in one relocatable image"
+  kind: own
+  port_of: null
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/document/tree/ac29296
+  decided: 2026-10-12

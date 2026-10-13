@@ -1,0 +1,19 @@
+From de8470d05b2a2c2b97b75b0ab95c89f7b0700cd6 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 18:46:42 -0400
+Subject: [PATCH 8/8] site/: the trace is silent until the loader listens
+
+---
+ site | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/site b/site
+index acf5c1e..f3a05e6 160000
+--- a/site
++++ b/site
+@@ -1 +1 @@
+-Subproject commit acf5c1ed50e71a5855d8bde4383e9c25663875de
++Subproject commit f3a05e65421caf8cc74ca175eac9ddc4f451d51e
+-- 
+2.55.0
+

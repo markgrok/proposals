@@ -1,0 +1,32 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+= config: webcpp's configuration for {cpp}
+:toc: left
+:toclevels: 1
+:idprefix:
+:sectanchors:
+:example-caption!:
+:attribute-missing: warn
+
+include::introduction.adoc[]
+
+include::targets.adoc[]
+
+include::exceptions.adoc[]
+
+include::version.adoc[]
+
+include::testing.adoc[]
+
+[#reference]
+== Reference
+
+The macros of `<webcpp/config.hpp>` and `<webcpp/version.hpp>`.
+
+include::{reference}[leveloffset=+1]
+
+include::changelog.adoc[]

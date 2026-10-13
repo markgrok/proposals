@@ -1,0 +1,29 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[#config-version]
+== Version
+
+`<webcpp/version.hpp>` gives webcpp's version, the version of the
+collection, as `<boost/version.hpp>` gives Boost's, with two macros:
+
+`WEBCPP_VERSION`::
+The version as a number, `major * 100000 {plus} minor * 100 {plus} patch`,
+as `BOOST_VERSION` is Boost's: 0.1.0 is `100` and 1.2.3 is `100203`. So
+`WEBCPP_VERSION % 100` is the patch level, `WEBCPP_VERSION / 100 % 1000` the
+minor version and `WEBCPP_VERSION / 100000` the major one, and a program
+compares it in `#if`, as in `#if WEBCPP_VERSION >= 100`.
+
+`WEBCPP_LIB_VERSION`::
+The version as text, `+"<major>_<minor>"+`, with `+"_<patch>"+` after it
+when the patch level is not 0, as `BOOST_LIB_VERSION` is Boost's: `"0_1"` is
+0.1.0 and `"1_2_3"` is 1.2.3.
+
+`<webcpp/version.hpp>` is the one place webcpp's version is written. It
+moves to the next version right after each release, by the release
+procedure of webcpp's
+https://github.com/webcpporg/webcpp/blob/main/AGENTS.md[AGENTS.md]
+(chapter 11), so that between two releases it names the one in preparation.

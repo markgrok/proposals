@@ -1,0 +1,166 @@
+From b15338ddb3f0b15f4243eb6228353c38f88d18f3 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 10:30:17 -0400
+Subject: [PATCH 09/10] tools: exit_status returns its status on emscripten
+ too, without std::exit, so that no test prints Emscripten's keepRuntimeAlive
+ notice
+
+---
+ AGENTS.md                                     |  6 ++++--
+ doc/releases/0.1.0.adoc                       |  2 ++
+ tools/lint/compile_commands.py                |  1 +
+ .../include/webcpp/test/exit_status.hpp       | 19 +++++++++----------
+ tools/test/emscripten_test.py                 |  8 ++++++++
+ .../node_test_demo/test/exit_in_handler.cpp   | 10 +++-------
+ 6 files changed, 27 insertions(+), 19 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index f89fe28..4b5589b 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1543,7 +1543,8 @@ it (it wraps the glue's `callMain`), so that a program linked with
+ `webcpp::test::exit_status` gives its status to the pre-js, which ends node
+ with the first status it is given on node's next turn, whatever is still
+ pending or runs later, and restores it over any later write of
+-`process.exitCode`. A test is also bounded: past 120 s, the
++`process.exitCode`. It never calls `std::exit`, which in a debug build prints
++Emscripten's notice that the runtime is kept alive. A test is also bounded: past 120 s, the
+ pre-js stops it with 1 and the line `webcpp: the test ran past its bound of
+ <n> s`. 120 s is longer than any emscripten test of webcpp, and short enough
+ that a test that waits forever fails inside the CI job instead of running to
+@@ -1564,7 +1565,8 @@ among other flags of one value (a library's usage requirements are not
+ read). The rule: **a test or example
+ whose `main` may suspend under Asyncify ends through
+ `webcpp::test::exit_status`, never through `return` or `std::exit`**, which
+-natively returns its status, and on emscripten ends node with it:
++returns its status on every target, and on emscripten first gives it to the
++pre-js, which ends node with it:
+ `return webcpp::test::exit_status(boost::report_errors());`.
+ `tools/test/emscripten_test.py` pins each case's exact status on the fixture
+ library `node_test_demo`.
+diff --git a/doc/releases/0.1.0.adoc b/doc/releases/0.1.0.adoc
+index 63d7562..68232ee 100644
+--- a/doc/releases/0.1.0.adoc
++++ b/doc/releases/0.1.0.adoc
+@@ -163,6 +163,8 @@ Boost's way, with its suspension variant.
+ exceptions, which would link the `jspi` variant with them.
+ * Fixed the lint stopping on a program built with JavaScript-based
+ exceptions, such as an `asyncify` variant's.
++* Fixed a test ending through `webcpp::test::exit_status` printing
++Emscripten's notice that the runtime is kept alive.
+ 
+ [#webcpp-0-1-0-compilers-tested]
+ == Compilers tested
+diff --git a/tools/lint/compile_commands.py b/tools/lint/compile_commands.py
+index ec10b27..8be6797 100755
+--- a/tools/lint/compile_commands.py
++++ b/tools/lint/compile_commands.py
+@@ -150,6 +150,7 @@ EMSCRIPTEN_VERSION = 'emcc (Emscripten'
+ # each with clang 23's spelling of the same: JavaScript-based exceptions, which a compile with
+ # -fexceptions asks for (the asyncify variant's), are -femscripten-exceptions in clang 24 and
+ # -mllvm -enable-emscripten-cxx-exceptions before it; neither changes what the front end defines.
++# An entry goes when wasi-sdk's clang takes its word.
+ CLANG_23_SPELLING = {
+     '-femscripten-exceptions': ('-mllvm', '-enable-emscripten-cxx-exceptions'),
+ }
+diff --git a/tools/node-test/include/webcpp/test/exit_status.hpp b/tools/node-test/include/webcpp/test/exit_status.hpp
+index 428491f..2b6a5f4 100644
+--- a/tools/node-test/include/webcpp/test/exit_status.hpp
++++ b/tools/node-test/include/webcpp/test/exit_status.hpp
+@@ -5,13 +5,12 @@
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+ // How a test ends under webcpp's test support (tools/node-test/node-pre.js), which every test
+-// and example links: natively a plain status, on emscripten an exit that node keeps.
++// and example links: natively a plain status, on emscripten a status the support keeps.
+ 
+ #ifndef WEBCPP_TEST_EXIT_STATUS_HPP
+ #define WEBCPP_TEST_EXIT_STATUS_HPP
+ 
+ #include <chrono>
+-#include <cstdlib>
+ 
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/em_asm.h>
+@@ -20,12 +19,14 @@
+ namespace webcpp::test {
+ 
+ /**
+- Ends main with status: natively returns it; on emscripten gives it to webcpp's test support,
+- which ends node with the first status it is given on its next turn, then exits.
++ Gives status to webcpp's test support and returns it, so that main ends with it: natively
++ the status is main's; on emscripten the support ends node with the first status it is given,
++ on its next turn, whatever is still pending or runs later.
+ 
+- Tip: under Asyncify a main that suspended loses the value it returns, and node would exit 0;
+- and std::exit alone leaves node running while anything is pending, so that a later write
+- replaces the status (both measured with Emscripten 6.0.11 and node 26.7.0).
++ Tip: it never calls std::exit, which under Emscripten's default EXIT_RUNTIME=0 neither ends
++ node nor keeps the status from a later write, and in a debug build prints Emscripten's notice
++ "program exited ..., but keepRuntimeAlive() is set"; and under Asyncify a main that suspended
++ loses the value it returns, which the support already holds (Emscripten 6.0.11, node 26.7.0).
+ */
+ [[nodiscard]] inline int exit_status(int status) {
+ #ifdef __EMSCRIPTEN__
+@@ -36,10 +37,8 @@ namespace webcpp::test {
+             }
+         },
+         status);
+-    std::exit(status);
+-#else
+-    return status;
+ #endif
++    return status;
+ }
+ 
+ /**
+diff --git a/tools/test/emscripten_test.py b/tools/test/emscripten_test.py
+index 61ab157..84e183d 100644
+--- a/tools/test/emscripten_test.py
++++ b/tools/test/emscripten_test.py
+@@ -229,6 +229,14 @@ def test_a_test_ends_as_its_main_ends(root):
+         status, text = exit_status(root, name)
+         assert status == 1 and (f'webcpp: the bound of {seconds} s is outside 1 to 2147483 s'
+                                 in text), (name, text)
++    # A test that ends through exit_status prints only what it printed: none of Emscripten's
++    # notice that the runtime is kept alive, which an explicit exit prints in a debug build.
++    for name in ('exits_zero_after_suspension_jspi', 'exits_zero_after_suspension_asyncify',
++                 'exit_in_coroutine_asyncify', 'exit_in_handler_jspi',
++                 'keeps_the_first_status_jspi', 'keeps_the_first_status_asyncify',
++                 'ends_with_a_timer_pending_jspi', 'ends_with_a_timer_pending_asyncify'):
++        text = exit_status(root, name)[1]
++        assert 'keepRuntimeAlive' not in text, (name, text)
+     assert time.monotonic() - started < 300, 'a test waited for its bound'
+ 
+ 
+diff --git a/tools/test/fixtures/node_test_demo/test/exit_in_handler.cpp b/tools/test/fixtures/node_test_demo/test/exit_in_handler.cpp
+index b5042f8..0560122 100644
+--- a/tools/test/fixtures/node_test_demo/test/exit_in_handler.cpp
++++ b/tools/test/fixtures/node_test_demo/test/exit_in_handler.cpp
+@@ -4,7 +4,8 @@
+ // accompanying file LICENSE_1_0.txt or copy at
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+-// Ends with 3 through exit_status inside a timer's handler, which no catch (...) stops.
++// Ends with 3 through exit_status inside a timer's handler; main's later exit_status(0) does not
++// replace it.
+ 
+ #include <webcpp/test/exit_status.hpp>
+ 
+@@ -16,12 +17,7 @@
+ int main() {
+     boost::asio::io_context io;
+     boost::asio::steady_timer timer(io, std::chrono::milliseconds(10));
+-    timer.async_wait([](boost::system::error_code const&) {
+-        try {
+-            (void)webcpp::test::exit_status(3);
+-        } catch (...) {
+-        }
+-    });
++    timer.async_wait([](boost::system::error_code const&) { (void)webcpp::test::exit_status(3); });
+     io.run();  // lint-run: the test's event loop
+     return webcpp::test::exit_status(0);
+ }
+-- 
+2.55.0
+

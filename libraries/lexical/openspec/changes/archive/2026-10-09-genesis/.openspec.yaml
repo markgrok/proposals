@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-09
+webcpp:
+  library: lexical
+  title: "lexical: the lexical forms of JSON Schema's string formats"
+  kind: own
+  port_of: null
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/lexical/tree/e286ca4
+  decided: 2026-10-09

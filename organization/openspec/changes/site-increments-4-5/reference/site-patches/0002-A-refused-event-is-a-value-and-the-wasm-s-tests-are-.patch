@@ -1,0 +1,682 @@
+From 3d1957161423dc4ea224a48a16876472fc8a3c76 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 14:28:51 -0400
+Subject: [PATCH 2/7] A refused event is a value, and the wasm's tests are npm
+ run test:wasm, apart from npm test
+
+---
+ Jamfile               |   9 +-
+ README.md             |  16 ++--
+ app/bindings.cpp      |  28 ++++--
+ package.json          |   1 +
+ src/machine.ts        |  26 ++++--
+ test/machine_test.mjs | 200 +++++++++++++++---------------------------
+ test/wasm/machine.mjs | 169 +++++++++++++++++++++++++++++++++++
+ 7 files changed, 294 insertions(+), 155 deletions(-)
+ create mode 100644 test/wasm/machine.mjs
+
+diff --git a/Jamfile b/Jamfile
+index c2ff4b5..7dd257f 100644
+--- a/Jamfile
++++ b/Jamfile
+@@ -76,9 +76,10 @@ actions pages
+ 
+ # The site's own tests: its npm test, which bundles first (package.json's
+ # pretest, so npm alone never reads a stale build/server.mjs) and runs every
+-# test/**/*_test.mjs, the site's wasm among them (test/machine_test.mjs, which
+-# reads it from build/app/), and its typecheck; and machine_host's native
+-# test (app/). b2 /webcpp/site//test.
++# test/**/*_test.mjs, none of which needs the C++ build; its npm test:wasm,
++# test/wasm/*.mjs, which runs the site's wasm, built and copied into build/app/
++# first; its typecheck; and machine_host's native test (app/).
++# b2 /webcpp/site//test.
+ notfile test : @test
+   : : <dependency>node-modules <dependency>app//wasm <dependency>app//site_app_test
+     <webcpp-boost-check>off ;
+@@ -86,6 +87,7 @@ notfile test : @test
+ rule test ( targets * : sources * : properties * )
+ {
+     TEST on $(targets) = [ site.npm test ] ;
++    TEST_WASM on $(targets) = [ site.npm test:wasm ] ;
+     TYPECHECK on $(targets) = [ site.npm typecheck ] ;
+ }
+ 
+@@ -93,6 +95,7 @@ actions test
+ {
+     set -e
+     $(TEST)
++    $(TEST_WASM)
+     $(TYPECHECK)
+ }
+ 
+diff --git a/README.md b/README.md
+index d8f920b..93f158d 100644
+--- a/README.md
++++ b/README.md
+@@ -20,15 +20,17 @@ repository:
+     npm run dev
+     npm test
+     npm run typecheck
++    npm run test:wasm
+ 
+ `OPENUI_TELEMETRY_DISABLED=1` keeps OpenUI's install script from reporting
+ the install to its analytics, as the superproject's build does for every
+ install it makes.
+ 
+-One of the tests, `test/machine_test.mjs`, runs the site's wasm, which only
+-the C++ build makes: it reads `build/app/site-app.mjs`, which Path 2's
+-`b2 site` and `b2 /webcpp/site//test` build and copy there. Without it, that
+-test fails and names the command that builds it.
++`npm test` needs no C++ toolchain. `npm run test:wasm` runs the tests of
++the site's wasm, `test/wasm/`, which only the C++ build makes: they read
++`build/app/site-app.mjs`, which Path 2's `b2 site` and `b2 /webcpp/site//test`
++build and copy there. Without it they fail, naming the command that builds
++it.
+ 
+ `npm run dev` builds the pages with the catalogue of `test/fixtures/`, serves
+ them at http://127.0.0.1:8765/, and builds them again whenever a file under
+@@ -95,7 +97,7 @@ b2 alone, at the superproject's root:
+ | `b2 site` | builds the whole site into `bin/site/`: this repository's pages, every library's page and the report, every link checked; the preview channel, the development version served at https://webcpporg.github.io/, whose every page carries `noindex` and which writes no sitemap |
+ | `b2 site -sWEBCPP_SITE=release -sWEBCPP_SITE_VERSION=<version>` | the same, for the release channel, served at https://webcpp.org/: indexed, with its sitemap |
+ | `b2 site-serve` | builds the site and serves it at http://127.0.0.1:8765/ |
+-| `b2 /webcpp/site//test` | the site's own tests: the native test of `app/`, then, with the site's wasm built, its JavaScript tests and their type check |
++| `b2 /webcpp/site//test` | the site's own tests: the native test of `app/`, then, with the site's wasm built, its JavaScript tests, those of the wasm among them, and their type check |
+ | `b2 /webcpp/site/app//wasm` | the site's wasm alone, built with Emscripten in release and copied into `build/app/` |
+ 
+ The site's C++ is a project like any user's of webcpp: its wasm's own code
+@@ -113,7 +115,7 @@ Python for the report: one more tool on `PATH`, at version 26.7.0.
+ | Path | Purpose |
+ | --- | --- |
+ | `Jamfile` | the site's targets; `b2 site`, at the superproject, runs them |
+-| `package.json`, `package-lock.json` | the site's own node dependencies, pinned, and its scripts: `build`, `test`, `typecheck`, `dev` and `serve` |
++| `package.json`, `package-lock.json` | the site's own node dependencies, pinned, and its scripts: `build`, `test`, `test:wasm`, `typecheck`, `dev` and `serve` |
+ | `pages/` | the site's pages, in OpenUI Lang: `index.oui` is the home, `<name>.oui` the page `<name>/` |
+ | `src/` | the components pages are written with, and the renderer: `server.tsx` prerenders a page, `client.tsx` hydrates it in the browser; `machine.ts` loads the site's wasm and gives a component a machine of it (`useMachine`) |
+ | `app/` | the site's wasm, `site-app.mjs` and `site-app.wasm`, laid out at the site's `assets/app/`: C++ on webcpp::xstate's machine layer that runs the site's machines, its embind bindings, and its native test |
+@@ -123,4 +125,4 @@ Python for the report: one more tool on `PATH`, at version 26.7.0.
+ | `tools/build.mjs` | the `build` script: the bundles, the pages rendered to HTML with their social cards (`tools/cards.mjs`), the header of the libraries' pages, and the indexing files (`--index`) |
+ | `tools/indexing.mjs` | `robots.txt`, `llms.txt`, `libraries.json` and, on the release channel, `sitemap.xml`, written once `b2 site` has laid the whole site out |
+ | `tools/serve.mjs`, `tools/dev.mjs` | the `serve` and `dev` scripts |
+-| `test/` | the site's checks, and `fixtures/catalogue.json`, the catalogue they and `npm run dev` render the pages with |
++| `test/` | the site's checks, and `fixtures/catalogue.json`, the catalogue they and `npm run dev` render the pages with; `wasm/`, the checks of the site's wasm, which `npm run test:wasm` runs |
+diff --git a/app/bindings.cpp b/app/bindings.cpp
+index c57e5bc..f13ba98 100644
+--- a/app/bindings.cpp
++++ b/app/bindings.cpp
+@@ -6,12 +6,14 @@
+ 
+ /**
+  The site's wasm as JavaScript sees it, the module SiteApp: the class
+- MachineHost, machine_host through embind, whose refusals are JavaScript
+- Errors.
++ MachineHost, machine_host through embind. A refused config is a JavaScript
++ Error, since there is then no machine to answer with; a refused event is a
++ value, the JSON {"error": why}, and the machine stays where it was.
+ */
+ 
+ #include "site_app.hpp"
+ 
++#include <boost/json.hpp>
+ #include <boost/system/error_code.hpp>
+ #include <boost/system/result.hpp>
+ 
+@@ -24,29 +26,37 @@
+ 
+ namespace {
+ 
+-/** Throws, in JavaScript, the Error that says what was refused and why. */
+-[[noreturn]] void throw_error(std::string_view refused, const boost::system::error_code& why) {
++/** What was refused and why, as one sentence: "MachineHost.send refused the event: <why>". */
++std::string refusal(std::string_view refused, const boost::system::error_code& why) {
+     std::string message(refused);
+     message += ": ";
+     message += why.message();
+-    emscripten::val::global("Error").new_(message).throw_();
++    return message;
+ }
+ 
+ webcpp_site::machine_host create(const std::string& config) {
+     boost::system::result<webcpp_site::machine_host> created =
+         webcpp_site::machine_host::create(config);
+     if (!created.has_value()) {
+-        throw_error("MachineHost.create refused the config", created.error());
++        const emscripten::val error = emscripten::val::global("Error").new_(
++            refusal("MachineHost.create refused the config", created.error()));
++        error.throw_();
+     }
+-    return std::move(*created);
++    return std::move(created.unsafe_value());
+ }
+ 
++/**
++ The snapshot's JSON, or {"error": why} for an event the host refuses.
++ Tip: a refusal has no "value", which every snapshot has, so the two never read as each other.
++*/
+ std::string send(webcpp_site::machine_host& host, const std::string& event) {
+     boost::system::result<std::string> sent = host.send(event);
+     if (!sent.has_value()) {
+-        throw_error("MachineHost.send refused the event", sent.error());
++        return boost::json::serialize(boost::json::object{
++            {"error", refusal("MachineHost.send refused the event", sent.error())},
++        });
+     }
+-    return std::move(*sent);
++    return std::move(sent.unsafe_value());
+ }
+ 
+ }  // namespace
+diff --git a/package.json b/package.json
+index fa1891d..9e2d550 100644
+--- a/package.json
++++ b/package.json
+@@ -7,6 +7,7 @@
+         "build": "node tools/build.mjs",
+         "pretest": "node tools/build.mjs --bundle",
+         "test": "node --test 'test/**/*_test.mjs'",
++        "test:wasm": "node --test 'test/wasm/*.mjs'",
+         "typecheck": "tsc --noEmit",
+         "dev": "node tools/dev.mjs",
+         "serve": "node tools/serve.mjs",
+diff --git a/src/machine.ts b/src/machine.ts
+index 17ffe8a..761adfc 100644
+--- a/src/machine.ts
++++ b/src/machine.ts
+@@ -11,7 +11,10 @@ import {useCallback, useEffect, useRef, useState} from 'react'
+ 
+ /** One machine in the wasm (app/site_app.hpp's machine_host), whose memory `delete` frees. */
+ export type MachineHost = {
+-    /** Sends XState's event JSON and returns the snapshot's JSON; throws an Error it refuses. */
++    /**
++     * Sends XState's event JSON and returns the snapshot's JSON, or, for an event it refuses,
++     * `{"error": why}`, the machine where it was; it never throws.
++     */
+     send(event: string): string
+     /** The snapshot's JSON. */
+     snapshot(): string
+@@ -37,8 +40,10 @@ export type MachineSnapshot = {
+ }
+ 
+ /**
+- * What useMachine gives: null while the wasm loads, then the machine's snapshot, or, when the
+- * wasm could not load or refused the config, the error that says why, which the page shows as text.
++ * What useMachine gives: null while the wasm loads, then the machine's snapshot, or the error that
++ * says why there is none, which the page shows as text: a wasm that could not load, a refused
++ * config, or a refused event, after which the next event's snapshot follows from where the
++ * machine was.
+  */
+ export type MachineState = MachineSnapshot | {error: string} | null
+ 
+@@ -47,7 +52,10 @@ export type MachineEvent = {type: string; [member: string]: unknown}
+ 
+ /** A machine run by runMachine. */
+ export type MachineRun = {
+-    /** Sends the event once the machine runs, and does nothing before or once stopped. */
++    /**
++     * Sends the event once the machine runs, handing on its snapshot or, refused, its error; does
++     * nothing before or once stopped.
++     */
+     send(event: MachineEvent): void
+     /** Deletes the machine's host; the run hands on nothing after. */
+     stop(): void
+@@ -57,6 +65,12 @@ function messageOf(error: unknown): string {
+     return error instanceof Error ? error.message : String(error)
+ }
+ 
++/** The state a send's JSON gives: the snapshot, or the error of a refused event, which has no `value`. */
++function stateOf(json: string): MachineState {
++    const answer = JSON.parse(json) as MachineSnapshot | {error: string}
++    return 'value' in answer ? answer : {error: answer.error}
++}
++
+ /** The module SiteApp at url, instantiated: its wasm fetched and compiled. */
+ export async function loadSiteApp(url: string): Promise<SiteApp> {
+     const module = (await import(url)) as {default: () => Promise<SiteApp>}
+@@ -78,7 +92,7 @@ export function runMachine(app: Promise<SiteApp>, config: string,
+             return
+         }
+         host = loaded.MachineHost.create(config)
+-        changed(JSON.parse(host.snapshot()) as MachineSnapshot)
++        changed(stateOf(host.snapshot()))
+     }).catch((error: unknown) => {
+         if (!stopped) {
+             changed({error: messageOf(error)})
+@@ -87,7 +101,7 @@ export function runMachine(app: Promise<SiteApp>, config: string,
+     return {
+         send(event) {
+             if (host !== null) {
+-                changed(JSON.parse(host.send(JSON.stringify(event))) as MachineSnapshot)
++                changed(stateOf(host.send(JSON.stringify(event))))
+             }
+         },
+         stop() {
+diff --git a/test/machine_test.mjs b/test/machine_test.mjs
+index 21a276a..aa1ac85 100644
+--- a/test/machine_test.mjs
++++ b/test/machine_test.mjs
+@@ -4,155 +4,78 @@
+ // accompanying file LICENSE_1_0.txt or copy at
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+-// The site's wasm, build/app/site-app.mjs, which b2 /webcpp/site/app//wasm builds with emscripten
+-// and copies there, loaded by src/machine.ts's loadSiteApp, running the player's machine,
+-// machines/player.json, with XState 5.33.2's actor on the same config as its oracle: the two agree
+-// on the value and the context at every step. And runMachine, what useMachine runs: the snapshots
+-// it hands on, the error it hands on in their place, and the host it deletes.
++// src/machine.ts without the site's wasm, which only the C++ build makes: loadSiteApp's refusal,
++// and runMachine, what useMachine runs, on a fake SiteApp that answers as app/bindings.cpp does.
++// The snapshots it hands on, the error it hands on in their place, for a wasm that could not load,
++// a refused config or a refused event, and the host it deletes. test/wasm/machine.mjs runs the
++// same on the wasm itself.
+ 
+ import assert from 'node:assert/strict'
+-import {existsSync, readFileSync} from 'node:fs'
+ import {join} from 'node:path'
+ import test from 'node:test'
+ import {pathToFileURL} from 'node:url'
+-import {assign, createActor, createMachine} from 'xstate'
+ import {loadSiteApp, runMachine} from '../src/machine.ts'
+ import {site} from './site.mjs'
+ 
+-const module = join(site, 'build/app/site-app.mjs')
+-const config = readFileSync(join(site, 'machines/player.json'), 'utf8')
+-
+-/** The site's wasm, or a failure that says how to build it. */
+-async function siteApp() {
+-    assert.ok(existsSync(module), `${module} is missing: build it at the superproject's root with ` +
+-        'b2 /webcpp/site/app//wasm (b2 /webcpp/site//test and b2 site build it first)')
+-    return loadSiteApp(pathToFileURL(module).href)
+-}
+-
+-/** XState's actor on the player's machine, with the implementations the wasm gives the names. */
+-function oracle() {
+-    const machine = createMachine(JSON.parse(config), {
+-        actions: {
+-            resetPlayed: assign({played: 0}),
+-            countPlayed: assign({played: ({context}) => context.played + 1}),
+-            setSpeed: assign({speed: ({event}) => event.speed}),
+-        },
+-        guards: {
+-            isSpeed: ({event}) => [0.5, 1, 2].includes(event.speed),
+-        },
+-    })
+-    return createActor(machine).start()
+-}
+-
+ /**
+- * Plays the events on the wasm's host and on XState's actor, asserting at each step that the two
+- * agree, and returns the wasm's snapshots, the initial one first.
++ * A SiteApp whose machine counts the events it takes, as the wasm answers: create throws an Error
++ * for a config that is not JSON, and send answers a refused event with {"error": why}, the machine
++ * where it was. Every host it creates is recorded.
+  */
+-function play(app, events) {
+-    const host = app.MachineHost.create(config)
+-    const actor = oracle()
+-    try {
+-        const snapshots = [JSON.parse(host.snapshot())]
+-        const agree = (snapshot, step) => {
+-            const expected = actor.getSnapshot()
+-            assert.deepEqual(snapshot.value, expected.value, `the value after ${step}`)
+-            assert.deepEqual(snapshot.context, expected.context, `the context after ${step}`)
+-            assert.equal(snapshot.status, expected.status, `the status after ${step}`)
+-        }
+-        agree(snapshots[0], 'the start')
+-        for (const event of events) {
+-            const snapshot = JSON.parse(host.send(JSON.stringify(event)))
+-            actor.send(event)
+-            agree(snapshot, JSON.stringify(event))
+-            snapshots.push(snapshot)
+-        }
+-        return snapshots
+-    } finally {
+-        host.delete()
+-        actor.stop()
++function fakeApp() {
++    const hosts = []
++    const app = {
++        MachineHost: {
++            create(config) {
++                try {
++                    JSON.parse(config)
++                } catch {
++                    throw new Error('MachineHost.create refused the config: syntax error')
++                }
++                let taken = 0
++                let deleted = false
++                const snapshot = () => JSON.stringify({value: taken === 0 ? 'idle' : 'running', context: {taken}, status: 'active'})
++                const host = {
++                    send(event) {
++                        const read = JSON.parse(event)
++                        if (typeof read.type !== 'string') {
++                            return JSON.stringify({error: 'MachineHost.send refused the event: invalid_event'})
++                        }
++                        taken += 1
++                        return snapshot()
++                    },
++                    snapshot,
++                    delete() {
++                        deleted = true
++                    },
++                    isDeleted: () => deleted,
++                }
++                hosts.push(host)
++                return host
++            },
++        },
+     }
++    return {app, hosts}
+ }
+ 
+-test("the player's machine runs in the wasm as it runs in XState", async () => {
+-    const app = await siteApp()
+-    const [idle, , , , paused, faster] = play(app, [
+-        {type: 'PLAY'}, {type: 'TICK'}, {type: 'TICK'}, {type: 'PAUSE'}, {type: 'SPEED', speed: 2},
+-    ])
+-    assert.deepEqual(idle, {value: 'idle', context: {speed: 1, played: 0}, status: 'active'})
+-    assert.equal(paused.value, 'paused')
+-    assert.equal(paused.context.played, 2)
+-    assert.equal(faster.value, 'paused')
+-    assert.equal(faster.context.speed, 2)
+-
+-    const [, , , done, restarted] = play(app, [
+-        {type: 'PLAY'}, {type: 'TICK'}, {type: 'END'}, {type: 'RESTART'},
+-    ])
+-    assert.equal(done.value, 'done')
+-    assert.equal(restarted.value, 'idle')
+-    assert.equal(restarted.context.played, 0)
+-})
+-
+-test('every transition of the player agrees with XState, and an event no state takes moves nothing', async () => {
+-    const app = await siteApp()
+-    const values = play(app, [
+-        {type: 'STEP'}, {type: 'TICK'}, {type: 'PLAY'}, {type: 'TICK'}, {type: 'SPEED', speed: 0.5},
+-        {type: 'PAUSE'}, {type: 'STEP'}, {type: 'END'}, {type: 'SPEED', speed: 3}, {type: 'TICK'},
+-        {type: 'RESTART'}, {type: 'STEP'}, {type: 'END'}, {type: 'RESTART'}, {type: 'PAUSE'},
+-    ]).map(snapshot => snapshot.value)
+-    assert.deepEqual(values, [
+-        'idle', 'stepping', 'paused', 'running', 'running', 'running',
+-        'paused', 'stepping', 'done', 'done', 'done',
+-        'idle', 'stepping', 'done', 'idle', 'idle',
+-    ])
+-})
+-
+-test('a config or an event that is not JSON is a JavaScript Error, and the machine stays', async () => {
+-    const app = await siteApp()
+-    assert.throws(() => app.MachineHost.create('{"initial": '), error =>
+-        error instanceof Error && /^MachineHost\.create refused the config: /.test(error.message))
+-    assert.throws(() => app.MachineHost.create('{"initial": "nowhere", "states": {}}'), Error)
+-    const host = app.MachineHost.create(config)
+-    try {
+-        const before = host.snapshot()
+-        assert.throws(() => host.send('{"type": "PLAY"'), error =>
+-            error instanceof Error && /^MachineHost\.send refused the event: /.test(error.message))
+-        assert.throws(() => host.send('{"speed": 2}'), Error)
+-        assert.equal(host.snapshot(), before)
+-    } finally {
+-        host.delete()
+-    }
+-})
++const config = '{"initial": "idle", "states": {"idle": {}}}'
+ 
+ test('loadSiteApp rejects with an Error when the module is not there', async () => {
+     await assert.rejects(loadSiteApp(pathToFileURL(join(site, 'build/app/none.mjs')).href), Error)
+ })
+ 
+-/** The app, with every host it creates recorded. */
+-function recording(app) {
+-    const hosts = []
+-    return {
+-        hosts,
+-        app: {
+-            MachineHost: {
+-                create(text) {
+-                    const host = app.MachineHost.create(text)
+-                    hosts.push(host)
+-                    return host
+-                },
+-            },
+-        },
+-    }
+-}
+-
+ test('runMachine hands on each snapshot, and stop deletes its host', async () => {
+-    const {hosts, app} = recording(await siteApp())
++    const {app, hosts} = fakeApp()
+     const states = []
+     const run = runMachine(Promise.resolve(app), config, state => states.push(state))
+     await new Promise(setImmediate)
+     run.send({type: 'PLAY'})
+     run.send({type: 'TICK'})
+-    assert.deepEqual(states.map(state => [state.value, state.context.played]),
+-        [['idle', 0], ['running', 0], ['running', 1]])
++    assert.deepEqual(states, [
++        {value: 'idle', context: {taken: 0}, status: 'active'},
++        {value: 'running', context: {taken: 1}, status: 'active'},
++        {value: 'running', context: {taken: 2}, status: 'active'},
++    ])
+     run.stop()
+     run.send({type: 'PAUSE'})
+     assert.equal(states.length, 3, 'a stopped run hands on nothing')
+@@ -160,6 +83,23 @@ test('runMachine hands on each snapshot, and stop deletes its host', async () =>
+     assert.ok(hosts[0].isDeleted())
+ })
+ 
++test('runMachine hands on a refused event as {error}, and the next event goes on from where the machine was', async () => {
++    const {app, hosts} = fakeApp()
++    const states = []
++    const run = runMachine(Promise.resolve(app), config, state => states.push(state))
++    await new Promise(setImmediate)
++    run.send({type: 'PLAY'})
++    assert.doesNotThrow(() => run.send({type: 42}))
++    run.send({type: 'TICK'})
++    assert.deepEqual(states.slice(1), [
++        {value: 'running', context: {taken: 1}, status: 'active'},
++        {error: 'MachineHost.send refused the event: invalid_event'},
++        {value: 'running', context: {taken: 2}, status: 'active'},
++    ])
++    assert.ok(!hosts[0].isDeleted(), 'a refused event keeps the host')
++    run.stop()
++})
++
+ test('runMachine hands on the error of a wasm that could not load, and of a refused config', async () => {
+     const failed = []
+     runMachine(Promise.reject(new Error('WebAssembly is disabled')), config, state => failed.push(state))
+@@ -167,15 +107,15 @@ test('runMachine hands on the error of a wasm that could not load, and of a refu
+     assert.deepEqual(failed, [{error: 'WebAssembly is disabled'}])
+ 
+     const refused = []
+-    const app = await siteApp()
+-    runMachine(Promise.resolve(app), '{"initial": "nowhere", "states": {}}', state => refused.push(state))
++    const {app, hosts} = fakeApp()
++    runMachine(Promise.resolve(app), '{"initial": ', state => refused.push(state))
+     await new Promise(setImmediate)
+-    assert.equal(refused.length, 1)
+-    assert.match(refused[0].error, /^MachineHost\.create refused the config: /)
++    assert.deepEqual(refused, [{error: 'MachineHost.create refused the config: syntax error'}])
++    assert.deepEqual(hosts, [])
+ })
+ 
+ test('runMachine stopped before the wasm loads creates no host and hands on nothing', async () => {
+-    const {hosts, app} = recording(await siteApp())
++    const {app, hosts} = fakeApp()
+     const states = []
+     let loaded
+     const run = runMachine(new Promise(resolve => { loaded = resolve }), config, state => states.push(state))
+diff --git a/test/wasm/machine.mjs b/test/wasm/machine.mjs
+new file mode 100644
+index 0000000..003dbd3
+--- /dev/null
++++ b/test/wasm/machine.mjs
+@@ -0,0 +1,169 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The site's wasm, build/app/site-app.mjs, which b2 /webcpp/site/app//wasm builds with emscripten
++// and copies there, loaded by src/machine.ts's loadSiteApp, running the player's machine,
++// machines/player.json, with XState 5.33.2's actor on the same config as its oracle: the two agree
++// on the value and the context at every step. A refused config is a JavaScript Error, a refused
++// event a value, and runMachine runs the wasm as it runs test/machine_test.mjs's fake.
++//
++// The npm script test:wasm runs it, never npm test, which needs no C++ build: b2
++// /webcpp/site//test runs both, once it has built the wasm.
++
++import assert from 'node:assert/strict'
++import {existsSync, readFileSync} from 'node:fs'
++import {join} from 'node:path'
++import test from 'node:test'
++import {pathToFileURL} from 'node:url'
++import {assign, createActor, createMachine} from 'xstate'
++import {loadSiteApp, runMachine} from '../../src/machine.ts'
++import {site} from '../site.mjs'
++
++const module = join(site, 'build/app/site-app.mjs')
++const config = readFileSync(join(site, 'machines/player.json'), 'utf8')
++
++/** The site's wasm, or a failure that says how to build it. */
++async function siteApp() {
++    assert.ok(existsSync(module), `${module} is missing: build it at the superproject's root with ` +
++        'b2 /webcpp/site/app//wasm (b2 /webcpp/site//test and b2 site build it first)')
++    return loadSiteApp(pathToFileURL(module).href)
++}
++
++/** XState's actor on the player's machine, with the implementations the wasm gives the names. */
++function oracle() {
++    const machine = createMachine(JSON.parse(config), {
++        actions: {
++            resetPlayed: assign({played: 0}),
++            countPlayed: assign({played: ({context}) => context.played + 1}),
++            setSpeed: assign({speed: ({event}) => event.speed}),
++        },
++        guards: {
++            isSpeed: ({event}) => [0.5, 1, 2].includes(event.speed),
++        },
++    })
++    return createActor(machine).start()
++}
++
++/**
++ * Plays the events on the wasm's host and on XState's actor, asserting at each step that the two
++ * agree, and returns the wasm's snapshots, the initial one first.
++ */
++function play(app, events) {
++    const host = app.MachineHost.create(config)
++    const actor = oracle()
++    try {
++        const snapshots = [JSON.parse(host.snapshot())]
++        const agree = (snapshot, step) => {
++            const expected = actor.getSnapshot()
++            assert.deepEqual(snapshot.value, expected.value, `the value after ${step}`)
++            assert.deepEqual(snapshot.context, expected.context, `the context after ${step}`)
++            assert.equal(snapshot.status, expected.status, `the status after ${step}`)
++        }
++        agree(snapshots[0], 'the start')
++        for (const event of events) {
++            const snapshot = JSON.parse(host.send(JSON.stringify(event)))
++            actor.send(event)
++            agree(snapshot, JSON.stringify(event))
++            snapshots.push(snapshot)
++        }
++        return snapshots
++    } finally {
++        host.delete()
++        actor.stop()
++    }
++}
++
++test("the player's machine runs in the wasm as it runs in XState", async () => {
++    const app = await siteApp()
++    const [idle, , , , paused, faster] = play(app, [
++        {type: 'PLAY'}, {type: 'TICK'}, {type: 'TICK'}, {type: 'PAUSE'}, {type: 'SPEED', speed: 2},
++    ])
++    assert.deepEqual(idle, {value: 'idle', context: {speed: 1, played: 0}, status: 'active'})
++    assert.equal(paused.value, 'paused')
++    assert.equal(paused.context.played, 2)
++    assert.equal(faster.value, 'paused')
++    assert.equal(faster.context.speed, 2)
++
++    const [, , , done, restarted] = play(app, [
++        {type: 'PLAY'}, {type: 'TICK'}, {type: 'END'}, {type: 'RESTART'},
++    ])
++    assert.equal(done.value, 'done')
++    assert.equal(restarted.value, 'idle')
++    assert.equal(restarted.context.played, 0)
++})
++
++test('every transition of the player agrees with XState, and an event no state takes moves nothing', async () => {
++    const app = await siteApp()
++    const values = play(app, [
++        {type: 'STEP'}, {type: 'TICK'}, {type: 'PLAY'}, {type: 'TICK'}, {type: 'SPEED', speed: 0.5},
++        {type: 'PAUSE'}, {type: 'STEP'}, {type: 'END'}, {type: 'SPEED', speed: 3}, {type: 'TICK'},
++        {type: 'RESTART'}, {type: 'STEP'}, {type: 'END'}, {type: 'RESTART'}, {type: 'PAUSE'},
++    ]).map(snapshot => snapshot.value)
++    assert.deepEqual(values, [
++        'idle', 'stepping', 'paused', 'running', 'running', 'running',
++        'paused', 'stepping', 'done', 'done', 'done',
++        'idle', 'stepping', 'done', 'idle', 'idle',
++    ])
++})
++
++test('a refused config is a JavaScript Error', async () => {
++    const app = await siteApp()
++    assert.throws(() => app.MachineHost.create('{"initial": '), error =>
++        error instanceof Error && /^MachineHost\.create refused the config: /.test(error.message))
++    assert.throws(() => app.MachineHost.create('{"initial": "nowhere", "states": {}}'), Error)
++})
++
++test('a refused event is a value, {"error": why}, and the machine stays where it was', async () => {
++    const app = await siteApp()
++    const host = app.MachineHost.create(config)
++    try {
++        const before = host.snapshot()
++        for (const event of ['{"type": "PLAY"', '{"speed": 2}', '{"type": 42}']) {
++            const refused = JSON.parse(host.send(event))
++            assert.deepEqual(Object.keys(refused), ['error'], event)
++            assert.match(refused.error, /^MachineHost\.send refused the event: /, event)
++            assert.equal(host.snapshot(), before, event)
++        }
++        assert.equal(JSON.parse(host.send('{"type": "PLAY"}')).value, 'running', 'the next event starts from idle')
++    } finally {
++        host.delete()
++    }
++})
++
++test('runMachine on the wasm: snapshots, a refused event as a value, and stop deleting the host', async () => {
++    const app = await siteApp()
++    const hosts = []
++    const recording = {
++        MachineHost: {
++            create(text) {
++                const host = app.MachineHost.create(text)
++                hosts.push(host)
++                return host
++            },
++        },
++    }
++    const states = []
++    const run = runMachine(Promise.resolve(recording), config, state => states.push(state))
++    await new Promise(setImmediate)
++    run.send({type: 'PLAY'})
++    run.send({type: 42})
++    run.send({type: 'TICK'})
++    assert.deepEqual(states.slice(0, 2).map(state => [state.value, state.context.played]),
++        [['idle', 0], ['running', 0]])
++    assert.deepEqual(Object.keys(states[2]), ['error'])
++    assert.match(states[2].error, /^MachineHost\.send refused the event: /)
++    assert.deepEqual([states[3].value, states[3].context.played], ['running', 1])
++    run.stop()
++    assert.equal(hosts.length, 1)
++    assert.ok(hosts[0].isDeleted())
++
++    const refused = []
++    runMachine(Promise.resolve(app), '{"initial": "nowhere", "states": {}}', state => refused.push(state))
++    await new Promise(setImmediate)
++    assert.equal(refused.length, 1)
++    assert.match(refused[0].error, /^MachineHost\.create refused the config: /)
++})
++
+-- 
+2.55.0
+

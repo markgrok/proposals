@@ -1,0 +1,373 @@
+diff --git a/include/webcpp/trystero/room.hpp b/include/webcpp/trystero/room.hpp
+index afc2440..606bc8d 100644
+--- a/include/webcpp/trystero/room.hpp
++++ b/include/webcpp/trystero/room.hpp
+@@ -22,6 +22,7 @@
+ #include <webcpp/trystero/handler.hpp>
+ #include <webcpp/trystero/json_resource.hpp>
+ #include <webcpp/trystero/options.hpp>
++#include <webcpp/trystero/protocol/envelope.hpp>
+ #include <webcpp/trystero/protocol/json.hpp>
+ #include <webcpp/trystero/protocol/relays.hpp>
+ #include <webcpp/trystero/protocol/signal.hpp>
+@@ -588,6 +589,15 @@ public:
+                             std::static_pointer_cast<room_endpoint>(shared_from_this()));
+         app_->add_user();
+         strategy_->start();
++        // As Trystero joins a room: bound over every live connection whose remote advertised it,
++        // then announced on every live connection, so that each remote binds in turn.
++        const auto connections = app_->live_connections();
++        for (const auto& c : connections) {
++            try_bind(c->peer(), bind_event::joined);
++        }
++        for (const auto& c : connections) {
++            c->send_presence(token_, true);
++        }
+     }
+ 
+     /** The room's executor. */
+@@ -630,16 +640,16 @@ public:
+     }
+ 
+     void presence_changed(std::string_view peer, bool present) override {
+-        if (!present && peers_.contains(peer)) {
++        if (present) {
++            try_bind(peer, bind_event::presence);
++        } else if (peers_.contains(peer)) {
+             remove_peer(peer, "peer left the room", end_kind::withdrawn);
+         }
+-        // Does not bind the peer here: a peer is bound only when its negotiation connects
+-        // (on_connected), never from presence alone.
+     }
+ 
+     [[nodiscard]] bool keeps_frames_from(std::string_view /*peer*/) const override { return true; }
+ 
+-    void frame_kept(std::string_view /*peer*/) override {}
++    void frame_kept(std::string_view peer) override { try_bind(peer, bind_event::frame); }
+ 
+     void connection_ended(const std::shared_ptr<connection>& ended, std::string_view peer,
+                           std::string_view reason) override {
+@@ -941,6 +951,54 @@ private:
+         }
+     }
+ 
++    /** What makes a room bind a peer over a live connection: its own join, the peer's presence, a
++     * frame of the room the connection kept, the reuse of the connection by a signal, or the room's
++     * rebinding time. */
++    enum class bind_event { joined, presence, frame, reuse, rebinding };
++
++    /** Binds `peer` over the app's live connection to it when every condition holds: the peer has
++     * itself advertised this room's token on that connection, this room is not leaving, no backoff
++     * of this room runs for the peer, and the peer is not bound already. Whether it bound.
++     *
++     * Tip: the advertisement is the peer's own, on a connection only it can write to, so that an
++     * announcement or a signal anyone publishes in its name binds nothing. */
++    bool try_bind(std::string_view peer, bind_event event) {
++        if (left_ || peers_.contains(peer)) {
++            return false;
++        }
++        const auto c = app_->find(peer);
++        if (!c || refusing(peer)) {
++            return false;
++        }
++        if (event == bind_event::reuse || event == bind_event::rebinding) {
++            c->send_presence(token_, true);
++        }
++        bind_peer(peer, c);
++        return true;
++    }
++
++    /** Whether a backoff of this room runs for `peer`, which keeps it from binding the peer. */
++    [[nodiscard]] bool refusing(std::string_view /*peer*/) const { return false; }
++
++    /** Delivers the frames `c` kept for this room, in their order, to the binding `mine` of `peer`.
++     * A frame may make the room kick the peer at once (an action-level violation, a malformed
++     * handshake message, a `\@_leave`), which removes the peer's entry: delivery stops as soon as
++     * the entry is gone or holds another binding. */
++    void deliver_kept(const std::pmr::string& peer, connection& c, const binding* mine) {
++        auto frames = c.take_kept(token_);
++        for (auto& frame : frames) {
++            if (const auto it = peers_.find(peer);
++                it == peers_.end() || it->second.link.get() != mine) {
++                return;
++            }
++            // The connection decoded the envelope when it kept the frame.
++            const auto envelope = protocol::decode_envelope(frame);
++            BOOST_ASSERT(envelope);
++            const auto action = envelope->payload;
++            wire_->handle(peer, std::move(frame), action);
++        }
++    }
++
+     /** A negotiation of this room opened a channel to `peer`: the app adopts the connection, or
+      * keeps the one it has to the peer, and the room binds the peer to it.
+      *
+@@ -964,13 +1022,13 @@ private:
+     }
+ 
+     /** Binds this room to `c` for `peer`, in the order the specification sets: the negotiation
+-     * marked connected, the peer's state and handshake timer, then the handshake's first message.
+-     * The frames the connection kept before that message are not delivered here.
++     * marked connected, the peer's state and handshake timer, the frames the connection kept for
++     * this room, then the handshake's first message, as Trystero adds a peer before it flushes.
+      *
+      * Tip: the peer's id is copied first, since every step may run code that removes the peer's
+-     * entry (a kick); the entry is never held by reference across such a step. Each
+-     * lambda keeps its own copy in the room's resource, named: a plain copy of a std::pmr::string
+-     * takes the default resource. */
++     * entry (a kick); the entry is never held by reference across such a step, and each step
++     * looks it up again. Each lambda keeps its own copy in the room's resource, named: a plain copy
++     * of a std::pmr::string takes the default resource. */
+     void bind_peer(std::string_view peer_view, const std::shared_ptr<connection>& c) {
+         // A peer is bound once until its removal, as the connection's attach requires: the
+         // signaling hands over no channel while its entry is connected, which `on_channel_open`
+@@ -979,6 +1037,9 @@ private:
+         const std::pmr::string peer(peer_view, memory_);
+         const auto weak = weak_from_this();
+         signaling_->bound(peer);
++        // This binding, held until the call returns: a kept frame may remove the peer's entry and
++        // free it, and another made meanwhile must not be taken for it at the same address.
++        std::shared_ptr<const binding> mine;
+         {
+             auto& state = peers_.try_emplace(peer, allocator()).first->second;
+             state.link = std::allocate_shared<binding>(
+@@ -1003,8 +1064,11 @@ private:
+                                  "handshake timed out");
+                     self->kick(peer, "handshake timed out");
+                 }));
++            mine = state.link;
+         }
+-        if (const auto it = peers_.find(peer); it != peers_.end()) {
++        deliver_kept(peer, *c, mine.get());
++        if (const auto it = peers_.find(peer);
++            it != peers_.end() && it->second.link.get() == mine.get()) {
+             start_handshake(it->first, it->second);
+         }
+     }
+diff --git a/test/shared_test.cpp b/test/shared_test.cpp
+index 2f40e45..1c2a053 100644
+--- a/test/shared_test.cpp
++++ b/test/shared_test.cpp
+@@ -8,6 +8,9 @@
+ // clock.
+ 
+ #include <webcpp/trystero.hpp>
++#include <webcpp/trystero/protocol/action_wire.hpp>
++#include <webcpp/trystero/protocol/envelope.hpp>
++#include <webcpp/trystero/protocol/topics.hpp>
+ 
+ #include "support/memory_backend.hpp"
+ #include "support/rooms.hpp"
+@@ -18,10 +21,14 @@
+ #include <algorithm>
+ #include <array>
+ #include <cstddef>
++#include <cstdint>
+ #include <initializer_list>
+ #include <optional>
++#include <span>
+ #include <string>
++#include <string_view>
+ #include <utility>
++#include <variant>
+ #include <vector>
+ 
+ #include "require.hpp"
+@@ -280,6 +287,186 @@ void an_app_assigned_to_itself_keeps_its_state() {
+     BOOST_TEST_EQ(f.net.live_connections(), 2U);
+ }
+ 
++/** A's end of the first pair made, recorded by on_made: A, the lower id, offers first. */
++struct ends {
++    std::vector<std::size_t> made;
++    explicit ends(two_apps& t) {
++        t.f.net.on_made = [this](std::size_t pc, std::span<const trystero::backend::ice_server>) {
++            made.push_back(pc);
++        };
++    }
++    [[nodiscard]] std::size_t a() const { return made.at(0); }
++};
++
++/** The action an inline room frame of `room` carries (`@_hsdata`, `@_leave`, `chat`, ...), or
++ * empty. */
++std::string internal_name(std::span<const std::uint8_t> frame, std::string_view room) {
++    const auto env = trystero::protocol::decode_envelope(frame);
++    if (!env || env->type != trystero::protocol::envelope::kind::room ||
++        env->token != trystero::protocol::room_token(app_id, room)) {
++        return {};
++    }
++    const auto d = trystero::protocol::decode_action(env->payload);
++    const auto* p = d.frame ? std::get_if<trystero::protocol::proposal>(&*d.frame) : nullptr;
++    return p != nullptr ? std::string(p->name) : std::string();
++}
++
++/** What a frame of `room` is, for a record of what one end sent: its inline action's name,
++ * `presence(1)` or `presence(0)`, or empty for a frame of another room or not inline. */
++std::string what_of(std::span<const std::uint8_t> frame, std::string_view room) {
++    const auto env = trystero::protocol::decode_envelope(frame);
++    if (env && env->type == trystero::protocol::envelope::kind::presence &&
++        env->token == trystero::protocol::room_token(app_id, room)) {
++        return env->present ? "presence(1)" : "presence(0)";
++    }
++    return internal_name(frame, room);
++}
++
++/** A room frame of `room`'s token holding the inline action `name`, with `json` as its payload
++ * (none when empty), as a peer's room sends an internal action. */
++trystero::protocol::bytes internal_frame(std::string_view room, std::string_view name,
++                                         std::string_view json = {}) {
++    const auto token = trystero::protocol::room_token(app_id, room);
++    const std::span<const std::uint8_t> payload(reinterpret_cast<const std::uint8_t*>(json.data()),
++                                                json.size());
++    auto frame = trystero::protocol::begin_room_frame(
++        token, trystero::protocol::inline_header_size + payload.size());
++    trystero::protocol::append_inline(frame, name,
++                                      json.empty() ? trystero::protocol::payload_format::text
++                                                   : trystero::protocol::payload_format::json,
++                                      {}, payload);
++    return frame;
++}
++
++// Frames of r2 that reach A before B's presence, as a Trystero JS peer sends its handshake before
++// its presence: A keeps them, and once B's presence binds r2 it delivers them after making B's
++// state, so the handshake completes. B's own `@_hsready` of r2 never reaches A, so only the kept one
++// can complete it. B, whose join finds A's presence for r2, binds during the join, as Trystero JS
++// does: its handshake goes out first, then its presence. The 64-frame bound and the 10 s expiry
++// are the connection's, tested in connection_test.cpp.
++void frames_before_presence_are_kept() {
++    two_apps t("HHHHHHHHHHHHHHHHHHHH", "IIIIIIIIIIIIIIIIIIII");
++    const ends e(t);
++    joined_in(t, {"r1"});
++    t.a_rooms.push_back(join(t.a, "r2"));
++    advance(t.f, 200ms);
++    t.f.net.inject(e.a(), internal_frame("r2", "@_hsready"));
++    advance(t.f, 50ms);
++    BOOST_TEST(t.a_rooms[1].peers().empty());  // kept, not bound: B never advertised r2
++    std::vector<std::string> b_sent;
++    t.f.net.filter = [&](std::size_t, std::size_t to, std::span<const std::uint8_t> frame) {
++        if (to != e.a()) {
++            return trystero::test::memory_network::verdict::deliver;
++        }
++        if (auto what = what_of(frame, "r2"); !what.empty()) {
++            b_sent.push_back(std::move(what));
++        }
++        return internal_name(frame, "r2") == "@_hsready"
++                   ? trystero::test::memory_network::verdict::drop
++                   : trystero::test::memory_network::verdict::deliver;
++    };
++    t.b_rooms.push_back(join(t.b, "r2"));
++    BOOST_TEST((b_sent == std::vector<std::string>{"@_hsready", "presence(1)"}));
++    BOOST_TEST(run_until(t.f, [&] { return t.all_joined(); }));
++    t.f.net.filter = nullptr;  // the rooms' farewells go through the network after `e` is gone
++}
++
++// A kept frame that makes A kick B while A binds (an undecodable action frame of r2, then B's
++// presence for r2): A kicks B from r2 only, nothing else happens, and nothing touches the peer's
++// removed state (shared_hardened and the sanitizers see it).
++void a_kept_frame_that_kicks_during_a_binding() {
++    two_apps t("HHHHHHHHHHHHHHHHHHH1", "IIIIIIIIIIIIIIIIIII2");
++    const ends e(t);
++    joined_in(t, {"r1"});
++    t.a_rooms.push_back(join(t.a, "r2"));
++    advance(t.f, 200ms);
++    std::size_t leaves_sent = 0;
++    std::vector<std::string> a_sent;
++    t.f.net.filter = [&](std::size_t from, std::size_t, std::span<const std::uint8_t> frame) {
++        leaves_sent += from == e.a() && internal_name(frame, "r2") == "@_leave" ? 1 : 0;
++        if (auto what = what_of(frame, "r2"); from == e.a() && !what.empty()) {
++            a_sent.push_back(std::move(what));
++        }
++        return trystero::test::memory_network::verdict::deliver;
++    };
++    const auto token = trystero::protocol::room_token(app_id, "r2");
++    const std::uint8_t garbage[] = {9, 9, 9};
++    t.f.net.inject(e.a(), trystero::protocol::room_frame(token, garbage));
++    t.f.net.inject(e.a(), trystero::protocol::presence_frame(token, true));
++    BOOST_TEST(run_until(t.f, [&] { return leaves_sent == 1; }));
++    advance(t.f, 1000ms);
++    // The kick came before the handshake's first message, which the removed peer never got.
++    BOOST_TEST((a_sent == std::vector<std::string>{"@_leave"}));
++    BOOST_TEST(t.a_rooms[1].peers().empty());
++    BOOST_TEST_EQ(t.a_rooms[0].peers().size(), 1U);
++    BOOST_TEST_EQ(t.f.net.live_connections(), 2U);
++    // The rooms' farewells go through the network after `e` and `leaves_sent` are gone.
++    t.f.net.filter = nullptr;
++}
++
++// A frame of a room from a peer that advertised it binds the room, as its presence does: after B's
++// `@_leave` of r2, which leaves the connection and B's presence for r2 as they were, B's next frame
++// of r2 binds A's r2 to it again.
++void a_kept_frame_binds_its_room() {
++    two_apps t("LLLLLLLLLLLLLLLLLLL1", "MMMMMMMMMMMMMMMMMMM2");
++    const ends e(t);
++    joined_in(t, {"r1", "r2"});
++    t.f.net.inject(e.a(), internal_frame("r2", "@_leave"));
++    BOOST_TEST(run_until(t.f, [&] { return t.a_rooms[1].peers().empty(); }));
++    t.f.net.inject(e.a(), internal_frame("r2", "@_hsready"));
++    BOOST_TEST(run_until(t.f, [&] { return t.a_rooms[1].peers().size() == 1; }));
++    BOOST_TEST_EQ(t.a_rooms[0].peers().size(), 1U);
++    BOOST_TEST_EQ(t.f.net.live_connections(), 2U);
++}
++
++// A room that is leaving binds no one: B, which joins r2 during A's farewell from it, finds A's
++// presence and binds A at once, but A, which hears B's presence and B's handshake then, binds
++// neither, so B never sees A join; A's presence(0) then ends B's binding.
++void a_leaving_room_binds_no_one() {
++    two_apps t("NNNNNNNNNNNNNNNNNNN1", "OOOOOOOOOOOOOOOOOOO2");
++    joined_in(t, {"r1"});
++    t.a_rooms.push_back(join(t.a, "r2"));
++    advance(t.f, 200ms);
++    bool left = false;
++    t.a_rooms[1].async_leave([&left](boost::system::error_code) { left = true; });
++    t.b_rooms.push_back(join(t.b, "r2"));
++    std::size_t joins = 0;
++    t.b_rooms[1].on_peer_join([&joins](std::string_view) { ++joins; });
++    BOOST_TEST(run_until(t.f, [&] { return left; }));
++    advance(t.f, 1000ms);
++    BOOST_TEST_EQ(joins, 0U);
++    BOOST_TEST(t.b_rooms[1].peers().empty());
++    BOOST_TEST_EQ(t.b_rooms[0].peers().size(), 1U);
++}
++
++// A forced failure, a frame that does not decode, and a 65th advertised token each end the
++// connection for both rooms, which then meet again over one new connection.
++void a_connections_end_is_every_rooms() {
++    for (int way = 0; way < 3; ++way) {
++        two_apps t("JJJJJJJJJJJJJJJJJJJ1", "KKKKKKKKKKKKKKKKKKK2");
++        const ends e(t);
++        joined_in(t, {"r1", "r2"});
++        int leaves = 0;
++        for (auto& r : t.a_rooms) {
++            r.on_peer_leave([&leaves](std::string_view) { ++leaves; });
++        }
++        if (way == 0) {
++            t.f.net.fail(e.a());
++        } else if (way == 1) {
++            const std::uint8_t bad[] = {3, 0, 1, 'x'};
++            t.f.net.inject(e.a(), bad);
++        } else {
++            for (int i = 0; i < 65; ++i) {
++                t.f.net.inject(e.a(),
++                               trystero::protocol::presence_frame("X" + std::to_string(i), true));
++            }
++        }
++        BOOST_TEST(run_until(t.f, [&] { return leaves == 2; }));
++        BOOST_TEST(run_until(t.f, [&] { return t.all_joined(); }, 30s));
++        BOOST_TEST(run_until(t.f, [&] { return t.f.net.live_connections() == 2U; }));
++    }
++}
++
+ }  // namespace
+ 
+ int main() {
+@@ -294,5 +481,10 @@ int main() {
+     an_app_destroyed_leaves_its_rooms_going();
+     an_app_assigned_over_releases_its_state();
+     an_app_assigned_to_itself_keeps_its_state();
++    frames_before_presence_are_kept();
++    a_kept_frame_that_kicks_during_a_binding();
++    a_kept_frame_binds_its_room();
++    a_leaving_room_binds_no_one();
++    a_connections_end_is_every_rooms();
+     return boost::report_errors();
+ }

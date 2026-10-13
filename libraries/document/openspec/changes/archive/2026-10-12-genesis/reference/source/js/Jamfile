@@ -1,0 +1,93 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+#
+# document's JavaScript API (webcpp-document.mjs), built by Emscripten: the
+# module that binding.cpp declares, the wrapper that imports it, and the
+# package directory of the build in which Node and the browser find them
+# beside one another, with the tests and the oracle's cases they replay.
+#
+#   b2 toolset=emscripten libs/document/js//package
+#     builds the package into js/package
+#
+# The tests are not here: libs/document/test/js declares them, as the own
+# lane js, which runs them on this package (b2 declared-lanes), and is the
+# only Jamfile that compiles binding.cpp for the lint and the CI. Every target
+# here is explicit.
+
+project : requirements <library>/webcpp/document//document ;
+
+import make ;
+
+# The module: wasm32 with embind, as an ES module that the wrapper imports
+# beside it. It exports the classes that binding.cpp declares, which
+# webcpp-document.mjs wraps. binding.cpp and binding.hpp (which the shared
+# module uses too) never throw into JavaScript nor use the library's sugar that
+# throws, so the module also builds and passes its tests with
+# exception-handling=off, where Boost's handler is linked in. It is built into
+# the build directory, where each variant has a place of its own, and
+# installed into the package from there.
+exe webcpp-document-core : binding.cpp
+  : <toolset>emscripten:<linkflags>"--bind"
+    <toolset>emscripten:<linkflags>"-sMODULARIZE=1"
+    <toolset>emscripten:<linkflags>"-sEXPORT_ES6=1"
+    <toolset>emscripten:<linkflags>"-sENVIRONMENT=web,worker,node"
+    <toolset>emscripten:<linkflags>"-sINVOKE_RUN=0"
+    <toolset>emscripten:<linkflags>"--no-entry"
+    <toolset>emscripten:<linkflags>"-sALLOW_MEMORY_GROWTH=1"
+    <toolset>emscripten:<linkflags>"-sMAXIMUM_MEMORY=4GB"
+    <toolset>emscripten:<linkflags>"-sFILESYSTEM=0"
+    <exception-handling>off:<source>/webcpp//throw_exception
+  ;
+explicit webcpp-document-core ;
+
+# The module is a .js and a .wasm that Emscripten's link writes together, of
+# which b2 knows the .js: the .wasm is copied beside it by a target of its own.
+# Both are copied again at every build: a copy is as old as the build it copied,
+# and a build of another variant (exception-handling=off, then the default) is
+# older than the copy of the one before it, which b2 would take for a copy that
+# is up to date.
+explicit package-module ;
+install package-module : webcpp-document-core : <location>package ;
+always package-module ;
+
+make webcpp-document-core.wasm : webcpp-document-core : @copy-wasm : <location>package ;
+explicit webcpp-document-core.wasm ;
+always webcpp-document-core.wasm ;
+
+actions copy-wasm
+{
+    cp -f "$(>:S=.wasm)" "$(<)"
+}
+
+# Its wrapper and the package.json that makes the package an ES module, as the
+# wrapper's import of the module needs.
+explicit package-files ;
+install package-files : webcpp-document.mjs package.json : <location>package ;
+
+# The tests, and the oracle's cases and expected results they replay, from the
+# tree.
+explicit package-tests ;
+install package-tests : [ glob test/*.mjs ] : <location>package/test ;
+
+explicit package-cases ;
+install package-cases : [ glob ../test/fixtures/cases/*.json ] : <location>package/fixtures/cases ;
+explicit package-expected ;
+install package-expected : [ glob ../test/fixtures/expected/*.json ]
+  : <location>package/fixtures/expected ;
+
+# The example page, its worker and the module they import, beside the package's
+# own copy.
+explicit package-example ;
+install package-example : [ glob example/image-worker.html example/page.mjs example/worker.mjs ]
+  : <location>package/example ;
+
+alias package : package-module webcpp-document-core.wasm package-files package-tests
+  package-cases package-expected package-example ;
+explicit package ;
+
+# Documents shared between workers through one SharedArrayBuffer: a second
+# build of binding.cpp, with threads (shared/Jamfile).
+build-project shared ;

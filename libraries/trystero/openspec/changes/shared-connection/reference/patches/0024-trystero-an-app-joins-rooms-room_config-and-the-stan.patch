@@ -1,0 +1,2546 @@
+From c7e0aa09d3e2fd39a5781b76b3038dcf36b604ca Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 16:31:50 -0400
+Subject: [PATCH 24/25] trystero: an app joins rooms; room_config and the
+ standalone room removed
+
+---
+ README.md                                   |  40 ++-
+ example/chat/chat.cpp                       |  30 ++-
+ example/native_quick_start.cpp              |  15 +-
+ example/quick_start.cpp                     |  45 +++-
+ include/webcpp/trystero.hpp                 |   6 +-
+ include/webcpp/trystero/app.hpp             | 206 ++++++++++++++
+ include/webcpp/trystero/detail/app_impl.hpp |  32 ++-
+ include/webcpp/trystero/room.hpp            | 228 ++++------------
+ test/Jamfile                                |  10 +
+ test/allocation_test.cpp                    |  93 ++++---
+ test/native_room_test.cpp                   |  50 ++--
+ test/oracle/interop/native_peer.cpp         |  52 ++--
+ test/oracle/interop/peer.cpp                |  63 +++--
+ test/room_test.cpp                          | 281 +++++++++++---------
+ test/shared_test.cpp                        | 271 +++++++++++++++++++
+ test/support/rooms.hpp                      |  34 ++-
+ 16 files changed, 1026 insertions(+), 430 deletions(-)
+ create mode 100644 include/webcpp/trystero/app.hpp
+ create mode 100644 test/shared_test.cpp
+
+diff --git a/README.md b/README.md
+index 5dd25f9..a4f3aac 100644
+--- a/README.md
++++ b/README.md
+@@ -93,6 +93,7 @@ The native quick start, whole:
+ 
+ <!-- include::example/native_quick_start.cpp[tag=program] -->
+ ```cpp
++#include <webcpp/trystero/app.hpp>
+ #include <webcpp/trystero/native/backend.hpp>
+ #include <webcpp/trystero/room.hpp>
+ 
+@@ -100,14 +101,20 @@ The native quick start, whole:
+ 
+ #include <iostream>
+ #include <string>
++#include <utility>
+ 
+ namespace trystero = webcpp::trystero;
+ 
+ int main() {
+     boost::asio::io_context io;
+     trystero::native::backend backend(io.get_executor());
+-    trystero::room room(io.get_executor(), backend, {.app_id = "webcpp-trystero-quick-start"},
+-                        "lobby");
++    trystero::app app(io.get_executor(), backend, {.app_id = "webcpp-trystero-quick-start"});
++    auto joined = app.join("lobby");
++    if (!joined) {
++        std::cerr << "not joined: " << joined.error().message() << '\n';
++        return 1;
++    }
++    trystero::room room = std::move(*joined);
+     auto chat = room.make_action<std::string>("chat");
+ 
+     room.on_peer_join([&](std::string_view peer) {
+@@ -124,19 +131,36 @@ int main() {
+ }
+ ```
+ 
+-The browser quick start's room, which a page keeps alive as long as the tab:
++The browser quick start's app and the room it joins, which a page keeps alive as long as the tab:
+ 
+ <!-- include::example/quick_start.cpp[tag=application] -->
+ ```cpp
+-/** What the page keeps alive: event loop, backend, room and actions. */
++/** The room the page joined, and its actions. */
++struct lobby {
++    trystero::room room;
++    trystero::action<std::string> chat = room.make_action<std::string>("chat");
++    trystero::action<std::string> echo = room.make_action<std::string>("echo");
++};
++
++/** What the page keeps alive: event loop, backend, app, and the room it joined. */
+ struct application {
+     asio::io_context io;
+     trystero::browser::event_loop loop{io};
+     trystero::browser::backend backend{loop};
+-    trystero::room room{
+-        loop.get_executor(), backend, {.app_id = "webcpp-trystero-quick-start"}, "lobby"};
+-    trystero::action<std::string> chat = room.make_action<std::string>("chat");
+-    trystero::action<std::string> echo = room.make_action<std::string>("echo");
++    trystero::app app{loop.get_executor(), backend, {.app_id = "webcpp-trystero-quick-start"}};
++    std::optional<lobby> joined;
++
++    /** Joins the lobby and makes its actions; null, with the reason printed, when the app refuses
++     * (a room of that id joined already, or 64 rooms). */
++    lobby* join() {
++        auto result = app.join("lobby");
++        if (!result) {
++            const std::string reason = result.error().message();
++            std::printf("not joined: %s\n", reason.c_str());
++            return nullptr;
++        }
++        return &joined.emplace(std::move(*result));
++    }
+ };
+ ```
+ 
+diff --git a/example/chat/chat.cpp b/example/chat/chat.cpp
+index cd65298..10d3bc0 100644
+--- a/example/chat/chat.cpp
++++ b/example/chat/chat.cpp
+@@ -4,9 +4,9 @@
+ // accompanying file LICENSE_1_0.txt or copy at
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+-// A chat room in the browser: the room is C++ (webcpp::trystero), the page only draws. It joins
+-// over Trystero's public Nostr relays, so Trystero JS peers with the same app id and room id are in
+-// the same chat.
++// A chat room in the browser: the app and its room are C++ (webcpp::trystero), the page only draws.
++// It joins over Trystero's public Nostr relays, so Trystero JS peers with the same app id and room
++// id are in the same chat.
+ #include <webcpp/trystero.hpp>
+ #include <webcpp/trystero/browser/backend.hpp>
+ #include <webcpp/trystero/browser/src.hpp>  // once per program: the JavaScript export
+@@ -28,6 +28,7 @@ struct chat {
+     boost::asio::io_context io;
+     trystero::browser::event_loop loop{io};
+     trystero::browser::backend backend{loop};
++    std::unique_ptr<trystero::app> app;  // made at the first join, with that join's app id
+     std::unique_ptr<trystero::room> room;
+     // The action "chat" twice: received as views of the frame, and sent by moving the text.
+     std::unique_ptr<trystero::action<std::string_view>> messages;
+@@ -61,13 +62,22 @@ void join_room(const std::string& app_id, const std::string& room_id) {
+     if (c.room) {
+         return;
+     }
+-    trystero::room_config config;
+-    config.app_id = app_id;
+-    config.log = [](std::string_view category, std::string_view text) {
+-        ui("log", category, text);
+-    };
+-    c.room = std::make_unique<trystero::room>(c.loop.get_executor(), c.backend, std::move(config),
+-                                              room_id);
++    if (!c.app) {
++        trystero::app_config config;
++        config.app_id = app_id;
++        config.log = [](std::string_view category, std::string_view text) {
++            ui("log", category, text);
++        };
++        c.app =
++            std::make_unique<trystero::app>(c.loop.get_executor(), c.backend, std::move(config));
++    }
++    auto joined = c.app->join(room_id);
++    if (!joined) {
++        ui("log", std::string_view("chat"),
++           std::string_view("not joined: " + joined.error().message()));
++        return;
++    }
++    c.room = std::make_unique<trystero::room>(std::move(*joined));
+     c.messages = std::make_unique<trystero::action<std::string_view>>(
+         c.room->make_action<std::string_view>("chat"));
+     c.outgoing =
+diff --git a/example/native_quick_start.cpp b/example/native_quick_start.cpp
+index 4e47901..a528d57 100644
+--- a/example/native_quick_start.cpp
++++ b/example/native_quick_start.cpp
+@@ -5,10 +5,11 @@
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+ // The native quick start of the documentation (doc: #trystero-quick-start), which includes the
+-// tagged regions below: the browser quick start's room, as a native program. Trystero JS and
+-// browser peers in the same room are its peers.
++// tagged regions below: the browser quick start's app and room, as a native program. Trystero JS
++// and browser peers in the same room are its peers.
+ 
+ // tag::program[]
++#include <webcpp/trystero/app.hpp>
+ #include <webcpp/trystero/native/backend.hpp>
+ #include <webcpp/trystero/room.hpp>
+ 
+@@ -16,14 +17,20 @@
+ 
+ #include <iostream>
+ #include <string>
++#include <utility>
+ 
+ namespace trystero = webcpp::trystero;
+ 
+ int main() {
+     boost::asio::io_context io;
+     trystero::native::backend backend(io.get_executor());
+-    trystero::room room(io.get_executor(), backend, {.app_id = "webcpp-trystero-quick-start"},
+-                        "lobby");
++    trystero::app app(io.get_executor(), backend, {.app_id = "webcpp-trystero-quick-start"});
++    auto joined = app.join("lobby");
++    if (!joined) {
++        std::cerr << "not joined: " << joined.error().message() << '\n';
++        return 1;
++    }
++    trystero::room room = std::move(*joined);
+     auto chat = room.make_action<std::string>("chat");
+ 
+     room.on_peer_join([&](std::string_view peer) {
+diff --git a/example/quick_start.cpp b/example/quick_start.cpp
+index 3ae8ab1..867e988 100644
+--- a/example/quick_start.cpp
++++ b/example/quick_start.cpp
+@@ -5,8 +5,8 @@
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+ // The quick start of the documentation (doc: #trystero-quick-start), which includes the tagged
+-// regions below: a browser program that joins a room, greets every peer that joins, prints what it
+-// receives, and echoes another action from a coroutine.
++// regions below: a browser program whose app joins a room, greets every peer that joins, prints
++// what it receives, and echoes another action from a coroutine.
+ 
+ // tag::includes[]
+ #include <webcpp/trystero.hpp>
+@@ -19,7 +19,9 @@
+ #include <boost/asio/io_context.hpp>
+ #include <boost/asio/use_awaitable.hpp>
+ 
++#include <cstdio>
+ #include <iostream>
++#include <optional>
+ #include <string>
+ 
+ namespace asio = boost::asio;
+@@ -29,15 +31,32 @@ namespace trystero = webcpp::trystero;
+ namespace {
+ 
+ // tag::application[]
+-/** What the page keeps alive: event loop, backend, room and actions. */
++/** The room the page joined, and its actions. */
++struct lobby {
++    trystero::room room;
++    trystero::action<std::string> chat = room.make_action<std::string>("chat");
++    trystero::action<std::string> echo = room.make_action<std::string>("echo");
++};
++
++/** What the page keeps alive: event loop, backend, app, and the room it joined. */
+ struct application {
+     asio::io_context io;
+     trystero::browser::event_loop loop{io};
+     trystero::browser::backend backend{loop};
+-    trystero::room room{
+-        loop.get_executor(), backend, {.app_id = "webcpp-trystero-quick-start"}, "lobby"};
+-    trystero::action<std::string> chat = room.make_action<std::string>("chat");
+-    trystero::action<std::string> echo = room.make_action<std::string>("echo");
++    trystero::app app{loop.get_executor(), backend, {.app_id = "webcpp-trystero-quick-start"}};
++    std::optional<lobby> joined;
++
++    /** Joins the lobby and makes its actions; null, with the reason printed, when the app refuses
++     * (a room of that id joined already, or 64 rooms). */
++    lobby* join() {
++        auto result = app.join("lobby");
++        if (!result) {
++            const std::string reason = result.error().message();
++            std::printf("not joined: %s\n", reason.c_str());
++            return nullptr;
++        }
++        return &joined.emplace(std::move(*result));
++    }
+ };
+ 
+ // end::application[]
+@@ -63,19 +82,23 @@ asio::awaitable<void> echo_back(trystero::action<std::string>& echo) {
+ // tag::main[]
+ int main() {
+     auto* app = new application;  // a page's program lives as long as the tab
++    auto* lobby = app->join();
++    if (lobby == nullptr) {
++        return 1;
++    }
+ 
+-    app->room.on_peer_join([app](std::string_view peer) {
++    lobby->room.on_peer_join([lobby](std::string_view peer) {
+         trystero::send_options to_peer{.targets = {trystero::peer_id(peer)}, .metadata = {}};
+-        app->chat.async_send("hello", std::move(to_peer), [](boost::system::error_code ec) {
++        lobby->chat.async_send("hello", std::move(to_peer), [](boost::system::error_code ec) {
+             if (ec) {
+                 std::cerr << "not delivered: " << ec.message() << '\n';
+             }
+         });
+     });
+-    app->chat.on_message([](const std::string& text, const trystero::message_info& info) {
++    lobby->chat.on_message([](const std::string& text, const trystero::message_info& info) {
+         std::cout << info.from << ": " << text << '\n';
+     });
+-    asio::co_spawn(app->loop.get_executor(), echo_back(app->echo), asio::detached);
++    asio::co_spawn(app->loop.get_executor(), echo_back(lobby->echo), asio::detached);
+ }
+ 
+ // end::main[]
+diff --git a/include/webcpp/trystero.hpp b/include/webcpp/trystero.hpp
+index c8aa2aa..8ea9f2f 100644
+--- a/include/webcpp/trystero.hpp
++++ b/include/webcpp/trystero.hpp
+@@ -5,8 +5,8 @@
+ // https://www.boost.org/LICENSE_1_0.txt)
+ 
+ /**
+- The rooms of trystero, which build on every target: include this one header to
+- join a room through a backend.
++ The apps and rooms of trystero, which build on every target: include this one
++ header to make an app over a backend and join its rooms.
+ 
+  It leaves out the two backends, each with a dependency of its own target:
+  `<webcpp/trystero/browser/backend.hpp>`, which builds only on emscripten, and
+@@ -18,9 +18,11 @@
+ 
+ #include <webcpp/trystero/config.hpp>
+ 
++#include <webcpp/trystero/app.hpp>
+ #include <webcpp/trystero/backend.hpp>
+ #include <webcpp/trystero/error.hpp>
+ #include <webcpp/trystero/json_resource.hpp>
++#include <webcpp/trystero/options.hpp>
+ #include <webcpp/trystero/room.hpp>
+ 
+ #endif
+diff --git a/include/webcpp/trystero/app.hpp b/include/webcpp/trystero/app.hpp
+new file mode 100644
+index 0000000..b71d06b
+--- /dev/null
++++ b/include/webcpp/trystero/app.hpp
+@@ -0,0 +1,206 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++#ifndef WEBCPP_TRYSTERO_APP_HPP
++#define WEBCPP_TRYSTERO_APP_HPP
++
++#include <webcpp/trystero/config.hpp>
++
++#include <webcpp/trystero/backend.hpp>
++#include <webcpp/trystero/detail/app_impl.hpp>
++#include <webcpp/trystero/error.hpp>
++#include <webcpp/trystero/options.hpp>
++#include <webcpp/trystero/room.hpp>
++
++#include <boost/asio/any_io_executor.hpp>  // lint-world: names the executor only
++#include <boost/assert.hpp>
++#include <boost/system/error_code.hpp>
++#include <boost/system/result.hpp>
++
++#include <cstddef>
++#include <memory>
++#include <memory_resource>
++#include <span>
++#include <string>
++#include <string_view>
++#include <type_traits>
++#include <utility>
++
++namespace webcpp::trystero {
++
++/**
++ * This program in one app: one peer id, and one connection per remote peer, shared by the rooms it
++ * joins, as a Trystero JS page shares them.
++ *
++ * Tip: the `app` and every room of it share one state; destroying the `app` while rooms remain
++ * changes nothing for them. Every allocation of the app goes through `app_config::memory`, which
++ * must outlive the app, its rooms and every operation they leave pending.
++ *
++ * @see "Rooms and actions", in the guide.
++ */
++class app {
++public:
++    /** The executor every handler and completion of the app and its rooms runs on. */
++    using executor_type = boost::asio::any_io_executor;
++
++    /** The most rooms an app holds at once: a peer drops a connection that advertises more
++     * (Trystero's literal 64, C/shared-peer.mjs:457). */
++    static constexpr std::size_t max_rooms = 64;
++
++    /**
++     * Makes an app: draws its id unless the configuration names one, and keeps the configuration.
++     *
++     * What no peer could use (an id longer than any peer accepts, a negative idle time, an ICE
++     * server WebRTC refuses) is set aside, and reported to `on_error`.
++     *
++     * @param ex The executor of the app and of its rooms.
++     * @param factory The backend, which must outlive the app and its rooms.
++     * @param config The configuration, copied into `config.memory`.
++     * @pre `config.memory` is not null.
++     */
++    app(executor_type ex, backend::factory& factory, app_config config)
++        : impl_(make(std::move(ex), factory, std::move(config))) {
++        impl_->add_user();
++    }
++
++    /**
++     * Takes the state of the app moved from, which may then only be destroyed or assigned.
++     *
++     * @param other The app moved from.
++     */
++    app(app&& other) noexcept = default;
++
++    // Releasing the last user ends every connection, which logs in the app's resource: a resource
++    // that fails then ends the program, as in the destructor.
++    /**
++     * Releases the state it held, then takes the state of the app moved from, which may then only
++     * be destroyed or assigned; the rooms of the state released go on.
++     *
++     * @param other The app moved from.
++     * @return This app.
++     */
++    app& operator=(app&& other) noexcept {  // NOLINT(bugprone-exception-escape)
++        if (this != &other) {
++            if (impl_) {
++                impl_->release_user();
++            }
++            impl_ = std::move(other.impl_);
++        }
++        return *this;
++    }
++
++    /** Not copyable: an app is one peer id and its connections. */
++    app(const app&) = delete;
++
++    /** Not copy-assignable: an app is one peer id and its connections. */
++    app& operator=(const app&) = delete;
++
++    // Releasing the last user ends every connection, which logs in the app's resource: a resource
++    // that fails then ends the program, as in any destructor.
++    /** Releases the state; its rooms go on, and their connections with them. */
++    ~app() {  // NOLINT(bugprone-exception-escape)
++        if (impl_) {
++            impl_->release_user();
++        }
++    }
++
++    /**
++     * The executor of the app and of its rooms.
++     *
++     * @return The executor every handler and completion of the app and its rooms runs on.
++     */
++    [[nodiscard]] const executor_type& get_executor() const {
++        BOOST_ASSERT(impl_);
++        return impl_->get_executor();
++    }
++
++    /**
++     * The application's id, Trystero's `appId`.
++     *
++     * @return The id, valid as long as the app.
++     */
++    [[nodiscard]] std::string_view app_id() const {
++        BOOST_ASSERT(impl_);
++        return impl_->app_id();
++    }
++
++    /**
++     * This peer's id in every room of the app, Trystero's `selfId`.
++     *
++     * @return The id, valid as long as the app.
++     */
++    [[nodiscard]] std::string_view self_id() const {
++        BOOST_ASSERT(impl_);
++        return impl_->self_id();
++    }
++
++    /**
++     * The Nostr relays every room of the app uses, derived from the app id unless the
++     * configuration named them.
++     *
++     * @return The relays' URLs, valid as long as the app.
++     */
++    [[nodiscard]] std::span<const std::pmr::string> relay_urls() const {
++        BOOST_ASSERT(impl_);
++        return impl_->relay_urls();
++    }
++
++    /**
++     * Sets what is called with each part of the configuration the app set aside, with an empty
++     * peer id and `error::invalid_configuration`; the reports made before it is set are posted to
++     * it, once the caller has returned.
++     *
++     * @tparam F A callable with the peer's id, the @ref error and a description, the views valid
++     * for the call.
++     * @param f The handler, kept in the app's resource; it replaces the one set before.
++     */
++    template <class F>
++        requires std::is_invocable_v<F&, std::string_view, boost::system::error_code,
++                                     std::string_view>
++    void on_error(F&& f) {
++        BOOST_ASSERT(impl_);
++        impl_->on_error(
++            impl_->bind<void(std::string_view, boost::system::error_code, std::string_view)>(
++                std::forward<F>(f)));
++    }
++
++    /**
++     * Joins a room of the app, Trystero's `joinRoom` for an app already configured: connects to
++     * the relays and announces this peer on the room's topic.
++     *
++     * @param room_id The room's id, Trystero's `roomId`, read during the call.
++     * @param options The password, the handshake's timeout and the receive bound of the room.
++     * @return The room, or `error::already_joined` while a room of that id is joined in the app,
++     * or `error::too_many_rooms` when `max_rooms` rooms count.
++     */
++    boost::system::result<room> join(std::string_view room_id, room_options options = {}) {
++        BOOST_ASSERT(impl_);
++        if (impl_->find_room(room_id)) {
++            return error::already_joined;
++        }
++        if (impl_->counted_rooms() >= max_rooms) {
++            return error::too_many_rooms;
++        }
++        return room(detail::room_impl::make(impl_, std::move(options), room_id));
++    }
++
++private:
++    // NOLINTBEGIN(performance-unnecessary-value-param): sinks, moved on
++    static std::shared_ptr<detail::app_impl> make(executor_type ex, backend::factory& factory,
++                                                  app_config config) {
++        // NOLINTEND(performance-unnecessary-value-param)
++        std::pmr::memory_resource* const memory = config.memory;
++        BOOST_ASSERT_MSG(memory != nullptr, "app_config::memory names no resource");
++        return std::allocate_shared<detail::app_impl>(std::pmr::polymorphic_allocator<>(memory),
++                                                      std::move(ex), factory, std::move(config));
++    }
++
++    std::shared_ptr<detail::app_impl> impl_;
++};
++
++}  // namespace webcpp::trystero
++
++#endif
+diff --git a/include/webcpp/trystero/detail/app_impl.hpp b/include/webcpp/trystero/detail/app_impl.hpp
+index 0a23568..9e4f075 100644
+--- a/include/webcpp/trystero/detail/app_impl.hpp
++++ b/include/webcpp/trystero/detail/app_impl.hpp
+@@ -13,6 +13,8 @@
+ #include <webcpp/trystero/detail/connection.hpp>
+ #include <webcpp/trystero/detail/ice_servers.hpp>
+ #include <webcpp/trystero/detail/log.hpp>
++#include <webcpp/trystero/detail/post.hpp>
++#include <webcpp/trystero/error.hpp>
+ #include <webcpp/trystero/handler.hpp>
+ #include <webcpp/trystero/options.hpp>
+ #include <webcpp/trystero/protocol/relays.hpp>
+@@ -21,6 +23,7 @@
+ 
+ #include <boost/asio/any_io_executor.hpp>  // lint-world: names the executor only
+ #include <boost/assert.hpp>
++#include <boost/system/error_code.hpp>
+ 
+ #include <array>
+ #include <chrono>
+@@ -155,6 +158,28 @@ public:
+     /** What the constructor set aside, a sentence each, in its order. */
+     [[nodiscard]] std::span<const std::pmr::string> setup_reports() const { return setup_reports_; }
+ 
++    /** Sets what is called with each part of the configuration set aside, and posts it every one
++     * the constructor set aside, with an empty peer id and `error::invalid_configuration`: the
++     * reports were made before any handler could be set. */
++    void on_error(handler<void(std::string_view, boost::system::error_code, std::string_view)> f) {
++        if (!f) {
++            on_error_ = nullptr;
++            return;
++        }
++        on_error_ = std::allocate_shared<decltype(f)>(allocator(), std::move(f));
++        for (const auto& what : setup_reports_) {
++            post(ex_, memory_, [f = on_error_, what = std::pmr::string(what, memory_)] {
++                (*f)("", make_error_code(error::invalid_configuration), what);
++            });
++        }
++    }
++
++    /** `f` as a handler of the app's resource. */
++    template <class Signature, class F>
++    handler<Signature> bind(F&& f) const {
++        return handler<Signature>(std::allocator_arg, allocator(), std::forward<F>(f));
++    }
++
+     /** The connections not ended whose channel is open. */
+     [[nodiscard]] std::pmr::vector<std::shared_ptr<connection>> live_connections() const {
+         std::pmr::vector<std::shared_ptr<connection>> out(memory_);
+@@ -363,11 +388,6 @@ private:
+ 
+     [[nodiscard]] std::pmr::polymorphic_allocator<> allocator() const { return {memory_}; }
+ 
+-    template <class Signature, class F>
+-    handler<Signature> bind(F&& f) const {
+-        return handler<Signature>(std::allocator_arg, allocator(), std::forward<F>(f));
+-    }
+-
+     std::pmr::memory_resource* memory_;
+     executor_type ex_;
+     backend::factory& factory_;
+@@ -378,6 +398,8 @@ private:
+     std::pmr::vector<backend::ice_server> ice_servers_;
+     std::chrono::milliseconds idle_timeout_;
+     std::pmr::vector<std::pmr::string> setup_reports_;
++    std::shared_ptr<handler<void(std::string_view, boost::system::error_code, std::string_view)>>
++        on_error_;
+     std::pmr::map<std::pmr::string, entry, std::less<>> rooms_;
+     std::pmr::map<std::pmr::string, std::shared_ptr<connection>, std::less<>> connections_;
+     std::size_t users_ = 0;
+diff --git a/include/webcpp/trystero/room.hpp b/include/webcpp/trystero/room.hpp
+index 03930f1..afc2440 100644
+--- a/include/webcpp/trystero/room.hpp
++++ b/include/webcpp/trystero/room.hpp
+@@ -55,6 +55,8 @@
+ 
+ namespace webcpp::trystero {
+ 
++class app;
++
+ /**
+  * A peer's id in a room, Trystero's `selfId` and the ids `getPeers` lists: 20 characters of
+  * `protocol::id_alphabet` unless the configuration names one.
+@@ -74,7 +76,8 @@ using bytes = std::vector<std::uint8_t>;
+ /**
+  * Binary data in a memory resource, an action's binary payload in the room's resource.
+  *
+- * A message received as `pmr_bytes` is in `room_config::memory`, which must outlive the value:
++ * A message received as `pmr_bytes` is in the room's resource, its app's `app_config::memory`,
++ * which must outlive the value:
+  * the buffer its transfer assembled, moved out without a copy, or a copy of its bytes when it
+  * arrived inline, in one frame.
+  *
+@@ -90,101 +93,6 @@ using pmr_bytes = std::pmr::vector<std::uint8_t>;
+  */
+ using payload = std::variant<std::string, boost::json::value, bytes>;
+ 
+-/**
+- * What a room is joined with, the configuration Trystero's `joinRoom` takes.
+- *
+- * The room copies every part of it into `memory`. It is move-only, as its `log` is: pass it moved,
+- * or build it in place with designated initializers.
+- *
+- * @see "Rooms and actions", in the guide.
+- */
+-struct room_config {
+-    /** The application's id, Trystero's `appId`: rooms of different apps never meet. */
+-    std::pmr::string app_id = {};
+-    /**
+-     * The room's password, Trystero's `password`: part of the key the signals are sealed with,
+-     * and a challenge added to the handshake, so peers with another password never join.
+-     *
+-     * Empty means none: the signals are still sealed, under a key of the app and the room alone,
+-     * as Trystero's `genKey` does, and the handshake has no challenge.
+-     */
+-    std::pmr::string password = {};
+-    /**
+-     * The Nostr relays to use, Trystero's `relayConfig.urls`; empty means Trystero's defaults,
+-     * derived from the app id.
+-     */
+-    std::pmr::vector<std::pmr::string> relay_urls = {};
+-    /**
+-     * How many of the default relays the derivation keeps, Trystero's `relayConfig.redundancy`;
+-     * ignored when `relay_urls` names the relays.
+-     */
+-    std::size_t relay_redundancy = 5;
+-    /**
+-     * The STUN and TURN servers; empty means Trystero's defaults, @ref default_ice_servers.
+-     *
+-     * A server WebRTC would refuse (a URL that is not `stun:`, `stuns:`, `turn:` or `turns:`
+-     * `host[:port]`, or a TURN server without a user name and a credential) is dropped when the
+-     * room joins, and `room::on_error` reports it with `error::invalid_configuration`; the room
+-     * goes on with the others, on every backend.
+-     */
+-    std::pmr::vector<backend::ice_server> ice_servers = {};
+-    /**
+-     * This peer's id in the room, Trystero's `selfId`; empty means 20 random characters.
+-     *
+-     * Rooms of one app that meet a Trystero JS peer need ids of their own: Trystero keeps one
+-     * connection per app and peer id, which all its rooms share, and drops a second one to the
+-     * same id, while each room here makes its own. Given one id, two rooms meet a Trystero JS peer
+-     * in one of them only; left empty, each room draws its own.
+-     *
+-     * Other peers ignore an id longer than `protocol::max_peer_id_bytes` (64): the room replaces
+-     * one with 20 random characters, and `room::on_error` reports it with
+-     * `error::invalid_configuration`.
+-     */
+-    std::pmr::string self_id = {};
+-    /**
+-     * How long a connected peer has to finish the handshake before it is dropped, Trystero's
+-     * `handshakeTimeoutMs`.
+-     */
+-    std::chrono::milliseconds handshake_timeout{10'000};
+-    /**
+-     * The most bytes the room reserves at once for the transfers it receives, across peers,
+-     * Trystero's `maxReceiveBytes`.
+-     */
+-    std::size_t max_receive_bytes = std::size_t{256} * 1024 * 1024;
+-    /**
+-     * Where the room's diagnostics go: called with a category ("app", "nostr", "signal",
+-     * "webrtc", "room" or "action") and a sentence; empty means none, and then no text is
+-     * composed.
+-     *
+-     * The room moves the sink into `memory`, and composes each sentence there.
+-     */
+-    detail::logger::sink log = {};
+-    /**
+-     * The resource every allocation of the room goes through, from its construction to its
+-     * destruction; not null.
+-     *
+-     * The room allocates there itself and all it holds: the copy of this configuration, its
+-     * peers, actions, queues, frames, transfers, negotiations and relays, its handlers, the text it
+-     * composes for its log, the objects its backend makes for it, the context libsecp256k1 signs
+-     * with and the JSON it parses and writes. A message an action's handler receives as a
+-     * `std::pmr::string`, a `pmr_bytes` or a `boost::json::value` is there too; a completion
+-     * handler is allocated as its own associated allocator says. What libdatachannel, OpenSSL and
+-     * the browser's JavaScript allocate stays theirs. The room uses the resource from its executor
+-     * only, so it need not be thread-safe when that executor runs on one thread.
+-     *
+-     * It must outlive the room, every value the room hands out (a `std::pmr::string`, a
+-     * `pmr_bytes`, a `boost::json::value`), and every operation the room leaves pending: on Asio,
+-     * until the io_context the room's executor belongs to has run out of the room's work or has
+-     * been destroyed, so a resource is declared before its io_context; in the browser, until the
+-     * room's pending promises have settled. A room allocates and frees per event, so a resource
+-     * that reuses what is freed (a pool) suits a long-lived room, and a monotonic one only a
+-     * short-lived one.
+-     *
+-     * @see "Allocation", in the guide.
+-     */
+-    std::pmr::memory_resource* memory = std::pmr::get_default_resource();
+-};
+-
+ /**
+  * Who sent a message, and the metadata it carried, the second and third arguments of Trystero's
+  * action handler, in the receiving room's resource.
+@@ -563,6 +471,17 @@ public:
+     room_impl(const room_impl&) = delete;
+     room_impl& operator=(const room_impl&) = delete;
+ 
++    /** A room of `app`, in the app's resource, joined: `start` has run. */
++    static std::shared_ptr<room_impl> make(std::shared_ptr<app_impl> app, room_options options,
++                                           std::string_view room_id) {
++        std::pmr::memory_resource* const memory = app->memory();
++        auto impl =
++            std::allocate_shared<room_impl>(std::pmr::polymorphic_allocator<>(memory),
++                                            std::move(app), std::move(options), room_id, memory);
++        impl->start();
++        return impl;
++    }
++
+     /**
+      * Leaves the app's registry and lets go quietly: it may run while the io_context is destroyed,
+      * so it ends no connection, idles none, calls nothing back and releases no user of the app.
+@@ -710,17 +629,6 @@ public:
+         on_error_ = keep_handler(std::move(f));
+     }
+ 
+-    /** Reports a part of the configuration the app set aside to `on_error`, with no peer, once the
+-     * caller has returned, so that a handler set right after the room is made sees it. The app
+-     * logged it already. */
+-    void report_configuration(std::string_view what) {
+-        post([weak = weak_from_this(), what = std::pmr::string(what, memory_)] {
+-            if (const auto self = weak.lock(); self && self->on_error_) {
+-                (*self->on_error_)("", make_error_code(error::invalid_configuration), what);
+-            }
+-        });
+-    }
+-
+     void presence_changed(std::string_view peer, bool present) override {
+         if (!present && peers_.contains(peer)) {
+             remove_peer(peer, "peer left the room", end_kind::withdrawn);
+@@ -1349,15 +1257,16 @@ class action;
+ /**
+  * A room joined over Trystero's Nostr strategy, what Trystero's `joinRoom` returns.
+  *
+- * Constructing it joins; `async_leave` leaves with Trystero's farewell, and destroying it leaves at
+- * once. Its peers meet over the relays, connect over WebRTC and exchange the messages of the
+- * actions it makes, wire compatible with Trystero's JavaScript.
++ * `app::join` makes it, joined; `async_leave` leaves with Trystero's farewell, and destroying it
++ * leaves at once. Its peers meet over the relays, connect over WebRTC through the connections its
++ * app shares between its rooms, and exchange the messages of the actions it makes, wire compatible
++ * with Trystero's JavaScript.
+  *
+- * Tip: every handler the room calls, and every completion, runs on the executor it was constructed
+- * with. The views a handler receives are valid for the duration of the call. Every allocation of
+- * the room goes through `room_config::memory`; a completion handler is allocated as its own
+- * associated allocator says. Destroying the room leaves operations pending on its executor, which
+- * free into that resource: it must outlive them (see `room_config::memory`).
++ * Tip: every handler the room calls, and every completion, runs on its app's executor. The views a
++ * handler receives are valid for the duration of the call. Every allocation of the room goes
++ * through its app's `app_config::memory`; a completion handler is allocated as its own associated
++ * allocator says. Destroying the room leaves operations pending on its executor, which free into
++ * that resource: it must outlive them (see `app_config::memory`).
+  *
+  * @see "Rooms and actions", in the guide.
+  */
+@@ -1366,20 +1275,6 @@ public:
+     /** The executor every handler and completion of the room runs on. */
+     using executor_type = boost::asio::any_io_executor;
+ 
+-    /**
+-     * Joins a room: connects to the relays and announces this peer on the room's topic.
+-     *
+-     * @param ex The executor every handler and completion of the room runs on.
+-     * @param factory The backend, which must outlive the room.
+-     * @param config What the room is joined with, copied into `config.memory`.
+-     * @param room_id The room's id, Trystero's `roomId`, read during the call.
+-     * @pre `config.memory` is not null.
+-     */
+-    room(executor_type ex, backend::factory& factory, room_config config, std::string_view room_id)
+-        : impl_(make(std::move(ex), factory, std::move(config), room_id)) {
+-        impl_->start();
+-    }
+-
+     /** Not copyable: a room is one membership. */
+     room(const room&) = delete;
+ 
+@@ -1397,9 +1292,9 @@ public:
+      * Leaves the membership this room held at once, as the destructor does, then takes the
+      * membership of the room moved from, which may then only be destroyed or assigned.
+      *
+-     * Every peer of the membership left is told, every connection of it is closed, and every
+-     * operation pending on it completes with `error::room_left`, even while an `action` of it
+-     * lives.
++     * Every peer of the membership left is told, the room lets go of the app's connections, which
++     * the app's other rooms may go on using, and every operation pending on it completes with
++     * `error::room_left`, even while an `action` of it lives.
+      *
+      * @param other The room moved from.
+      * @return This room.
+@@ -1417,8 +1312,9 @@ public:
+     // Leaving sends each peer Trystero's farewell, whose frames are allocated in the room's
+     // resource: a resource that fails then ends the program, as in any destructor.
+     /**
+-     * Leaves at once, without the farewell's grace period: every peer is told, every connection is
+-     * closed, and every pending operation completes with `error::room_left`.
++     * Leaves at once, without the farewell's grace period: every peer is told, the room lets go of
++     * the app's connections, which the app's other rooms may go on using, and every pending
++     * operation completes with `error::room_left`.
+      */
+     ~room() {  // NOLINT(bugprone-exception-escape)
+         if (impl_) {
+@@ -1427,22 +1323,22 @@ public:
+     }
+ 
+     /**
+-     * The executor the room was constructed with.
++     * The executor of the room's app.
+      *
+      * @return The executor every handler and completion of the room runs on.
+      */
+     [[nodiscard]] const executor_type& get_executor() const { return impl_->get_executor(); }
+ 
+     /**
+-     * This peer's id in the room, Trystero's `selfId`.
++     * This peer's id in the room, Trystero's `selfId`: its app's.
+      *
+      * @return The id, valid as long as the room.
+      */
+     [[nodiscard]] std::string_view self_id() const { return impl_->self_id(); }
+ 
+     /**
+-     * The Nostr relays this room uses, derived from the app id unless the configuration named
+-     * them.
++     * The Nostr relays this room uses, its app's: derived from the app id unless the app's
++     * configuration named them.
+      *
+      * @return The relays' URLs, valid as long as the room.
+      */
+@@ -1486,13 +1382,11 @@ public:
+      * Sets what is called with each problem with one peer that the room handled itself, as a
+      * wrong password or a timed-out handshake, Trystero's `onPeerError`.
+      *
+-     * It is called too, with an empty peer id, for each part of the configuration the room dropped
+-     * when it joined (`error::invalid_configuration`): a handler set right after the room is
+-     * constructed sees those. Signals that do not open with the room key (`error::wrong_password`)
+-     * are reported once per negotiation, and paced: the first of a quiet 10 s at once, with its
+-     * peer, and the others of those 10 s in one report, with an empty peer id and a description
+-     * that starts with their number, since anyone who reads the relays can send them from any
+-     * number of fresh ids.
++     * Signals that do not open with the room key (`error::wrong_password`) are reported once per
++     * negotiation, and paced: the first of a quiet 10 s at once, with its peer, and the others of
++     * those 10 s in one report, with an empty peer id and a description that starts with their
++     * number, since anyone who reads the relays can send them from any number of fresh ids. A part
++     * of the configuration the app set aside is reported to `app::on_error`, not here.
+      *
+      * @tparam F A callable with the peer's id, the @ref error and a description, the views valid
+      * for the call.
+@@ -1551,9 +1445,10 @@ public:
+     /**
+      * Says goodbye to every peer and closes everything, Trystero's `leave`.
+      *
+-     * Each peer is sent `\@_leave`, and 99 ms later, as Trystero waits, every connection is
+-     * closed and every pending operation completes with `error::room_left`. Completes with
+-     * `(error_code)`, empty, also when the room was already left.
++     * Each peer is sent `\@_leave`, and 99 ms later, as Trystero waits, the room lets go of the
++     * app's connections, which the app's other rooms may go on using, and every pending operation
++     * completes with `error::room_left`. Completes with `(error_code)`, empty, also when the room
++     * was already left.
+      *
+      * @tparam CompletionToken An Asio completion token for `void(error_code)`.
+      * @param token The completion token.
+@@ -1570,39 +1465,10 @@ public:
+     }
+ 
+ private:
+-    // NOLINTBEGIN(performance-unnecessary-value-param): sinks, moved on
+-    static std::shared_ptr<detail::room_impl> make(executor_type ex, backend::factory& factory,
+-                                                   room_config config, std::string_view room_id) {
+-        // NOLINTEND(performance-unnecessary-value-param)
+-        std::pmr::memory_resource* const memory = config.memory;
+-        BOOST_ASSERT_MSG(memory != nullptr, "room_config::memory names no resource");
+-        const std::pmr::polymorphic_allocator<> allocator(memory);
+-        // The configuration's app part makes an app of the room's own, which it shares with no
+-        // other room (increment 1 of the shared connection).
+-        const auto app =
+-            std::allocate_shared<detail::app_impl>(allocator, std::move(ex), factory,
+-                                                   app_config{
+-                                                       .app_id = std::move(config.app_id),
+-                                                       .self_id = std::move(config.self_id),
+-                                                       .relay_urls = std::move(config.relay_urls),
+-                                                       .relay_redundancy = config.relay_redundancy,
+-                                                       .ice_servers = std::move(config.ice_servers),
+-                                                       .log = std::move(config.log),
+-                                                       .memory = memory,
+-                                                   });
+-        auto impl = std::allocate_shared<detail::room_impl>(
+-            allocator, app,
+-            room_options{
+-                .password = std::move(config.password),
+-                .handshake_timeout = config.handshake_timeout,
+-                .max_receive_bytes = config.max_receive_bytes,
+-            },
+-            room_id, memory);
+-        for (const auto& what : app->setup_reports()) {
+-            impl->report_configuration(what);
+-        }
+-        return impl;
+-    }
++    friend class app;
++
++    /** The handle of a room `app::join` made and started. */
++    explicit room(std::shared_ptr<detail::room_impl> impl) : impl_(std::move(impl)) {}
+ 
+     std::shared_ptr<detail::room_impl> impl_;
+ };
+diff --git a/test/Jamfile b/test/Jamfile
+index 3d4aad8..854d088 100644
+--- a/test/Jamfile
++++ b/test/Jamfile
+@@ -51,6 +51,16 @@ webcpp.compile config_developer_defined : config_test.cpp
+ # tag::both-targets[]
+ webcpp.run protocol : protocol_test.cpp : <testing.input-file>fixtures/expected/expected.json ;
+ webcpp.run room : room_test.cpp ;
++# Rooms of one app that share one connection per remote peer; once as the
++# build asks, once without exceptions, on both targets; and, natively, once
++# with the standard libraries' checks, so that a kept frame that kicks during
++# a binding, or a waiter failed during a connection's end, fails at once when
++# it touches what it removed.
++webcpp.run shared : shared_test.cpp ;
++webcpp.run shared_no_exceptions : shared_test.cpp : <exception-handling>off ;
++webcpp.run shared_hardened : shared_test.cpp
++  : <define>_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE <define>_GLIBCXX_ASSERTIONS
++  : native ;
+ # The memory backend's hooks, which the tests of shared connections drive.
+ webcpp.run memory_backend : memory_backend_test.cpp ;
+ # The shared connection alone, over a memory pair.
+diff --git a/test/allocation_test.cpp b/test/allocation_test.cpp
+index dd96ec0..b16932b 100644
+--- a/test/allocation_test.cpp
++++ b/test/allocation_test.cpp
+@@ -12,6 +12,7 @@
+ 
+ #include <webcpp/trystero.hpp>
+ 
++#include "require.hpp"
+ #include "support/memory_backend.hpp"
+ 
+ #include <boost/asio/bind_allocator.hpp>
+@@ -34,6 +35,7 @@
+ #include <memory_resource>
+ #include <new>
+ #include <string_view>
++#include <utility>
+ #include <vector>
+ #ifdef _MSC_VER
+ #include <malloc.h>
+@@ -417,6 +419,14 @@ void the_counts_see_an_allocation() {
+     BOOST_TEST_EQ(giver.foreign, 0U);
+ }
+ 
++/** Joins `room_id`, which must succeed: a failure ends the test. */
++trystero::room join(trystero::app& a, std::string_view room_id,
++                    trystero::room_options options = {}) {
++    auto r = a.join(room_id, std::move(options));
++    webcpp::test::require(BOOST_TEST(r.has_value()));
++    return std::move(*r);
++}
++
+ /** Two rooms exchange two payloads that make builds; the second is counted. */
+ template <class Payload, class Make>
+ void exchange_allocates_through_the_rooms_resources(Make make) {
+@@ -431,22 +441,22 @@ void exchange_allocates_through_the_rooms_resources(Make make) {
+     network.relay(relay);
+     const boost::json::storage_ptr json_storage =
+         boost::json::make_shared_resource<trystero::json_resource>(&a_memory);
+-    trystero::room a(io.get_executor(), network,
+-                     {
+-                         .app_id = "allocation",
+-                         .relay_urls = {std::pmr::string(relay)},
+-                         .self_id = "AAAAAAAAAAAAAAAAAAAA",
+-                         .memory = &a_memory,
+-                     },
+-                     "room");
+-    trystero::room z(io.get_executor(), network,
+-                     {
+-                         .app_id = "allocation",
+-                         .relay_urls = {std::pmr::string(relay)},
+-                         .self_id = "zzzzzzzzzzzzzzzzzzzz",
+-                         .memory = &z_memory,
+-                     },
+-                     "room");
++    trystero::app a_app(io.get_executor(), network,
++                        {
++                            .app_id = "allocation",
++                            .self_id = "AAAAAAAAAAAAAAAAAAAA",
++                            .relay_urls = {std::pmr::string(relay)},
++                            .memory = &a_memory,
++                        });
++    trystero::app z_app(io.get_executor(), network,
++                        {
++                            .app_id = "allocation",
++                            .self_id = "zzzzzzzzzzzzzzzzzzzz",
++                            .relay_urls = {std::pmr::string(relay)},
++                            .memory = &z_memory,
++                        });
++    auto a = join(a_app, "room");
++    auto z = join(z_app, "room");
+     std::size_t received = 0;
+     auto from_a = a.make_action<Payload>("chat");
+     z.make_action<Payload>("chat").on_message(
+@@ -507,15 +517,15 @@ void warm(boost::asio::io_context& io) {
+ }
+ 
+ // tag::config[]
+-/** A room's configuration, every part of it in `memory`, made before the window. */
+-trystero::room_config config_in(counting_resource& memory, std::string_view self_id,
+-                                std::string_view relay, std::size_t& lines) {
+-    return trystero::room_config{
++/** An app's configuration, every part of it in `memory`, made before the window. */
++trystero::app_config app_config_in(counting_resource& memory, std::string_view self_id,
++                                   std::string_view relay, std::size_t& lines) {
++    return trystero::app_config{
+         .app_id = std::pmr::string("allocation", &memory),
+-        .password = std::pmr::string("a password", &memory),
++        .self_id = std::pmr::string(self_id, &memory),
+         .relay_urls =
+             std::pmr::vector<std::pmr::string>({std::pmr::string(relay, &memory)}, &memory),
+-        .self_id = std::pmr::string(self_id, &memory),
++        .ice_servers = std::pmr::vector<trystero::backend::ice_server>(&memory),
+         .log =
+             {
+                 std::allocator_arg,
+@@ -526,15 +536,20 @@ trystero::room_config config_in(counting_resource& memory, std::string_view self
+     };
+ }
+ 
++/** A room's options, its password in `memory`. */
++trystero::room_options options_in(counting_resource& memory) {
++    return trystero::room_options{.password = std::pmr::string("a password", &memory)};
++}
++
+ // end::config[]
+ 
+ /**
+- * Two rooms with a password, a log and a relay of their own are made one after
+- * the other, join, exchange a payload that travels in chunks, measure a round
+- * trip, and one says goodbye; both are destroyed and the io_context drained. From the first
+- * construction to the drain, operator new sees the two rooms' JSON storage
+- * counters alone, which Boost.JSON allocates once per room, and the C library
+- * nothing (doc: #trystero-allocation).
++ * Two apps, each with a log and a relay of its own, are made one after the other
++ * and join a room with a password, whose two sides exchange a payload that travels
++ * in chunks, measure a round trip, and one says goodbye; both are destroyed and the
++ * io_context drained. From the first construction to the drain, operator new sees
++ * the two rooms' JSON storage counters alone, which Boost.JSON allocates once per
++ * room, and the C library nothing (doc: #trystero-allocation).
+  */
+ void a_room_allocates_through_its_resource_from_join_to_destruction() {
+     counting_resource network_memory;
+@@ -562,17 +577,18 @@ void a_room_allocates_through_its_resource_from_join_to_destruction() {
+     {
+         // z is subscribed and announcing before a arrives, so that z, whose id is
+         // the higher, also asks a to offer, as Trystero's counter-announcement does.
+-        // Each configuration is a temporary, which leaves no moved-from object behind:
+-        // MSVC's debug standard library keeps, in a moved-from std::pmr::string or
+-        // vector, 16 bytes of its resource for the container's debug proxy, 64 bytes
+-        // of a moved-from configuration's four, which the test would count as the
+-        // room's until the end of the function.
+-        trystero::room z(io.get_executor(), network,
+-                         config_in(z_memory, "zzzzzzzzzzzzzzzzzzzz", relay, z_lines), "room");
++        // Each configuration and each room's options is a temporary, which leaves no
++        // moved-from object behind: MSVC's debug standard library keeps, in a moved-from
++        // std::pmr::string or vector, 16 bytes of its resource for the container's debug
++        // proxy, which the test would count as the app's until the end of the function.
++        trystero::app z_app(io.get_executor(), network,
++                            app_config_in(z_memory, "zzzzzzzzzzzzzzzzzzzz", relay, z_lines));
++        auto z = join(z_app, "room", options_in(z_memory));
+         run_for(io, 100);
+         {
+-            trystero::room a(io.get_executor(), network,
+-                             config_in(a_memory, "AAAAAAAAAAAAAAAAAAAA", relay, a_lines), "room");
++            trystero::app a_app(io.get_executor(), network,
++                                app_config_in(a_memory, "AAAAAAAAAAAAAAAAAAAA", relay, a_lines));
++            auto a = join(a_app, "room", options_in(a_memory));
+             a.on_peer_leave([&left](std::string_view /*peer*/) { ++left; });
+             z.make_action<trystero::pmr_bytes>("file").on_message(
+                 [&files](const trystero::pmr_bytes& data, const trystero::message_info& /*info*/) {
+@@ -603,7 +619,8 @@ void a_room_allocates_through_its_resource_from_join_to_destruction() {
+     //     std::pmr::unsynchronized_pool_resource memory;  // first: destroyed last
+     //     boost::asio::io_context io;                     // destroyed before the resource
+     //     {
+-    //         trystero::room room(io.get_executor(), factory, {.memory = &memory}, "id");
++    //         trystero::app app(io.get_executor(), factory, {.memory = &memory});
++    //         auto room = app.join("id");
+     //         ...
+     //     }
+     //     io.run();  // lint-run: the program's I/O; or destroy io: pending operations free
+diff --git a/test/native_room_test.cpp b/test/native_room_test.cpp
+index cafe6d0..a8a8761 100644
+--- a/test/native_room_test.cpp
++++ b/test/native_room_test.cpp
+@@ -8,6 +8,7 @@
+ // OpenSSL, Asio's timers. Only the relays are the memory ones of support/memory_backend.hpp, and
+ // the backend binds every connection to 127.0.0.1, so the loopback is the only network needed.
+ 
++#include <webcpp/trystero/app.hpp>
+ #include <webcpp/trystero/native/backend.hpp>
+ #include <webcpp/trystero/room.hpp>
+ 
+@@ -26,6 +27,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "require.hpp"
+ #include "support/memory_backend.hpp"
+ 
+ namespace asio = boost::asio;
+@@ -61,10 +63,9 @@ struct fixture {
+     fixture() { relays.relay(relay_url); }
+ };
+ 
+-trystero::room_config config(std::string_view self_id, std::string_view password = {}) {
+-    trystero::room_config c;
++trystero::app_config app_config(std::string_view self_id) {
++    trystero::app_config c;
+     c.app_id = "webcpp-trystero-native-tests";
+-    c.password = password;
+     c.relay_urls = {relay_url};
+     // Nothing answers there: with every connection bound to 127.0.0.1, the loopback's host
+     // candidate is the only one, and it is enough.
+@@ -73,6 +74,14 @@ trystero::room_config config(std::string_view self_id, std::string_view password
+     return c;
+ }
+ 
++/** Joins `room_id`, which must succeed: a failure ends the test. */
++trystero::room join(trystero::app& a, std::string_view room_id,
++                    trystero::room_options options = {}) {
++    auto r = a.join(room_id, std::move(options));
++    webcpp::test::require(BOOST_TEST(r.has_value()));
++    return std::move(*r);
++}
++
+ bool run_until(asio::io_context& io, const std::function<bool()>& done,
+                std::chrono::milliseconds limit = 15s) {
+     const auto end = std::chrono::steady_clock::now() + limit;
+@@ -87,10 +96,10 @@ bool run_until(asio::io_context& io, const std::function<bool()>& done,
+ 
+ void native_rooms_join_and_exchange_every_format() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.backend, config("AAAAAAAAAAAAAAAAAAAA", "s3cret"),
+-                     "lobby");
+-    trystero::room z(f.io.get_executor(), f.backend, config("zzzzzzzzzzzzzzzzzzzz", "s3cret"),
+-                     "lobby");
++    trystero::app a_app(f.io.get_executor(), f.backend, app_config("AAAAAAAAAAAAAAAAAAAA"));
++    auto a = join(a_app, "lobby", {.password = "s3cret"});
++    trystero::app z_app(f.io.get_executor(), f.backend, app_config("zzzzzzzzzzzzzzzzzzzz"));
++    auto z = join(z_app, "lobby", {.password = "s3cret"});
+     std::string text;
+     boost::json::value json;
+     trystero::bytes file;
+@@ -141,10 +150,10 @@ void native_rooms_join_and_exchange_every_format() {
+ 
+ void another_password_never_joins() {
+     fixture f;
+-    const trystero::room a(f.io.get_executor(), f.backend, config("BBBBBBBBBBBBBBBBBBBB", "s3cret"),
+-                           "private");
+-    trystero::room b(f.io.get_executor(), f.backend, config("CCCCCCCCCCCCCCCCCCCC", "guess"),
+-                     "private");
++    trystero::app a_app(f.io.get_executor(), f.backend, app_config("BBBBBBBBBBBBBBBBBBBB"));
++    const auto a = join(a_app, "private", {.password = "s3cret"});
++    trystero::app b_app(f.io.get_executor(), f.backend, app_config("CCCCCCCCCCCCCCCCCCCC"));
++    auto b = join(b_app, "private", {.password = "guess"});
+     std::vector<boost::system::error_code> errors;
+     b.on_error([&](std::string_view, boost::system::error_code ec, std::string_view) {
+         errors.push_back(ec);
+@@ -157,16 +166,21 @@ void another_password_never_joins() {
+ 
+ void leaving_is_seen_over_a_real_connection() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.backend, config("DDDDDDDDDDDDDDDDDDDD"), "leave");
++    trystero::app a_app(f.io.get_executor(), f.backend, app_config("DDDDDDDDDDDDDDDDDDDD"));
++    auto a = join(a_app, "leave");
+     std::vector<std::string> left;
+     a.on_peer_leave([&](std::string_view p) { left.emplace_back(p); });
+-    trystero::room b(f.io.get_executor(), f.backend, config("EEEEEEEEEEEEEEEEEEEE"), "leave");
+-    if (!BOOST_TEST(run_until(f.io, [&] { return a.peers().size() == 1; }))) {
+-        return;
++    {
++        // The leaver's app goes with its room, as a program that leaves for good ends it.
++        trystero::app b_app(f.io.get_executor(), f.backend, app_config("EEEEEEEEEEEEEEEEEEEE"));
++        auto b = join(b_app, "leave");
++        if (!BOOST_TEST(run_until(f.io, [&] { return a.peers().size() == 1; }))) {
++            return;
++        }
++        bool done = false;
++        b.async_leave([&](boost::system::error_code ec) { done = !ec; });
++        BOOST_TEST(run_until(f.io, [&] { return done && left.size() == 1; }));
+     }
+-    bool done = false;
+-    b.async_leave([&](boost::system::error_code ec) { done = !ec; });
+-    BOOST_TEST(run_until(f.io, [&] { return done && left.size() == 1; }));
+ }
+ 
+ }  // namespace
+diff --git a/test/oracle/interop/native_peer.cpp b/test/oracle/interop/native_peer.cpp
+index 0121a61..6e81006 100644
+--- a/test/oracle/interop/native_peer.cpp
++++ b/test/oracle/interop/native_peer.cpp
+@@ -18,7 +18,8 @@
+ // | --self        | this peer's id, optional                                         |
+ // | --relays      | comma-separated relay URLs, optional (Trystero's default list)   |
+ // | --ice         | a STUN or TURN server's URL, optional (Trystero's default list)  |
+-// | --room2       | a second room of the same app to join too, optional              |
++// | --room2       | a second room of the same app id to join too, optional           |
++#include <webcpp/trystero/app.hpp>
+ #include <webcpp/trystero/native/backend.hpp>
+ #include <webcpp/trystero/room.hpp>
+ 
+@@ -67,11 +68,10 @@ std::map<std::string, std::string> arguments(int argc, char* const* argv) {
+     return out;
+ }
+ 
+-/** The room's configuration, from the driver's arguments. */
+-trystero::room_config config_of(std::map<std::string, std::string>& args) {
+-    trystero::room_config config;
++/** The app's configuration, from the driver's arguments. */
++trystero::app_config app_config_of(std::map<std::string, std::string>& args) {
++    trystero::app_config config;
+     config.app_id = args["app"];
+-    config.password = args["password"];
+     config.self_id = args["self"];
+     for (std::string_view relays = args["relays"]; !relays.empty();) {
+         const auto comma = relays.find(',');
+@@ -88,6 +88,22 @@ trystero::room_config config_of(std::map<std::string, std::string>& args) {
+     return config;
+ }
+ 
++/** A room's options, from the driver's arguments. */
++trystero::room_options options_of(std::map<std::string, std::string>& args) {
++    return {.password = std::pmr::string(args["password"])};
++}
++
++/** Joins `room_id` through `app`; when the app refuses, the process ends after an event. */
++trystero::room join(trystero::app& app, const std::string& room_id,
++                    std::map<std::string, std::string>& args) {
++    auto joined = app.join(room_id, options_of(args));
++    if (!joined) {
++        record("not-joined", {{"room", room_id}, {"error", joined.error().message()}});
++        std::exit(1);
++    }
++    return std::move(*joined);
++}
++
+ /** The native backend, which records each peer connection it makes, for the scenarios that count
+  * them. */
+ class counting_backend : public trystero::native::backend {
+@@ -105,23 +121,25 @@ public:
+     }
+ };
+ 
+-trystero::room room_of(boost::asio::io_context& io, trystero::native::backend& backend,
+-                       std::map<std::string, std::string>& args, std::string_view suffix = {}) {
+-    return {io.get_executor(), backend, config_of(args), args["room"] + std::string(suffix)};
+-}
+-
+ /**
+- * A second room of the same app, with the configuration of the first but its room id: it sends each
+- * peer that joins a chat message and a 100 KB file, and records what it sees with `room: second`.
++ * A second room of the same app id, with the configuration and the options of the first: it sends
++ * each peer that joins a chat message and a 100 KB file, and records what it sees with
++ * `room: second`.
++ *
++ * Tip: its app is its own. Trystero JS keeps one connection per peer id, and answers no second
++ * offer from it, so a room of an app already connected to the page meets it only by binding over
++ * that connection on the page's presence for the room, which the library does not do yet.
+  */
+ struct second_room {
++    trystero::app app;
+     trystero::room room;
+     trystero::action<std::string> chat = room.make_action<std::string>("chat");
+     trystero::action<trystero::bytes> file = room.make_action<trystero::bytes>("file");
+ 
+     second_room(boost::asio::io_context& io, trystero::native::backend& backend,
+                 std::map<std::string, std::string>& args)
+-        : room(io.get_executor(), backend, config_of(args), args["room2"]) {
++        : app(io.get_executor(), backend, app_config_of(args)),
++          room(join(app, args["room2"], args)) {
+         record("joined", {{"room", "second"}, {"self", room.self_id()}});
+         room.on_peer_join([this](std::string_view peer_view) {
+             const trystero::peer_id peer(peer_view);
+@@ -188,7 +206,11 @@ int main(int argc, char* argv[]) {
+     auto args = arguments(argc, argv);
+     boost::asio::io_context io;
+     counting_backend backend(io.get_executor(), {.bind_address = "127.0.0.1"});
+-    trystero::room room = room_of(io, backend, args);
++    trystero::app app(io.get_executor(), backend, app_config_of(args));
++    app.on_error([](std::string_view peer, boost::system::error_code ec, std::string_view what) {
++        record("error", {{"peer", peer}, {"error", ec.message()}, {"what", what}});
++    });
++    trystero::room room = join(app, args["room"], args);
+     boost::json::array relays;
+     for (const auto& url : room.relay_urls()) {
+         relays.emplace_back(url);
+@@ -270,7 +292,7 @@ int main(int argc, char* argv[]) {
+                     std::abort();
+                 }
+                 if (command.starts_with("replace")) {
+-                    replace(room, room_of(io, backend, args, "-replaced"));
++                    replace(room, join(app, args["room"] + "-replaced", args));
+                 }
+                 if (!command.starts_with("leave")) {
+                     read_command();
+diff --git a/test/oracle/interop/peer.cpp b/test/oracle/interop/peer.cpp
+index 024c185..9e1101b 100644
+--- a/test/oracle/interop/peer.cpp
++++ b/test/oracle/interop/peer.cpp
+@@ -14,7 +14,7 @@
+ // | self            | this peer's id, optional                                         |
+ // | relays          | comma-separated relay URLs, optional (Trystero's default list)   |
+ // | ice             | a STUN or TURN server's URL, optional (Trystero's default list)  |
+-// | room2           | a second room of the same app to join too, optional              |
++// | room2           | a second room of the same app id to join too, optional           |
+ // | program         | the program's JavaScript, which cpp.html loads; not read here    |
+ #include <webcpp/trystero.hpp>
+ #include <webcpp/trystero/browser/backend.hpp>
+@@ -27,6 +27,7 @@
+ #include <boost/json/serialize.hpp>
+ 
+ #include <memory>
++#include <memory_resource>
+ #include <string>
+ 
+ using emscripten::val;
+@@ -34,17 +35,22 @@ namespace trystero = webcpp::trystero;
+ 
+ namespace {
+ 
+-/** Everything the page keeps alive: the io_context, the event loop, the backend, the room and its
+- * actions. */
++/** Everything the page keeps alive: the io_context, the event loop, the backend, the app, the room
++ * and its actions. */
+ struct page {
+     boost::asio::io_context io;
+     trystero::browser::event_loop loop{io};
+     trystero::browser::backend backend{loop};
++    std::unique_ptr<trystero::app> app;
+     std::unique_ptr<trystero::room> room;
+     std::unique_ptr<trystero::action<std::string>> chat;
+     std::unique_ptr<trystero::action<boost::json::value>> drink;
+     std::unique_ptr<trystero::action<trystero::bytes>> file;
+-    // The second room, with `room2`, and its actions.
++    // The second room, with `room2`, its own app, and its actions. Its own app: Trystero JS keeps
++    // one connection per peer id, and answers no second offer from it, so a room of an app that is
++    // already connected to the page meets it only by binding over that connection on the page's
++    // presence for the room, which the library does not do yet.
++    std::unique_ptr<trystero::app> second_app;
+     std::unique_ptr<trystero::room> second;
+     std::unique_ptr<trystero::action<std::string>> second_chat;
+     std::unique_ptr<trystero::action<trystero::bytes>> second_file;
+@@ -85,11 +91,10 @@ std::uint32_t checksum(const trystero::bytes& data) {
+     return sum;
+ }
+ 
+-/** The page's configuration, from the URL. */
+-trystero::room_config config_of_page() {
+-    trystero::room_config config;
++/** The app's configuration, from the URL. */
++trystero::app_config config_of_page() {
++    trystero::app_config config;
+     config.app_id = param("app");
+-    config.password = param("password");
+     config.self_id = param("self");
+     for (std::string relays = param("relays"); !relays.empty();) {
+         const auto comma = relays.find(',');
+@@ -104,15 +109,35 @@ trystero::room_config config_of_page() {
+     return config;
+ }
+ 
++/** A room's options, from the URL. */
++trystero::room_options options_of_page() {
++    return {.password = std::pmr::string(param("password"))};
++}
++
++/** Joins `room_id` through `app`; null, with an event, when the app refuses. */
++std::unique_ptr<trystero::room> join(trystero::app& app, const std::string& room_id,
++                                     std::string_view which) {
++    auto joined = app.join(room_id, options_of_page());
++    if (!joined) {
++        record("not-joined", {{"room", which}, {"error", joined.error().message()}});
++        return nullptr;
++    }
++    return std::make_unique<trystero::room>(std::move(*joined));
++}
++
+ /**
+- * Joins `room2`, a second room of the same app, with the configuration of the first but its room
+- * id: it sends each peer that joins a chat message and a 100 KB file, and records what it sees with
+- * `room: second`.
++ * Joins `room2`, a second room of the same app id, with the configuration and the options of the
++ * first: it sends each peer that joins a chat message and a 100 KB file, and records what it sees
++ * with `room: second`.
+  */
+ void join_second() {
+     page& app = the_page();
+-    app.second = std::make_unique<trystero::room>(app.loop.get_executor(), app.backend,
+-                                                  config_of_page(), param("room2"));
++    app.second_app =
++        std::make_unique<trystero::app>(app.loop.get_executor(), app.backend, config_of_page());
++    app.second = join(*app.second_app, param("room2"), "second");
++    if (!app.second) {
++        return;
++    }
+     app.second_chat = std::make_unique<trystero::action<std::string>>(
+         app.second->make_action<std::string>("chat"));
+     app.second_file = std::make_unique<trystero::action<trystero::bytes>>(
+@@ -155,8 +180,16 @@ void join_second() {
+ 
+ void start() {
+     page& app = the_page();
+-    app.room = std::make_unique<trystero::room>(app.loop.get_executor(), app.backend,
+-                                                config_of_page(), param("room"));
++    app.app =
++        std::make_unique<trystero::app>(app.loop.get_executor(), app.backend, config_of_page());
++    app.app->on_error(
++        [](std::string_view peer, boost::system::error_code ec, std::string_view what) {
++            record("error", {{"peer", peer}, {"error", ec.message()}, {"what", what}});
++        });
++    app.room = join(*app.app, param("room"), "first");
++    if (!app.room) {
++        return;
++    }
+     auto& room = *app.room;
+     boost::json::array relays;
+     for (const auto& url : room.relay_urls()) {
+diff --git a/test/room_test.cpp b/test/room_test.cpp
+index 8712d2c..188f0c7 100644
+--- a/test/room_test.cpp
++++ b/test/room_test.cpp
+@@ -8,6 +8,7 @@
+ // support/memory_backend.hpp. WEBCPP_TEST_TRYSTERO_VERBOSE in the environment prints each room's
+ // log on the standard error.
+ 
++#include <webcpp/trystero/app.hpp>
+ #include <webcpp/trystero/room.hpp>
+ 
+ #include <boost/asio/as_tuple.hpp>
+@@ -24,9 +25,7 @@
+ #include <chrono>
+ #include <cstddef>
+ #include <cstdint>
+-#include <cstdlib>
+ #include <functional>
+-#include <iostream>
+ #include <map>
+ #include <memory>
+ #include <memory_resource>
+@@ -48,32 +47,20 @@ using namespace std::chrono_literals;
+ namespace {
+ 
+ using trystero::test::advance;
++using trystero::test::app_config;
+ using trystero::test::app_id;
+ using trystero::test::counting_resource;
+ using trystero::test::fixture;
+ using trystero::test::flooder;
++using trystero::test::join;
+ using trystero::test::relay_a;
+ using trystero::test::relay_b;
+ using trystero::test::relayed_signal;
+ using trystero::test::run_until;
+ 
+-trystero::room_config config(std::string_view self_id, std::string_view password = {}) {
+-    trystero::room_config c;
+-    c.app_id = app_id;
+-    c.password = password;
+-    c.relay_urls = {relay_a, relay_b};
+-    c.self_id = self_id;
+-    if (std::getenv("WEBCPP_TEST_TRYSTERO_VERBOSE") != nullptr) {
+-        c.log = [id = c.self_id](std::string_view category, std::string_view text) {
+-            std::cerr << "  [" << id << "] " << category << ": " << text << "\n";
+-        };
+-    }
+-    return c;
+-}
+-
+-/** An app and a room of it, made as the standalone room makes them, for a case that reaches the
+- * app's connections or calls the room as its app does. The case abandons the room before the
+- * fixture goes. */
++/** An app's state and a room of it, without their handles, for a case that reaches the app's
++ * connections or calls the room as its app does. The case abandons the room before the fixture
++ * goes. */
+ struct app_room {
+     std::shared_ptr<trystero::detail::app_impl> app;
+     std::shared_ptr<trystero::detail::room_impl> room;
+@@ -82,8 +69,7 @@ struct app_room {
+ app_room make_app_room(
+     fixture& f, std::string_view self_id, std::string_view room_id,
+     const std::function<void(trystero::app_config&, trystero::room_options&)>& edit = {}) {
+-    auto* m = std::pmr::get_default_resource();
+-    const std::pmr::polymorphic_allocator<> alloc(m);
++    const std::pmr::polymorphic_allocator<> alloc(std::pmr::get_default_resource());
+     trystero::app_config config{
+         .app_id = app_id,
+         .self_id = std::pmr::string(self_id),
+@@ -96,9 +82,7 @@ app_room make_app_room(
+     app_room out;
+     out.app = std::allocate_shared<trystero::detail::app_impl>(alloc, f.io.get_executor(), f.net,
+                                                                std::move(config));
+-    out.room = std::allocate_shared<trystero::detail::room_impl>(alloc, out.app, std::move(options),
+-                                                                 room_id, m);
+-    out.room->start();
++    out.room = trystero::detail::room_impl::make(out.app, std::move(options), room_id);
+     return out;
+ }
+ 
+@@ -106,8 +90,10 @@ void two_peers_join_and_exchange_every_payload_format() {
+     fixture f;
+     // "A..." sorts below "z...", so A offers and z answers; the other test below swaps nothing but
+     // the ids.
+-    trystero::room a(f.io.get_executor(), f.net, config("AAAAAAAAAAAAAAAAAAAA"), "lobby");
+-    trystero::room z(f.io.get_executor(), f.net, config("zzzzzzzzzzzzzzzzzzzz"), "lobby");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("AAAAAAAAAAAAAAAAAAAA"));
++    auto a = join(a_app, "lobby");
++    trystero::app z_app(f.io.get_executor(), f.net, app_config("zzzzzzzzzzzzzzzzzzzz"));
++    auto z = join(z_app, "lobby");
+     std::vector<std::string> joined_a;
+     std::vector<std::string> joined_z;
+     a.on_peer_join([&](std::string_view p) { joined_a.emplace_back(p); });
+@@ -159,8 +145,10 @@ void two_peers_join_and_exchange_every_payload_format() {
+ 
+ void large_payloads_travel_in_chunks_both_ways() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.net, config("BBBBBBBBBBBBBBBBBBBB"), "files");
+-    trystero::room b(f.io.get_executor(), f.net, config("CCCCCCCCCCCCCCCCCCCC"), "files");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("BBBBBBBBBBBBBBBBBBBB"));
++    auto a = join(a_app, "files");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("CCCCCCCCCCCCCCCCCCCC"));
++    auto b = join(b_app, "files");
+     auto file_a = a.make_action<trystero::bytes>("file");
+     auto file_b = b.make_action<trystero::bytes>("file");
+     trystero::bytes got_a;
+@@ -198,8 +186,10 @@ void large_payloads_travel_in_chunks_both_ways() {
+ 
+ void ping_measures_a_round_trip() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.net, config("DDDDDDDDDDDDDDDDDDDD"), "ping");
+-    const trystero::room b(f.io.get_executor(), f.net, config("EEEEEEEEEEEEEEEEEEEE"), "ping");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("DDDDDDDDDDDDDDDDDDDD"));
++    auto a = join(a_app, "ping");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("EEEEEEEEEEEEEEEEEEEE"));
++    const auto b = join(b_app, "ping");
+     BOOST_TEST(run_until(f.io, [&] { return a.peers().size() == 1; }));
+     std::optional<boost::system::error_code> result;
+     a.async_ping(b.self_id(), [&](boost::system::error_code ec, std::chrono::milliseconds rtt) {
+@@ -217,17 +207,17 @@ void ping_measures_a_round_trip() {
+ 
+ void the_same_password_joins_and_another_does_not() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.net, config("FFFFFFFFFFFFFFFFFFFF", "s3cret"),
+-                     "private");
+-    trystero::room b(f.io.get_executor(), f.net, config("GGGGGGGGGGGGGGGGGGGG", "s3cret"),
+-                     "private");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("FFFFFFFFFFFFFFFFFFFF"));
++    auto a = join(a_app, "private", {.password = "s3cret"});
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("GGGGGGGGGGGGGGGGGGGG"));
++    auto b = join(b_app, "private", {.password = "s3cret"});
+     BOOST_TEST(run_until(f.io, [&] { return a.peers().size() == 1 && b.peers().size() == 1; }));
+ 
+     // The intruder's signals cannot be opened with the room key, so it never connects; both sides
+     // report it.
+     std::vector<boost::system::error_code> errors;
+-    trystero::room intruder(f.io.get_executor(), f.net, config("HHHHHHHHHHHHHHHHHHHH", "guess"),
+-                            "private");
++    trystero::app intruder_app(f.io.get_executor(), f.net, app_config("HHHHHHHHHHHHHHHHHHHH"));
++    auto intruder = join(intruder_app, "private", {.password = "guess"});
+     intruder.on_error([&](std::string_view, boost::system::error_code ec, std::string_view) {
+         errors.push_back(ec);
+     });
+@@ -245,20 +235,25 @@ void the_same_password_joins_and_another_does_not() {
+ 
+ void leaving_is_seen_by_the_others_and_a_return_reconnects() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.net, config("IIIIIIIIIIIIIIIIIIII"), "leave");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("IIIIIIIIIIIIIIIIIIII"));
++    auto a = join(a_app, "leave");
+     std::vector<std::string> left;
+     std::vector<std::string> joined;
+     a.on_peer_leave([&](std::string_view p) { left.emplace_back(p); });
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+     {
+-        trystero::room b(f.io.get_executor(), f.net, config("JJJJJJJJJJJJJJJJJJJJ"), "leave");
++        // B's app goes with its room, so that its return negotiates again: a living app would keep
++        // the connection, idle, and bind the returning room over it.
++        trystero::app b_app(f.io.get_executor(), f.net, app_config("JJJJJJJJJJJJJJJJJJJJ"));
++        auto b = join(b_app, "leave");
+         BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1; }));
+         bool done = false;
+         b.async_leave([&](boost::system::error_code ec) { done = !ec; });
+         BOOST_TEST(run_until(f.io, [&] { return done && left.size() == 1; }));
+         BOOST_TEST(a.peers().empty());
+     }
+-    const trystero::room b2(f.io.get_executor(), f.net, config("JJJJJJJJJJJJJJJJJJJJ"), "leave");
++    trystero::app b2_app(f.io.get_executor(), f.net, app_config("JJJJJJJJJJJJJJJJJJJJ"));
++    const auto b2 = join(b2_app, "leave");
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 2; }));
+ }
+ 
+@@ -266,19 +261,21 @@ void leaving_is_seen_by_the_others_and_a_return_reconnects() {
+ // its pending operations complete with room_left, while an action of it still holds its state.
+ void moving_a_room_over_a_joined_one_leaves_it() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.net, config("KKKKKKKKKKKKKKKKKKKK"), "move");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("KKKKKKKKKKKKKKKKKKKK"));
++    auto a = join(a_app, "move");
+     std::vector<std::string> left;
+     std::vector<std::string> joined;
+     a.on_peer_leave([&](std::string_view p) { left.emplace_back(p); });
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+-    trystero::room b(f.io.get_executor(), f.net, config("LLLLLLLLLLLLLLLLLLLL"), "move");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("LLLLLLLLLLLLLLLLLLLL"));
++    auto b = join(b_app, "move");
+     auto pending = b.make_action<std::string>("pending");
+     std::optional<boost::system::error_code> received;
+     pending.async_receive([&](boost::system::error_code ec, const std::string& /*text*/,
+                               const trystero::message_info& /*info*/) { received = ec; });
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1; }));
+ 
+-    b = trystero::room(f.io.get_executor(), f.net, config("MMMMMMMMMMMMMMMMMMMM"), "elsewhere");
++    b = join(b_app, "elsewhere");
+     BOOST_TEST(run_until(f.io, [&] { return left.size() == 1 && received.has_value(); }));
+     BOOST_TEST(a.peers().empty());
+     if (BOOST_TEST(received.has_value())) {
+@@ -320,12 +317,12 @@ void ice_urls_are_checked_as_webrtc_checks_them() {
+     }
+ }
+ 
+-// A server WebRTC would refuse is dropped when the room joins, and reported to on_error with no
+-// peer, after the constructor returns; the room goes on with the usable one, and joins.
++// A server WebRTC would refuse is dropped when the app is made, and reported to the app's on_error
++// with no peer, after the constructor returns; its room goes on with the usable one, and joins.
+ void unusable_ice_servers_are_dropped_and_reported() {
+     fixture f;
+     f.net.record_servers = true;
+-    auto c = config("NNNNNNNNNNNNNNNNNNNN");
++    auto c = app_config("NNNNNNNNNNNNNNNNNNNN");
+     const auto server = [](const char* url, const char* username, const char* credential) {
+         return trystero::backend::ice_server{
+             .urls = {std::pmr::string(url)},
+@@ -338,14 +335,15 @@ void unusable_ice_servers_are_dropped_and_reported() {
+     c.ice_servers.push_back(server("turn:127.0.0.1:9", "", ""));    // no credentials
+     c.ice_servers.push_back(server("turn:127.0.0.1:9", "user", "secret"));
+     c.ice_servers.push_back(server("STUN:127.0.0.2:9", "", ""));  // a scheme in capitals
+-    trystero::room a(f.io.get_executor(), f.net, std::move(c), "ice");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    auto a = join(a_app, "ice");
+     std::vector<std::pair<std::string, boost::system::error_code>> errors;
+-    a.on_error([&](std::string_view peer, boost::system::error_code ec, std::string_view /*what*/) {
+-        errors.emplace_back(peer, ec);
+-    });
++    a_app.on_error([&](std::string_view peer, boost::system::error_code ec,
++                       std::string_view /*what*/) { errors.emplace_back(peer, ec); });
+     std::vector<std::string> joined;
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+-    const trystero::room b(f.io.get_executor(), f.net, config("OOOOOOOOOOOOOOOOOOOO"), "ice");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("OOOOOOOOOOOOOOOOOOOO"));
++    const auto b = join(b_app, "ice");
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1 && errors.size() == 2; }));
+     for (const auto& [peer, ec] : errors) {
+         BOOST_TEST(peer.empty());
+@@ -365,8 +363,10 @@ void unusable_ice_servers_are_dropped_and_reported() {
+ void a_refused_peer_connection_is_reported_and_tried_again() {
+     fixture f;
+     f.net.refuse_peer_connections = 1;
+-    trystero::room a(f.io.get_executor(), f.net, config("PPPPPPPPPPPPPPPPPPPP"), "refused");
+-    trystero::room b(f.io.get_executor(), f.net, config("QQQQQQQQQQQQQQQQQQQQ"), "refused");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("PPPPPPPPPPPPPPPPPPPP"));
++    auto a = join(a_app, "refused");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("QQQQQQQQQQQQQQQQQQQQ"));
++    auto b = join(b_app, "refused");
+     std::vector<boost::system::error_code> errors;
+     const auto on_error = [&](std::string_view /*peer*/, boost::system::error_code ec,
+                               std::string_view /*what*/) { errors.push_back(ec); };
+@@ -398,10 +398,12 @@ void a_flood_of_announcements_is_bounded() {
+     counting_resource memory;  // first: the io_context's pending operations free into it
+     fixture f;
+     f.net.time_scale = 100;
+-    auto c = config("00000000000000000000");  // lower than every flooder: it offers to each
++    auto c = app_config("00000000000000000000");  // lower than every flooder: it offers to each
+     c.memory = &memory;
+-    trystero::room a(f.io.get_executor(), f.net, std::move(c), "flood");
+-    trystero::room b(f.io.get_executor(), f.net, config("BBBBBBBBBBBBBBBBBBBB"), "flood");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    auto a = join(a_app, "flood");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("BBBBBBBBBBBBBBBBBBBB"));
++    auto b = join(b_app, "flood");
+     std::vector<std::string> joined;
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+     auto chat_a = a.make_action<std::string>("chat");
+@@ -444,7 +446,8 @@ void a_flood_of_announcements_is_bounded() {
+ 
+     // Once every offer to a flooder expired, its negotiation is gone, and a new peer joins.
+     BOOST_TEST(run_until(f.io, [&] { return f.net.live_connections() == joined_connections; }));
+-    const trystero::room late(f.io.get_executor(), f.net, config("CCCCCCCCCCCCCCCCCCCC"), "flood");
++    trystero::app late_app(f.io.get_executor(), f.net, app_config("CCCCCCCCCCCCCCCCCCCC"));
++    const auto late = join(late_app, "flood");
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 2; }));
+     BOOST_TEST_EQ(heard.size(), 1U);
+ 
+@@ -464,7 +467,8 @@ void a_forged_answer_changes_nothing() {
+     fixture f;
+     const std::string_view a_id = "AAAAAAAAAAAAAAAAAAAA";
+     const std::string_view b_id = "BBBBBBBBBBBBBBBBBBBB";
+-    trystero::room a(f.io.get_executor(), f.net, config(a_id), "forged");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config(a_id));
++    auto a = join(a_app, "forged");
+     std::vector<std::string> joined;
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+     std::vector<boost::system::error_code> errors;
+@@ -493,7 +497,8 @@ void a_forged_answer_changes_nothing() {
+         }
+     };
+     attacker.watch(trystero::protocol::peer_topic(app_id, "forged", b_id));
+-    const trystero::room b(f.io.get_executor(), f.net, config(b_id), "forged");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    const auto b = join(b_app, "forged");
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1; }));
+     BOOST_TEST_GE(forged, 1);
+     BOOST_TEST_LE(errors.size(), 1U);
+@@ -503,7 +508,8 @@ void a_forged_answer_changes_nothing() {
+ // changes only once its offer opened.
+ void forged_offers_make_no_connection() {
+     fixture f;
+-    const trystero::room a(f.io.get_executor(), f.net, config("zzzzzzzzzzzzzzzzzzzz"), "offers");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("zzzzzzzzzzzzzzzzzzzz"));
++    const auto a = join(a_app, "offers");
+     flooder attacker(f, "offers");
+     const auto a_topic = trystero::protocol::peer_topic(app_id, "offers", "zzzzzzzzzzzzzzzzzzzz");
+     const auto before = f.net.relay(relay_a).events_seen;
+@@ -526,7 +532,8 @@ void signals_that_do_not_open_are_reported_once_per_interval() {
+     fixture f;
+     f.net.time_scale = 10;
+     const std::string a_id = "zzzzzzzzzzzzzzzzzzzz";
+-    trystero::room a(f.io.get_executor(), f.net, config(a_id), "reports");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config(a_id));
++    auto a = join(a_app, "reports");
+ 
+     struct report {
+         std::string peer;
+@@ -580,12 +587,13 @@ void sealed_offers_that_fail_at_once_are_bounded() {
+     constexpr std::size_t flood = 500;
+     constexpr std::size_t bound = trystero::detail::signaling::max_connections_per_window;
+     fixture f;
+-    auto c = config("zzzzzzzzzzzzzzzzzzzz");
++    auto c = app_config("zzzzzzzzzzzzzzzzzzzz");
+     int refusals = 0;
+     c.log = [&](std::string_view /*category*/, std::string_view text) {
+         refusals += text.find(" connections were made in the last ") != std::string_view::npos;
+     };
+-    const trystero::room a(f.io.get_executor(), f.net, std::move(c), "churn");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    const auto a = join(a_app, "churn");
+     flooder member(f, "churn");
+     const auto a_topic = trystero::protocol::peer_topic(app_id, "churn", "zzzzzzzzzzzzzzzzzzzz");
+     // One at a time, each once the previous one made its connection or was refused: sent at once,
+@@ -612,12 +620,13 @@ void announcements_with_forged_answers_are_bounded() {
+     constexpr std::size_t bound = trystero::detail::signaling::max_unconnected_peers;
+     fixture f;
+     const std::string_view a_id = "00000000000000000000";
+-    auto c = config(a_id);
++    auto c = app_config(a_id);
+     std::size_t refusals = 0;
+     c.log = [&](std::string_view /*category*/, std::string_view text) {
+         refusals += text.starts_with("refusing ") ? 1 : 0;
+     };
+-    const trystero::room a(f.io.get_executor(), f.net, std::move(c), "churn");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    const auto a = join(a_app, "churn");
+     flooder attacker(f, "churn");
+     const auto a_topic = trystero::protocol::peer_topic(app_id, "churn", a_id);
+     std::map<std::string, std::string, std::less<>> owners;  // peer topic -> its peer id
+@@ -676,11 +685,13 @@ void the_replay_cache_remembers_the_last_ones() {
+     BOOST_TEST(!none.contains("one"));
+ }
+ 
+-/** Joins B to A, records what `record` keeps of the relays meanwhile, and has B leave. */
++/** Joins B to A, records what `record` keeps of the relays meanwhile, and has B leave; B's app goes
++ * with it, so that B's return negotiates again. */
+ void join_and_leave(fixture& f, std::string_view b_id, std::string_view room_id,
+                     const std::vector<std::string>& joined, const std::vector<std::string>& left,
+                     const std::function<bool()>& recorded) {
+-    trystero::room b(f.io.get_executor(), f.net, config(b_id), room_id);
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    auto b = join(b_app, room_id);
+     webcpp::test::require(
+         BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1 && recorded(); })));
+     bool done = false;
+@@ -702,7 +713,8 @@ void a_replayed_answer_is_refused() {
+     f.net.time_scale = 10;
+     const std::string a_id = "00000000000000000000";
+     const std::string b_id = "BBBBBBBBBBBBBBBBBBBB";
+-    trystero::room a(f.io.get_executor(), f.net, config(a_id), "replay");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config(a_id));
++    auto a = join(a_app, "replay");
+     std::vector<std::string> joined;
+     std::vector<std::string> left;
+     std::vector<boost::system::error_code> errors;
+@@ -736,7 +748,8 @@ void a_replayed_answer_is_refused() {
+     watcher.watch(a_topic);
+     watcher.watch(b_topic);
+     join_and_leave(f, b_id, "replay", joined, left, [&] { return !recorded.empty(); });
+-    const trystero::room b(f.io.get_executor(), f.net, config(b_id), "replay");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    const auto b = join(b_app, "replay");
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 2; }));
+     BOOST_TEST_GE(replays, 1);
+     BOOST_TEST(std::ranges::none_of(errors, [](boost::system::error_code ec) {
+@@ -753,7 +766,8 @@ void a_replayed_offer_is_refused() {
+     f.net.time_scale = 10;
+     const std::string a_id = "zzzzzzzzzzzzzzzzzzzz";
+     const std::string b_id = "BBBBBBBBBBBBBBBBBBBB";
+-    trystero::room a(f.io.get_executor(), f.net, config(a_id), "replayo");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config(a_id));
++    auto a = join(a_app, "replayo");
+     std::vector<std::string> joined;
+     std::vector<std::string> left;
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+@@ -769,7 +783,8 @@ void a_replayed_offer_is_refused() {
+     };
+     watcher.watch(a_topic);
+     join_and_leave(f, b_id, "replayo", joined, left, [&] { return !recorded.empty(); });
+-    const trystero::room b(f.io.get_executor(), f.net, config(b_id), "replayo");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    const auto b = join(b_app, "replayo");
+     int replays = 0;
+     const auto end = std::chrono::steady_clock::now() + 10s;
+     while (joined.size() < 2 && std::chrono::steady_clock::now() < end) {
+@@ -790,7 +805,8 @@ void a_reflected_offer_is_refused_as_an_answer() {
+     fixture f;
+     const std::string a_id = "00000000000000000000";
+     const std::string b_id = "BBBBBBBBBBBBBBBBBBBB";
+-    trystero::room a(f.io.get_executor(), f.net, config(a_id), "reflect");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config(a_id));
++    auto a = join(a_app, "reflect");
+     std::vector<std::string> joined;
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+     flooder watcher(f, "reflect");
+@@ -806,7 +822,8 @@ void a_reflected_offer_is_refused_as_an_answer() {
+         }
+     };
+     watcher.watch(b_topic);
+-    const trystero::room b(f.io.get_executor(), f.net, config(b_id), "reflect");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    const auto b = join(b_app, "reflect");
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1; }));
+     BOOST_TEST_GE(reflected, 1);
+ }
+@@ -821,12 +838,13 @@ void a_reflected_offer_is_refused_as_an_offer() {
+     const std::string a_id = "yyyyyyyyyyyyyyyyyyyy";
+     const std::string b_id = "BBBBBBBBBBBBBBBBBBBB";
+     const std::string decoy = "zzzzzzzzzzzzzzzzzzzz";
+-    auto c = config(a_id);
++    auto c = app_config(a_id);
+     int answered_reflections = 0;
+     c.log = [&](std::string_view /*category*/, std::string_view text) {
+         answered_reflections += text.starts_with("offer reflected") ? 1 : 0;
+     };
+-    trystero::room a(f.io.get_executor(), f.net, std::move(c), "reflecto");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    auto a = join(a_app, "reflecto");
+     std::vector<std::string> joined;
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+     flooder watcher(f, "reflecto");
+@@ -855,7 +873,8 @@ void a_reflected_offer_is_refused_as_an_offer() {
+     watcher.watch(decoy_topic);
+     watcher.announce_as(decoy, 1);
+     webcpp::test::require(BOOST_TEST(run_until(f.io, [&] { return !recorded.empty(); })));
+-    const trystero::room b(f.io.get_executor(), f.net, config(b_id), "reflecto");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    const auto b = join(b_app, "reflecto");
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1; }));
+     BOOST_TEST_GE(reflected, 1);
+     BOOST_TEST_EQ(answered_reflections, 0);
+@@ -869,12 +888,13 @@ void a_reflected_answer_is_refused_as_an_answer() {
+     const std::string a_id = "MMMMMMMMMMMMMMMMMMMM";
+     const std::string b_id = "BBBBBBBBBBBBBBBBBBBB";
+     const std::string c_id = "ZZZZZZZZZZZZZZZZZZZZ";
+-    auto c = config(a_id);
++    auto c = app_config(a_id);
+     bool refused = false;
+     c.log = [&](std::string_view /*category*/, std::string_view text) {
+         refused = refused || text.starts_with("refused the answer from " + c_id);
+     };
+-    trystero::room a(f.io.get_executor(), f.net, std::move(c), "reflans");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    auto a = join(a_app, "reflans");
+     std::vector<std::string> joined;
+     a.on_peer_join([&](std::string_view p) { joined.emplace_back(p); });
+     flooder watcher(f, "reflans");
+@@ -899,10 +919,12 @@ void a_reflected_answer_is_refused_as_an_answer() {
+     };
+     watcher.watch(b_topic);
+     watcher.watch(c_topic);
+-    const trystero::room b(f.io.get_executor(), f.net, config(b_id), "reflans");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    const auto b = join(b_app, "reflans");
+     webcpp::test::require(
+         BOOST_TEST(run_until(f.io, [&] { return joined.size() == 1 && !a_answer.empty(); })));
+-    const trystero::room peer_c(f.io.get_executor(), f.net, config(c_id), "reflans");
++    trystero::app peer_c_app(f.io.get_executor(), f.net, app_config(c_id));
++    const auto peer_c = join(peer_c_app, "reflans");
+     BOOST_TEST(run_until(f.io, [&] { return joined.size() == 2; }));
+     BOOST_TEST_GE(reflected, 1);
+     BOOST_TEST(refused);
+@@ -917,7 +939,7 @@ void a_relay_that_closes_at_once_is_tried_less_and_less_often() {
+     f.net.time_scale = 100;
+     auto& relay = f.net.relay(relay_a);
+     relay.close_after_subscribe = true;
+-    auto c = config("AAAAAAAAAAAAAAAAAAAA");
++    auto c = app_config("AAAAAAAAAAAAAAAAAAAA");
+     c.relay_urls = {relay_a};
+     std::vector<long long> bounds;
+     int reconnections = 0;
+@@ -928,7 +950,8 @@ void a_relay_that_closes_at_once_is_tried_less_and_less_often() {
+         }
+         reconnections += text.starts_with("reconnected to ") ? 1 : 0;
+     };
+-    const trystero::room a(f.io.get_executor(), f.net, std::move(c), "backoff");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    const auto a = join(a_app, "backoff");
+     BOOST_TEST(run_until(f.io, [&] { return bounds.size() >= 6; }));
+     const std::vector<long long> growing{3333, 6666, 13332, 26664, 53328, 60000};
+     BOOST_TEST_ALL_EQ(bounds.begin(),
+@@ -956,12 +979,13 @@ void a_relay_that_closes_at_once_is_tried_less_and_less_often() {
+ void counter_announcements_are_paced() {
+     constexpr std::size_t flood = 300;
+     fixture f;
+-    auto c = config("zzzzzzzzzzzzzzzzzzzz");
++    auto c = app_config("zzzzzzzzzzzzzzzzzzzz");
+     std::size_t asked = 0;
+     c.log = [&](std::string_view /*category*/, std::string_view text) {
+         asked += text.ends_with("asking them to offer") ? 1 : 0;
+     };
+-    const trystero::room a(f.io.get_executor(), f.net, std::move(c), "counter");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    const auto a = join(a_app, "counter");
+     flooder attacker(f, "counter");
+     const auto start = std::chrono::steady_clock::now();
+     const auto before = f.net.relay(relay_a).events_seen;
+@@ -977,14 +1001,15 @@ void counter_announcements_are_paced() {
+ // offers to the first ids hold their places (the clock runs at its own pace here).
+ void a_refused_peer_is_logged_once() {
+     fixture f;
+-    auto c = config("00000000000000000000");
++    auto c = app_config("00000000000000000000");
+     int refusals_of_one = 0;
+     int refusals = 0;
+     c.log = [&](std::string_view /*category*/, std::string_view text) {
+         refusals += text.starts_with("refusing ") ? 1 : 0;
+         refusals_of_one += text.starts_with("refusing 1same") ? 1 : 0;
+     };
+-    const trystero::room a(f.io.get_executor(), f.net, std::move(c), "refusal");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(c));
++    const auto a = join(a_app, "refusal");
+     flooder attacker(f, "refusal");
+     const auto before = f.net.relay(relay_a).events_seen;
+     const std::size_t bound = trystero::detail::signaling::max_unconnected_peers;
+@@ -997,8 +1022,8 @@ void a_refused_peer_is_logged_once() {
+     BOOST_TEST_LE(f.net.live_connections(), 2 * bound);
+ }
+ 
+-// A peer id longer than protocol::max_peer_id_bytes is ignored in a signal; a room configured with
+-// one uses a random id instead, and reports it.
++// A peer id longer than protocol::max_peer_id_bytes is ignored in a signal; an app configured with
++// one uses a random id instead, in its rooms too, and reports it.
+ void long_peer_ids_are_bounded() {
+     const std::string longest(trystero::protocol::max_peer_id_bytes, 'x');
+     const std::string too_long(trystero::protocol::max_peer_id_bytes + 1, 'x');
+@@ -1009,10 +1034,11 @@ void long_peer_ids_are_bounded() {
+     BOOST_TEST(!trystero::protocol::read_signal(signal(too_long)).has_value());
+ 
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.net, config(too_long), "long");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config(too_long));
++    const auto a = join(a_app, "long");
+     std::vector<boost::system::error_code> errors;
+-    a.on_error([&](std::string_view /*peer*/, boost::system::error_code ec,
+-                   std::string_view /*what*/) { errors.push_back(ec); });
++    a_app.on_error([&](std::string_view /*peer*/, boost::system::error_code ec,
++                       std::string_view /*what*/) { errors.push_back(ec); });
+     BOOST_TEST_EQ(a.self_id().size(), trystero::protocol::peer_id_size);
+     BOOST_TEST(run_until(f.io, [&] { return errors.size() == 1; }));
+     if (!errors.empty()) {
+@@ -1022,25 +1048,22 @@ void long_peer_ids_are_bounded() {
+ 
+ void three_peers_form_a_mesh() {
+     fixture f;
+-    std::vector<std::unique_ptr<trystero::room>> rooms;
++    std::vector<trystero::app> apps;
++    std::vector<trystero::room> rooms;
+     for (const char* id :
+          {"KKKKKKKKKKKKKKKKKKKK", "LLLLLLLLLLLLLLLLLLLL", "MMMMMMMMMMMMMMMMMMMM"}) {
+-        rooms.push_back(
+-            std::make_unique<trystero::room>(f.io.get_executor(), f.net, config(id), "mesh"));
++        apps.emplace_back(f.io.get_executor(), f.net, app_config(id));
++        rooms.push_back(join(apps.back(), "mesh"));
+     }
+     BOOST_TEST(run_until(f.io, [&] {
+-        for (auto& r : rooms) {
+-            if (r->peers().size() != 2) {
+-                return false;
+-            }
+-        }
+-        return true;
++        return std::ranges::all_of(rooms,
++                                   [](const trystero::room& r) { return r.peers().size() == 2; });
+     }));
+     // A broadcast reaches both others.
+-    auto shout = rooms[0]->make_action<std::string>("shout");
++    auto shout = rooms[0].make_action<std::string>("shout");
+     int heard = 0;
+     for (std::size_t i = 1; i < rooms.size(); ++i) {
+-        rooms[i]->make_action<std::string>("shout").on_message(
++        rooms[i].make_action<std::string>("shout").on_message(
+             [&](const std::string& text, const trystero::message_info& /*info*/) {
+                 heard += text == "all" ? 1 : 0;
+             });
+@@ -1051,8 +1074,10 @@ void three_peers_form_a_mesh() {
+ 
+ void async_receive_works_in_a_coroutine() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.net, config("NNNNNNNNNNNNNNNNNNNN"), "coro");
+-    trystero::room b(f.io.get_executor(), f.net, config("OOOOOOOOOOOOOOOOOOOO"), "coro");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("NNNNNNNNNNNNNNNNNNNN"));
++    auto a = join(a_app, "coro");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("OOOOOOOOOOOOOOOOOOOO"));
++    auto b = join(b_app, "coro");
+     auto inbox = b.make_action<trystero::payload>("any");
+     std::vector<std::string> seen;
+     asio::co_spawn(
+@@ -1080,8 +1105,10 @@ void async_receive_works_in_a_coroutine() {
+ 
+ void view_handlers_read_the_frame_without_copying() {
+     fixture f;
+-    trystero::room a(f.io.get_executor(), f.net, config("RRRRRRRRRRRRRRRRRRRR"), "views");
+-    trystero::room b(f.io.get_executor(), f.net, config("SSSSSSSSSSSSSSSSSSSS"), "views");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("RRRRRRRRRRRRRRRRRRRR"));
++    auto a = join(a_app, "views");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("SSSSSSSSSSSSSSSSSSSS"));
++    auto b = join(b_app, "views");
+     std::string text_seen;
+     std::size_t bytes_seen = 0;
+     std::string metadata_seen;
+@@ -1107,8 +1134,10 @@ void view_handlers_read_the_frame_without_copying() {
+ void a_rate_limited_relay_does_not_stop_discovery() {
+     fixture f;
+     f.net.relay(relay_a).rate_limit_next = 1000;  // relay A refuses everything; B carries the room
+-    trystero::room a(f.io.get_executor(), f.net, config("PPPPPPPPPPPPPPPPPPPP"), "limits");
+-    trystero::room b(f.io.get_executor(), f.net, config("QQQQQQQQQQQQQQQQQQQQ"), "limits");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("PPPPPPPPPPPPPPPPPPPP"));
++    auto a = join(a_app, "limits");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("QQQQQQQQQQQQQQQQQQQQ"));
++    auto b = join(b_app, "limits");
+     BOOST_TEST(run_until(f.io, [&] { return a.peers().size() == 1 && b.peers().size() == 1; }));
+     // Backoff: after the first refusal each peer stops publishing on relay A, so it sees only a
+     // handful of attempts.
+@@ -1120,12 +1149,14 @@ void a_rate_limited_relay_does_not_stop_discovery() {
+ void a_connections_end_is_seen_and_the_peers_meet_again() {
+     for (int way = 0; way < 3; ++way) {
+         fixture f{true};
+-        trystero::room a(f.io.get_executor(), f.net, config("NNNNNNNNNNNNNNNNNNNN"), "ends");
++        trystero::app a_app(f.io.get_executor(), f.net, app_config("NNNNNNNNNNNNNNNNNNNN"));
++        auto a = join(a_app, "ends");
+         std::vector<std::size_t> a_pcs;
+         f.net.on_made = [&](std::size_t pc, std::span<const trystero::backend::ice_server>) {
+             a_pcs.push_back(pc);
+         };
+-        const trystero::room b(f.io.get_executor(), f.net, config("OOOOOOOOOOOOOOOOOOOO"), "ends");
++        trystero::app b_app(f.io.get_executor(), f.net, app_config("OOOOOOOOOOOOOOOOOOOO"));
++        const auto b = join(b_app, "ends");
+         int joins = 0;
+         int leaves = 0;
+         a.on_peer_join([&](std::string_view) { ++joins; });
+@@ -1157,14 +1188,16 @@ void a_connections_end_is_seen_and_the_peers_meet_again() {
+ void a_frame_of_an_unknown_token_is_dropped() {
+     counting_resource memory;
+     fixture f{true};
+-    auto a_config = config("PPPPPPPPPPPPPPPPPPPP");
++    auto a_config = app_config("PPPPPPPPPPPPPPPPPPPP");
+     a_config.memory = &memory;
+-    trystero::room a(f.io.get_executor(), f.net, std::move(a_config), "unknown");
++    trystero::app a_app(f.io.get_executor(), f.net, std::move(a_config));
++    auto a = join(a_app, "unknown");
+     std::vector<std::size_t> pcs;
+     f.net.on_made = [&](std::size_t pc, std::span<const trystero::backend::ice_server>) {
+         pcs.push_back(pc);
+     };
+-    const trystero::room b(f.io.get_executor(), f.net, config("QQQQQQQQQQQQQQQQQQQQ"), "unknown");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("QQQQQQQQQQQQQQQQQQQQ"));
++    const auto b = join(b_app, "unknown");
+     int leaves = 0;
+     a.on_peer_leave([&](std::string_view) { ++leaves; });
+     webcpp::test::require(BOOST_TEST(run_until(f, [&] { return a.peers().size() == 1; })));
+@@ -1190,12 +1223,14 @@ void malformed_envelopes_end_the_connection() {
+     too_big.resize(16'516, 0);
+     for (const auto& bad : {zero_token, long_token, kind_3, too_big}) {
+         fixture f{true};
+-        trystero::room a(f.io.get_executor(), f.net, config("RRRRRRRRRRRRRRRRRRRR"), "bad");
++        trystero::app a_app(f.io.get_executor(), f.net, app_config("RRRRRRRRRRRRRRRRRRRR"));
++        auto a = join(a_app, "bad");
+         std::vector<std::size_t> pcs;
+         f.net.on_made = [&](std::size_t pc, std::span<const trystero::backend::ice_server>) {
+             pcs.push_back(pc);
+         };
+-        const trystero::room b(f.io.get_executor(), f.net, config("SSSSSSSSSSSSSSSSSSSS"), "bad");
++        trystero::app b_app(f.io.get_executor(), f.net, app_config("SSSSSSSSSSSSSSSSSSSS"));
++        const auto b = join(b_app, "bad");
+         int leaves = 0;
+         a.on_peer_leave([&](std::string_view) { ++leaves; });
+         webcpp::test::require(BOOST_TEST(run_until(f, [&] { return a.peers().size() == 1; })));
+@@ -1203,12 +1238,14 @@ void malformed_envelopes_end_the_connection() {
+         BOOST_TEST(run_until(f, [&] { return leaves == 1; }));
+     }
+     fixture f{true};
+-    trystero::room a(f.io.get_executor(), f.net, config("RRRRRRRRRRRRRRRRRRRR"), "bad");
++    trystero::app a_app(f.io.get_executor(), f.net, app_config("RRRRRRRRRRRRRRRRRRRR"));
++    auto a = join(a_app, "bad");
+     std::vector<std::size_t> pcs;
+     f.net.on_made = [&](std::size_t pc, std::span<const trystero::backend::ice_server>) {
+         pcs.push_back(pc);
+     };
+-    const trystero::room b(f.io.get_executor(), f.net, config("SSSSSSSSSSSSSSSSSSSS"), "bad");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("SSSSSSSSSSSSSSSSSSSS"));
++    const auto b = join(b_app, "bad");
+     int leaves = 0;
+     a.on_peer_leave([&](std::string_view) { ++leaves; });
+     webcpp::test::require(BOOST_TEST(run_until(f, [&] { return a.peers().size() == 1; })));
+@@ -1229,7 +1266,8 @@ void a_late_end_of_another_connection_keeps_the_peer() {
+     f.net.on_made = [&](std::size_t pc, std::span<const trystero::backend::ice_server>) {
+         pcs.push_back(pc);
+     };
+-    trystero::room b(f.io.get_executor(), f.net, config(b_id), "late");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    auto b = join(b_app, "late");
+     int b_joins = 0;
+     int b_leaves = 0;
+     b.on_peer_join([&](std::string_view) { ++b_joins; });
+@@ -1265,7 +1303,8 @@ void a_withdrawn_presence_is_a_departure() {
+     f.net.on_made = [&](std::size_t pc, std::span<const trystero::backend::ice_server>) {
+         pcs.push_back(pc);
+     };
+-    const trystero::room b(f.io.get_executor(), f.net, config(b_id), "withdraw");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    const auto b = join(b_app, "withdraw");
+     webcpp::test::require(
+         BOOST_TEST(run_until(f, [&] { return a.room->active_peers().size() == 1; })));
+     const auto c = a.app->find(b_id);
+@@ -1300,7 +1339,8 @@ void a_kick_by_the_last_room_ends_the_connection() {
+         return room_frame_to_a ? trystero::test::memory_network::verdict::drop
+                                : trystero::test::memory_network::verdict::deliver;
+     };
+-    const trystero::room b(f.io.get_executor(), f.net, config(b_id), "kick");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config(b_id));
++    const auto b = join(b_app, "kick");
+     const std::string kicked =
+         "webrtc: connection with " + b_id + " ended: its last room kicked the peer";
+     BOOST_TEST(run_until(f, [&] { return std::ranges::count(log, kicked) > 0; }, 20s));
+@@ -1315,7 +1355,8 @@ void a_room_left_with_no_idle_time_sends_its_presence() {
+                                  [](trystero::app_config& c, trystero::room_options&) {
+                                      c.idle_timeout = std::chrono::milliseconds::zero();
+                                  });
+-    const trystero::room b(f.io.get_executor(), f.net, config("zzzzzzzzzzzzzzzzzzzz"), "no-idle");
++    trystero::app b_app(f.io.get_executor(), f.net, app_config("zzzzzzzzzzzzzzzzzzzz"));
++    const auto b = join(b_app, "no-idle");
+     webcpp::test::require(BOOST_TEST(
+         run_until(f, [&] { return a.room->active_peers().size() == 1 && b.peers().size() == 1; })));
+     const auto absent = trystero::protocol::presence_frame(
+diff --git a/test/shared_test.cpp b/test/shared_test.cpp
+new file mode 100644
+index 0000000..5681a2d
+--- /dev/null
++++ b/test/shared_test.cpp
+@@ -0,0 +1,271 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// Rooms of one app sharing one connection per remote peer, over the memory backend, on its virtual
++// clock.
++
++#include <webcpp/trystero.hpp>
++
++#include "support/memory_backend.hpp"
++#include "support/rooms.hpp"
++
++#include <boost/asio/io_context.hpp>
++#include <boost/core/lightweight_test.hpp>
++
++#include <algorithm>
++#include <array>
++#include <cstddef>
++#include <initializer_list>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "require.hpp"
++
++namespace trystero = webcpp::trystero;
++using namespace webcpp::trystero::test;
++using namespace std::chrono_literals;
++
++namespace {
++
++// Every room reports the app's id; an over-long one is replaced, and it and a negative idle time
++// are reported to the app's handler, set after the app is made.
++void every_room_has_the_apps_id() {
++    fixture f{true};
++    trystero::app a(f.io.get_executor(), f.net, app_config("AAAAAAAAAAAAAAAAAAAA"));
++    const auto r1 = join(a, "r1");
++    const auto r2 = join(a, "r2");
++    BOOST_TEST_EQ(r1.self_id(), "AAAAAAAAAAAAAAAAAAAA");
++    BOOST_TEST_EQ(r2.self_id(), a.self_id());
++    auto long_id = app_config(std::string(65, 'x'));
++    long_id.idle_timeout = -1ms;
++    std::vector<boost::system::error_code> reports;
++    trystero::app b(f.io.get_executor(), f.net, std::move(long_id));
++    b.on_error([&](std::string_view peer, boost::system::error_code ec, std::string_view) {
++        BOOST_TEST(peer.empty());
++        reports.push_back(ec);
++    });
++    BOOST_TEST_EQ(b.self_id().size(), trystero::protocol::peer_id_size);
++    BOOST_TEST(run_until(f, [&] { return reports.size() == 2; }));
++    for (const auto ec : reports) {
++        BOOST_TEST(ec == trystero::error::invalid_configuration);
++    }
++}
++
++// A room joined twice is refused while it is joined, and so is a 65th room.
++void joining_is_refused_twice_and_beyond_64() {
++    fixture f{true};
++    trystero::app a(f.io.get_executor(), f.net, app_config("BBBBBBBBBBBBBBBBBBBB"));
++    const auto r = join(a, "r");
++    const auto again = a.join("r");
++    BOOST_TEST(!again && again.error() == trystero::error::already_joined);
++    std::vector<trystero::room> rooms;
++    for (int i = 1; i < 64; ++i) {
++        rooms.push_back(join(a, "x" + std::to_string(i)));
++    }
++    const auto too_many = a.join("x64");
++    BOOST_TEST(!too_many && too_many.error() == trystero::error::too_many_rooms);
++}
++
++// Two apps of one app id with the same self id never meet, and nothing loops.
++void two_apps_with_one_id_never_meet() {
++    fixture f{true};
++    trystero::app a(f.io.get_executor(), f.net, app_config("CCCCCCCCCCCCCCCCCCCC"));
++    trystero::app b(f.io.get_executor(), f.net, app_config("CCCCCCCCCCCCCCCCCCCC"));
++    const auto ra = join(a, "same");
++    const auto rb = join(b, "same");
++    advance(f, 2000ms);
++    BOOST_TEST(ra.peers().empty() && rb.peers().empty());
++    BOOST_TEST_EQ(f.net.made_connections, 0U);
++}
++
++/** Two apps, A and B, on the virtual clock, and their rooms. */
++struct two_apps {
++    fixture f{true};
++    trystero::app a;
++    trystero::app b;
++    std::vector<trystero::room> a_rooms;
++    std::vector<trystero::room> b_rooms;
++
++    two_apps(std::string_view a_id, std::string_view b_id)
++        : a(f.io.get_executor(), f.net, app_config(a_id)),
++          b(f.io.get_executor(), f.net, app_config(b_id)) {}
++
++    [[nodiscard]] bool all_joined() const {
++        const auto one = [](const trystero::room& r) { return r.peers().size() == 1; };
++        return std::ranges::all_of(a_rooms, one) && std::ranges::all_of(b_rooms, one);
++    }
++};
++
++/** Joins A and B to each room given, in that order, and waits until every room of both has the
++ * other. */
++void joined_in(two_apps& t, std::initializer_list<const char*> rooms) {
++    for (const auto* id : rooms) {
++        t.a_rooms.push_back(join(t.a, id));
++        t.b_rooms.push_back(join(t.b, id));
++    }
++    webcpp::test::require(BOOST_TEST(run_until(t.f, [&] { return t.all_joined(); })));
++}
++
++// Two rooms, one connection; each room's action of one name reaches only its room, both ways.
++void two_rooms_share_one_connection() {
++    two_apps t("DDDDDDDDDDDDDDDDDDDD", "EEEEEEEEEEEEEEEEEEEE");
++    joined_in(t, {"r1", "r2"});
++    BOOST_TEST(run_until(t.f, [&] { return t.f.net.live_connections() == 2U; }));  // one pair
++    std::array<std::vector<std::string>, 2> at_b;
++    std::array<std::vector<std::string>, 2> at_a;
++    std::vector<trystero::action<std::string>> actions;
++    for (std::size_t i = 0; i < 2; ++i) {
++        actions.push_back(t.b_rooms[i].make_action<std::string>("chat"));
++        actions.back().on_message([&at_b, i](std::string s, const trystero::message_info&) {
++            at_b[i].push_back(std::move(s));
++        });
++        actions.push_back(t.a_rooms[i].make_action<std::string>("chat"));
++        actions.back().on_message([&at_a, i](std::string s, const trystero::message_info&) {
++            at_a[i].push_back(std::move(s));
++        });
++    }
++    t.a_rooms[0].make_action<std::string>("chat").async_send("a1",
++                                                             [](boost::system::error_code) {});
++    t.a_rooms[1].make_action<std::string>("chat").async_send("a2",
++                                                             [](boost::system::error_code) {});
++    t.b_rooms[0].make_action<std::string>("chat").async_send("b1",
++                                                             [](boost::system::error_code) {});
++    t.b_rooms[1].make_action<std::string>("chat").async_send("b2",
++                                                             [](boost::system::error_code) {});
++    BOOST_TEST(run_until(t.f, [&] {
++        return at_b[0].size() == 1 && at_b[1].size() == 1 && at_a[0].size() == 1 &&
++               at_a[1].size() == 1;
++    }));
++    BOOST_TEST(at_b[0].at(0) == "a1" && at_b[1].at(0) == "a2");
++    BOOST_TEST(at_a[0].at(0) == "b1" && at_a[1].at(0) == "b2");
++}
++
++// Three rooms, joined in another order on each side, one connection.
++void three_rooms_share_one_connection() {
++    two_apps t("FFFFFFFFFFFFFFFFFFFF", "GGGGGGGGGGGGGGGGGGGG");
++    for (const auto* id : {"r1", "r2", "r3"}) {
++        t.a_rooms.push_back(join(t.a, id));
++    }
++    for (const auto* id : {"r3", "r1", "r2"}) {
++        t.b_rooms.push_back(join(t.b, id));
++    }
++    BOOST_TEST(run_until(t.f, [&] { return t.all_joined(); }));
++    BOOST_TEST(run_until(t.f, [&] { return t.f.net.live_connections() == 2U; }));
++}
++
++// Both rooms negotiate at once; one connection stays, both rooms join over it.
++void a_second_connection_is_dropped() {
++    two_apps t("JJJJJJJJJJJJJJJJJJJJ", "KKKKKKKKKKKKKKKKKKKK");
++    joined_in(t, {"r1", "r2"});
++    BOOST_TEST(run_until(t.f, [&] { return t.f.net.live_connections() == 2U; }));
++}
++
++// An app moved from is only destroyed: its state, moved, still counts its handle once, so the room
++// keeps its peer and its connection when the moved-from handle and the new one are both gone, which
++// the other side sees as no departure and no new connection.
++void a_moved_from_app_releases_nothing() {
++    fixture f{true};
++    std::optional<trystero::app> a(std::in_place, f.io.get_executor(), f.net,
++                                   app_config("LLLLLLLLLLLLLLLLLLLL"));
++    trystero::app b(f.io.get_executor(), f.net, app_config("MMMMMMMMMMMMMMMMMMMM"));
++    auto ra = join(*a, "r");
++    auto rb = join(b, "r");
++    int leaves = 0;
++    rb.on_peer_leave([&](std::string_view) { ++leaves; });
++    webcpp::test::require(
++        BOOST_TEST(run_until(f, [&] { return ra.peers().size() == 1 && rb.peers().size() == 1; })));
++    const auto made = f.net.made_connections;
++    {
++        const trystero::app moved(std::move(*a));
++        a.reset();
++        BOOST_TEST_EQ(moved.self_id(), "LLLLLLLLLLLLLLLLLLLL");
++    }
++    advance(f, 1000ms);
++    BOOST_TEST_EQ(leaves, 0);
++    BOOST_TEST_EQ(f.net.made_connections, made);
++    BOOST_TEST_EQ(ra.peers().size(), 1U);
++}
++
++// An app destroyed while its room remains changes nothing for the room; the room's departure, the
++// last user of the state, then ends the connection at once rather than idling it.
++void an_app_destroyed_leaves_its_rooms_going() {
++    fixture f{true};
++    std::optional<trystero::app> a(std::in_place, f.io.get_executor(), f.net,
++                                   app_config("SSSSSSSSSSSSSSSSSSSS"));
++    trystero::app b(f.io.get_executor(), f.net, app_config("TTTTTTTTTTTTTTTTTTTT"));
++    std::optional<trystero::room> ra(join(*a, "r"));
++    auto rb = join(b, "r");
++    int leaves = 0;
++    rb.on_peer_leave([&](std::string_view) { ++leaves; });
++    webcpp::test::require(BOOST_TEST(
++        run_until(f, [&] { return ra->peers().size() == 1 && rb.peers().size() == 1; })));
++    const auto made = f.net.made_connections;
++    a.reset();
++    advance(f, 1000ms);
++    BOOST_TEST_EQ(leaves, 0);
++    BOOST_TEST_EQ(f.net.made_connections, made);
++    BOOST_TEST_EQ(ra->peers().size(), 1U);
++    ra.reset();
++    BOOST_TEST(run_until(f, [&] { return f.net.live_connections() == 0U; }, 1000ms));
++}
++
++// An app assigned over releases the state it held: that state's rooms go on, and when the last of
++// them goes, its connections end at once rather than idling.
++void an_app_assigned_over_releases_its_state() {
++    fixture f{true};
++    trystero::app a(f.io.get_executor(), f.net, app_config("NNNNNNNNNNNNNNNNNNNN"));
++    trystero::app b(f.io.get_executor(), f.net, app_config("OOOOOOOOOOOOOOOOOOOO"));
++    std::optional<trystero::room> ra(join(a, "r"));
++    auto rb = join(b, "r");
++    int leaves = 0;
++    rb.on_peer_leave([&](std::string_view) { ++leaves; });
++    webcpp::test::require(BOOST_TEST(
++        run_until(f, [&] { return ra->peers().size() == 1 && rb.peers().size() == 1; })));
++    const auto made = f.net.made_connections;
++    a = trystero::app(f.io.get_executor(), f.net, app_config("PPPPPPPPPPPPPPPPPPPP"));
++    BOOST_TEST_EQ(a.self_id(), "PPPPPPPPPPPPPPPPPPPP");
++    advance(f, 1000ms);
++    BOOST_TEST_EQ(leaves, 0);
++    BOOST_TEST_EQ(f.net.made_connections, made);
++    BOOST_TEST_EQ(ra->peers().size(), 1U);
++    ra.reset();
++    BOOST_TEST(run_until(f, [&] { return f.net.live_connections() == 0U; }, 1000ms));
++}
++
++// An app assigned to itself keeps its state and its count: its room's departure idles the
++// connection, which the app's handle still holds.
++void an_app_assigned_to_itself_keeps_its_state() {
++    fixture f{true};
++    trystero::app a(f.io.get_executor(), f.net, app_config("QQQQQQQQQQQQQQQQQQQQ"));
++    trystero::app b(f.io.get_executor(), f.net, app_config("RRRRRRRRRRRRRRRRRRRR"));
++    std::optional<trystero::room> ra(join(a, "r"));
++    auto rb = join(b, "r");
++    webcpp::test::require(BOOST_TEST(
++        run_until(f, [&] { return ra->peers().size() == 1 && rb.peers().size() == 1; })));
++    auto& same = a;  // through a reference: the compiler warns of a move to itself written out
++    a = std::move(same);
++    BOOST_TEST_EQ(a.self_id(), "QQQQQQQQQQQQQQQQQQQQ");
++    ra.reset();
++    advance(f, 1000ms);
++    BOOST_TEST_EQ(f.net.live_connections(), 2U);
++}
++
++}  // namespace
++
++int main() {
++    every_room_has_the_apps_id();
++    joining_is_refused_twice_and_beyond_64();
++    two_apps_with_one_id_never_meet();
++    two_rooms_share_one_connection();
++    three_rooms_share_one_connection();
++    a_second_connection_is_dropped();
++    a_moved_from_app_releases_nothing();
++    an_app_destroyed_leaves_its_rooms_going();
++    an_app_assigned_over_releases_its_state();
++    an_app_assigned_to_itself_keeps_its_state();
++    return boost::report_errors();
++}
+diff --git a/test/support/rooms.hpp b/test/support/rooms.hpp
+index 9495566..1bb9d4f 100644
+--- a/test/support/rooms.hpp
++++ b/test/support/rooms.hpp
+@@ -11,6 +11,7 @@
+ 
+ #include "../require.hpp"
+ 
++#include <webcpp/trystero/app.hpp>
+ #include <webcpp/trystero/backend.hpp>
+ #include <webcpp/trystero/protocol/nostr.hpp>
+ #include <webcpp/trystero/protocol/signal.hpp>
+@@ -26,17 +27,21 @@
+ #include <chrono>
+ #include <cstddef>
+ #include <cstdint>
++#include <cstdlib>
+ #include <functional>
++#include <iostream>
+ #include <memory>
+ #include <memory_resource>
+ #include <optional>
+ #include <span>
+ #include <string>
+ #include <string_view>
++#include <utility>
+ 
+-// The rooms' shared test helpers: a memory network with two relays, a watcher of a room's relay
+-// traffic, a flood of announcements, and the virtual clock's own waits. A case
+-// of room_test.cpp, connection_test.cpp or shared_test.cpp includes this header for them.
++// The rooms' shared test helpers: a memory network with two relays, an app over them and a join
++// that must succeed, a watcher of a room's relay traffic, a flood of announcements, and the virtual
++// clock's own waits. A case of room_test.cpp, connection_test.cpp or shared_test.cpp includes this
++// header for them.
+ namespace webcpp::trystero::test {
+ 
+ using namespace std::chrono_literals;
+@@ -45,6 +50,29 @@ constexpr const char* relay_a = "wss://relay-a.test";
+ constexpr const char* relay_b = "wss://relay-b.test";
+ constexpr const char* app_id = "webcpp-trystero-tests";
+ 
++/** An app of the tests' app id over the two memory relays, with `self_id`; with
++ * WEBCPP_TEST_TRYSTERO_VERBOSE in the environment, its log goes to the standard error. */
++inline trystero::app_config app_config(std::string_view self_id) {
++    trystero::app_config c;
++    c.app_id = app_id;
++    c.relay_urls = {relay_a, relay_b};
++    c.self_id = self_id;
++    if (std::getenv("WEBCPP_TEST_TRYSTERO_VERBOSE") != nullptr) {
++        c.log = [id = std::pmr::string(self_id)](std::string_view category, std::string_view text) {
++            std::cerr << "  [" << id << "] " << category << ": " << text << "\n";
++        };
++    }
++    return c;
++}
++
++/** Joins `room_id`, which must succeed: a failure ends the test. */
++inline trystero::room join(trystero::app& a, std::string_view room_id,
++                           trystero::room_options options = {}) {
++    auto r = a.join(room_id, std::move(options));
++    webcpp::test::require(BOOST_TEST(r.has_value()));
++    return std::move(*r);
++}
++
+ /** Runs the io_context until `done` holds or `limit` passes; whether `done` held. */
+ inline bool run_until(boost::asio::io_context& io, const std::function<bool()>& done,
+                       std::chrono::milliseconds limit = 10s) {
+-- 
+2.55.0
+

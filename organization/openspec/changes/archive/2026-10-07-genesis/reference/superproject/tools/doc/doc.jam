@@ -1,0 +1,680 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+#
+# The rules of the documentation, which tools/webcpp.jam offers a library's
+# doc/Jamfile, and the superproject's, as webcpp.doc, webcpp.reference and
+# webcpp.index:
+#
+#     import webcpp ;
+#     webcpp.doc <library> : <page>.adoc ;
+#     webcpp.reference <library> : <requirements> * : <also-checked> * ;
+#
+# webcpp.reference declares the target reference of the library's doc
+# project, which a page declared with webcpp.doc must go with:
+# tools/doc/reference.py writes the library's API reference with MrDocs,
+# strict, from one translation unit of every public header, and checks with
+# doc_comments.py what MrDocs does not. That translation unit is
+# read with the include directories and the defines of the library's target
+# and of the requirements given, natively: a library whose headers build
+# only for WASI gives those a native parse needs, such as the explicit
+# target <name>-headers of webcpp.wit-bindings, which generates the bindings
+# on any toolset and adds their directory, and the macro of one version. A
+# library with a header that builds only on emscripten gives
+# /webcpp//emscripten-reference, whose emsdk (<webcpp-emsdk>, the one
+# -sWEBCPP_EMSDK=<dir> names, else .local/emsdk: the Jamroot) has the
+# translation unit read for Emscripten's target, as its em++ compiles it,
+# since Emscripten's own headers hold only for wasm32's types; with the
+# target of its native backend, if it has one, which brings that backend's
+# dependencies, and the defines its browser build has, which a requirement
+# conditioned on the emscripten toolset does not give a native build.
+# reference.py says why one translation unit reads every header. A header
+# it cannot parse fails it, naming the header.
+# webcpp.doc converts the page with Asciidoctor.js into
+# libs/<library>/doc/html/index.html, the reference included where the page
+# says include::{reference}[...], once doc-check.py finds the page whole
+# (--complete), and installs it once the converted page passes doc-check.py's
+# check of a rendered page. webcpp.index does the same for the superproject's
+# index page, which includes the table libraries.py writes from every
+# library's meta/libraries.json, and from the page its doc Jamfile declares,
+# at {libraries}.
+#
+# Headers that branch by the macro of a version hide the other branch from
+# the reference. The requirements also-checked, those of the other version,
+# have reference.py check the Doc Comments again with them, MrDocs and
+# doc_comments.py both, beside the reference; no page shows what that check
+# writes.
+#
+# Every page is converted with highlighter.mjs and postprocess.mjs, the
+# style of docinfo.html, and these attributes, which a page need not set:
+# {examples}, the library's example directory, source-highlighter,
+# source-language cpp, docinfo, webfonts! (no font from the network),
+# reproducible (no date) and nofooter (a footer would hold nothing else). A
+# page, its reference and the index's table are made again on every build:
+# what they read, the sections, the headers and every library's
+# description, is more than b2 tracks.
+#
+# A library's page is also given what its build knows of the library, which
+# its text states without typing it:
+#
+# - {twins}, the twins' directory, for a library whose oracle declares
+#   webcpp.twins, which doc-check.py is given too (--twins): the page shows
+#   every divergent twin's own output;
+# - the programs its example Jamfiles link and never run (webcpp.link),
+#   which only doc-check.py is given (--linked): the page shows each one's
+#   code, and none has an output beside it;
+# - the counts tools/doc/counts.py computes as the page is made, {n-examples}
+#   and the others its comment lists: from the programs tools/webcpp.jam
+#   records as it loads the library's test and example Jamfiles (each
+#   header compiled alone among them), from its twins, and from its own
+#   doc/counts.py;
+# - {webcpp-libs} and {webcpp-page}, with which it links another library's
+#   page, link:{webcpp-libs}/<library>/{webcpp-page}#<anchor>[...], in the
+#   layout -sWEBCPP_INDEX names (below). The check of the rendered page reads
+#   the linked page, which the build makes first, for each anchor such a
+#   link or a doc: <library>#<anchor> of the library's files names;
+# - {webcpp-root}, the superproject, whose files the page shows as they are,
+#   include::{webcpp-root}/<path>[tag=<name>]: doc-check.py, given it too
+#   (--webcpp-root), accepts only a tagged region of a file the
+#   superproject's git tracks, such as the Jamroot's flags;
+# - {library-root}, the library's own directory, whose files the page shows
+#   the same way, include::{library-root}/<path>[tag=<name>]: doc-check.py,
+#   given it too (--library-root), accepts only a tagged region of a file the
+#   library's own git tracks, such as the dependencies its build.jam declares.
+#
+# MrDocs is -sMRDOCS=<path>, else .local/mrdocs/bin/mrdocs, else mrdocs on
+# PATH; clang++, which reads the headers for doc_comments.py, is
+# -sCLANG=<path>, else clang++ on PATH; a path given may hold a space. When
+# one is not there, the build stops, naming it and where it was looked for.
+# Node runs Asciidoctor.js, which tools/node/install.py installs with npm ci
+# from package-lock.json, once per lockfile under tools/doc/.node-modules/, and
+# links at tools/doc/node_modules, so that doc builds at once share it.
+#
+# This file is loaded as the module webcpp-doc: b2 has a module named doc of
+# its own, the one of --help.
+import alias ;
+import common ;
+import errors ;
+import feature ;
+import make ;
+import modules ;
+import notfile ;
+import os ;
+import path ;
+import project ;
+import stage ;
+
+# This directory, and the superproject's, absolute: an action starts in the
+# directory b2 was started in.
+.here = [ path.parent [ path.root [ path.make [ modules.binding $(__name__) ] ] [ path.pwd ] ] ] ;
+.root = [ path.parent [ path.parent $(.here) ] ] ;
+
+if [ os.name ] = NT { .python = python ; } else { .python = python3 ; }
+
+# The emsdk a reference is read with, for Emscripten's target, which
+# /webcpp//emscripten-reference gives. Free, as <include> is, and a usage
+# requirement reaches it.
+feature.feature webcpp-emsdk : : free path ;
+
+# The page a target belongs to: the library's name, or index for the
+# superproject's index page (a name no library takes). Free, so that it
+# plays no part in a target's build directory.
+feature.feature webcpp-doc-page : : free incidental ;
+
+# A word made of one space, so that an action can repeat an option before
+# each element of a list: -a$(_)"$(ATTRIBUTES)" is -a "x" -a "y".
+_ = " " ;
+
+# Each of paths, as the system writes it.
+local rule natives ( paths * )
+{
+    local found ;
+    for local path in $(paths)
+    {
+        found += [ path.native $(path) ] ;
+    }
+    return $(found) ;
+}
+
+# The project of the Jamfile being loaded, which must be the directory
+# expected, relative to the superproject: libs/<library>/doc, or doc.
+local rule here ( rule-name : expected )
+{
+    local current = [ project.current ] ;
+    local jamfile = [ $(current).project-module ] ;
+    local location = [ path.root [ project.attribute $(jamfile) location ] [ path.pwd ] ] ;
+    if $(location) != [ path.join $(.root) $(expected) ]
+    {
+        local native = [ path.native $(location) ] ;
+        errors.user-error "webcpp.$(rule-name) is declared in $(native), which is not"
+            "$(expected)" ;
+    }
+    return $(current) ;
+}
+
+# Declares the page id, converted from source with the file the target
+# included-target writes included at the attribute {included}; the check of
+# it, which runs first; the check of what it rendered; and its installation
+# into the directory html beside the Jamfile.
+local rule page ( id : source : included-target : included : current : linked * )
+{
+    if $(.source.$(id))
+    {
+        errors.user-error "$(id) has a page already; a library has one, and so does the"
+            "superproject (index)" ;
+    }
+    .source.$(id) = [ path.root [ path.make $(source) ] [ path.root
+        [ project.attribute [ $(current).project-module ] location ] [ path.pwd ] ] ] ;
+    .included.$(id) = $(included) ;
+    .sections.$(id) = [ path.glob-tree $(.source.$(id):D) : *.adoc : html ] ;
+    notfile doc-check : @webcpp-doc%doc-check : : <webcpp-doc-page>$(id) ;
+    make index.html : $(source) $(included-target) : @webcpp-doc%convert
+      : <webcpp-doc-page>$(id)
+        <dependency>doc-check
+        <dependency>/webcpp/doc-tools//node-modules
+        <conditional>@webcpp-doc%needs-reference ;
+    $(current).mark-target-as-always index.html ;
+    notfile rendered-check : @webcpp-doc%rendered-check : index.html $(linked)
+      : <webcpp-doc-page>$(id) ;
+    install html : index.html : <location>html <dependency>rendered-check ;
+    for local name in doc-check index.html rendered-check
+    {
+        $(current).mark-target-as-explicit $(name) ;
+    }
+}
+
+# webcpp.doc <library> : <page>.adoc ; a library's page, from its doc
+# Jamfile, which declares webcpp.reference <library> too.
+rule doc ( library : source )
+{
+    local current = [ here doc : libs/$(library)/doc ] ;
+    # A layout that is neither tree nor site stops the build as the Jamfile
+    # loads, as the index's does.
+    layout ;
+    page $(library) : $(source) : reference.adoc : reference : $(current)
+        : [ linked-pages $(library) ] ;
+}
+
+# The pages of the other libraries that the files of library link, each
+# named by its converted page, ../../<other>/doc//index.html from the doc
+# project: the check of the rendered page reads each for the anchors its
+# links name, so the build makes them first, and tells whose each is by its
+# path, under libs/<other>/doc/ of the build directory. Not the installed
+# pages: two libraries may link each other, and neither page's installation
+# then waits for the other's. Outside a git checkout, or without git, the
+# list is empty, and only the page's own check, which reads the files git
+# lists, names that.
+local rule linked-pages ( library )
+{
+    local repository = [ path.native $(.root)/libs/$(library) ] ;
+    local script = [ path.native $(.here)/doc-check.py ] ;
+    # Its standard error, a fault included, goes to b2's own, and never into
+    # the names.
+    local command = \"$(.python)\" \"$(script)\" --linked-libraries
+        --repository \"$(repository)\" --library $(library) ;
+    local listed = [ SHELL "$(command:J= )" : exit-status : strip-eol ] ;
+    if $(listed[2]) != 0
+    {
+        errors.user-error "webcpp.doc $(library): tools/doc/doc-check.py could not list the"
+            "pages libs/$(library) links; its message is above" ;
+    }
+    local pages ;
+    for local other in [ SPLIT_BY_CHARACTERS $(listed[1]) : "\n" ]
+    {
+        if ! [ MATCH "^([a-z][a-z0-9_]*)$" : $(other) ]
+        {
+            errors.user-error "webcpp.doc $(library): tools/doc/doc-check.py listed \"$(other)\","
+                "which is not a library's name" ;
+        }
+        if ! [ CHECK_IF_FILE [ path.native $(.root)/libs/$(other)/doc/Jamfile ] ]
+        {
+            errors.user-error "libs/$(library) links the page of $(other), and"
+                "libs/$(other)/doc/Jamfile does not exist" ;
+        }
+        pages += ../../$(other)/doc//index.html ;
+    }
+    return $(pages) ;
+}
+
+# webcpp.reference <library> : <requirements> * : <also-checked> * ; the
+# library's API reference, the target reference of its doc project, read with
+# the library's target and requirements, once its Doc Comments are also
+# checked with the requirements also-checked, when it gives them.
+rule reference ( library : requirements * : also-checked * )
+{
+    local current = [ here reference : libs/$(library)/doc ] ;
+    .reference.$(library) = true ;
+    make reference.adoc : : @webcpp-doc%write-reference
+      : <library>/webcpp/$(library)//$(library) $(requirements)
+        <webcpp-doc-page>$(library) <conditional>@webcpp-doc%needs-page ;
+    $(current).mark-target-as-always reference.adoc ;
+    # The check is a reference of its own, written under also-checked/ of the
+    # build directory, apart from the files reference.py writes beside the
+    # reference. It is the reference's sibling, never its dependency: a
+    # dependency's usage requirements, the other version's bindings among
+    # them, would reach the reference's parse. The target reference and the
+    # page (needs-reference) build both.
+    local checked ;
+    if $(also-checked)
+    {
+        .also-checked.$(library) = true ;
+        make also-checked.adoc : : @webcpp-doc%write-reference
+          : <library>/webcpp/$(library)//$(library) $(also-checked)
+            <webcpp-doc-page>$(library) <location-prefix>also-checked ;
+        $(current).mark-target-as-always also-checked.adoc ;
+        $(current).mark-target-as-explicit also-checked.adoc ;
+        checked = also-checked.adoc ;
+    }
+    alias reference : reference.adoc $(checked) ;
+}
+
+# A library's reference needs its page, as its page needs its reference: the
+# index links the page, which a doc Jamfile that declares the reference alone
+# never makes. The conditional stops the build, naming it, once every Jamfile
+# has loaded, so the two rules may come in either order.
+rule needs-page ( properties * )
+{
+    local id = [ feature.get-values <webcpp-doc-page> : $(properties) ] ;
+    if ! $(.source.$(id))
+    {
+        errors.user-error "webcpp.reference $(id): the library has no page, and"
+            "libs/$(id)/doc/Jamfile declares its reference alone; add"
+            "webcpp.doc $(id) : <page>.adoc ;" ;
+    }
+}
+
+# Where a page links another, by -sWEBCPP_INDEX: tree, the default, where b2
+# builds each, the index at doc/html/index.html and a library's at
+# libs/<name>/doc/html/index.html, or site, where b2 site publishes them
+# (tools/ci/assemble.py), the index at docs/, beside the site's own pages at
+# its root, and a library's at libs/<name>/. The index's table writes its
+# links with two attributes, {library-pages}<name>/{library-page}, and a
+# library's page links another's with two more,
+# link:{webcpp-libs}/<name>/{webcpp-page}#<anchor>[...]: {webcpp-libs}
+# reaches libs/ from the page.
+.index-links.tree = library-pages=../../libs/ library-page=doc/html/index.html ;
+.index-links.site = library-pages=../libs/ library-page= ;
+.webcpp-libs.tree = ../../.. ;
+.webcpp-page.tree = doc/html/index.html ;
+.webcpp-libs.site = .. ;
+.webcpp-page.site = index.html ;
+
+# Whether b2 site, or b2 site-serve, which builds it, is among the targets on
+# b2's command line: the words after b2's own name that are no option.
+local rule site-requested ( )
+{
+    local argv = [ modules.peek : ARGV ] ;
+    for local word in $(argv[2-])
+    {
+        if $(word) in site site-serve
+        {
+            return true ;
+        }
+    }
+}
+
+# The layout -sWEBCPP_INDEX names, tree or site; site when it names none and
+# b2 site is requested, so that b2 site alone builds the pages it publishes;
+# tree otherwise.
+local rule layout ( )
+{
+    local links = [ modules.peek : WEBCPP_INDEX ] ;
+    local site = [ site-requested ] ;
+    if $(site) && $(links) && $(links) != site
+    {
+        errors.user-error "-sWEBCPP_INDEX=$(links:J= ) builds the pages for the tree, and b2"
+            "site publishes them where the site serves them: leave -sWEBCPP_INDEX out, or"
+            "give -sWEBCPP_INDEX=site" ;
+    }
+    if $(site)
+    {
+        links ?= site ;
+    }
+    links ?= tree ;
+    if ! $(.index-links.$(links)) || $(links[2])
+    {
+        errors.user-error "-sWEBCPP_INDEX=$(links:J= ) is neither tree nor site: the pages"
+            "link one another where b2 builds them (tree, the default) or where the site"
+            "publishes them (site)" ;
+    }
+    return $(links) ;
+}
+
+# webcpp.index <page>.adoc ; the superproject's index page, from doc/Jamfile.
+rule index ( source )
+{
+    local layout = [ layout ] ;
+    .index-links = $(.index-links.$(layout)) ;
+    local current = [ here index : doc ] ;
+    make libraries.adoc : : @webcpp-doc%write-libraries : <webcpp-doc-page>index ;
+    $(current).mark-target-as-always libraries.adoc ;
+    $(current).mark-target-as-explicit libraries.adoc ;
+    page index : $(source) : libraries.adoc : libraries : $(current) ;
+}
+
+# A library's page needs its reference: the conditional stops the build,
+# naming what is missing, before b2 looks for a target that is not there.
+# It needs the check of the reference's Doc Comments with also-checked too,
+# when the reference declares one.
+rule needs-reference ( properties * )
+{
+    local id = [ feature.get-values <webcpp-doc-page> : $(properties) ] ;
+    if $(id) != index && ! $(.reference.$(id))
+    {
+        errors.user-error "webcpp.doc $(id): the page includes the library's reference,"
+            "and libs/$(id)/doc/Jamfile declares none; add webcpp.reference $(id) ;" ;
+    }
+    if $(id) != index && $(.also-checked.$(id))
+    {
+        return <dependency>also-checked.adoc ;
+    }
+}
+
+# A tool given with -s<variable>=<path>, made absolute, which must be a
+# file, or nothing when the variable is not given. b2 splits the value of -s
+# at its spaces, which a path may hold: the words are joined again.
+local rule given ( variable )
+{
+    local value = [ modules.peek : $(variable) ] ;
+    if $(value)
+    {
+        value = $(value:J=" ") ;
+        local tool = [ path.native [ path.root [ path.make $(value) ] [ path.pwd ] ] ] ;
+        if ! [ CHECK_IF_FILE $(tool) ]
+        {
+            errors.user-error "-s$(variable)=$(value) is not a file" ;
+        }
+        return $(tool) ;
+    }
+}
+
+# MrDocs: -sMRDOCS=<path>, else .local/mrdocs/bin/mrdocs, else on PATH.
+local rule mrdocs ( )
+{
+    local tool = [ given MRDOCS ] ;
+    local installed = [ path.native $(.root)/.local/mrdocs/bin/mrdocs ] ;
+    if ! $(tool) && [ CHECK_IF_FILE $(installed) ]
+    {
+        tool = $(installed) ;
+    }
+    tool ?= [ common.find-tool mrdocs ] ;
+    if ! $(tool)
+    {
+        errors.user-error "MrDocs, which writes a library's API reference, was not found:"
+            "no -sMRDOCS=<path> was given, there is none at $(installed), and none on"
+            "PATH. Install MrDocs 2026.9.29 there or on PATH, or give its path with"
+            "-sMRDOCS=<path>." ;
+    }
+    return $(tool) ;
+}
+
+# clang++, which dumps the declarations doc_comments.py reads: -sCLANG=<path>,
+# else on PATH.
+local rule clang ( )
+{
+    local tool = [ given CLANG ] ;
+    tool ?= [ common.find-tool clang++ ] ;
+    if ! $(tool)
+    {
+        errors.user-error "clang++, which reads a library's headers for"
+            "tools/doc/doc_comments.py, was not found: no -sCLANG=<path> was given, and"
+            "there is none on PATH. Install clang, or give the path of its clang++ with"
+            "-sCLANG=<path>." ;
+    }
+    return $(tool) ;
+}
+
+rule write-reference ( targets * : sources * : properties * )
+{
+    MRDOCS on $(targets) = [ mrdocs ] ;
+    CLANG on $(targets) = [ clang ] ;
+    PYTHON on $(targets) = $(.python) ;
+    SCRIPT on $(targets) = [ path.native $(.here)/reference.py ] ;
+    ROOT on $(targets) = [ path.native $(.root) ] ;
+    LIBRARY on $(targets) = [ feature.get-values <webcpp-doc-page> : $(properties) ] ;
+    STD on $(targets) = [ feature.get-values <cxxstd> : $(properties) ] ;
+    INCLUDES on $(targets) = [ feature.get-values <include> : $(properties) ] ;
+    EMSDK on $(targets) = [ feature.get-values <webcpp-emsdk> : $(properties) ] ;
+    DEFINES on $(targets) = [ feature.get-values <define> : $(properties) ] ;
+}
+
+actions write-reference
+{
+    "$(PYTHON)" "$(SCRIPT)" --library "$(LIBRARY)" --root "$(ROOT)" --output "$(<)" --mrdocs "$(MRDOCS)" --clang "$(CLANG)" --std "$(STD)" --include$(_)"$(INCLUDES)" --define$(_)"$(DEFINES)" --emsdk$(_)"$(EMSDK)"
+}
+
+# The page each library's doc Jamfile declares with webcpp.doc, as
+# "<library>=<page>", the page as the system writes it: what the build itself
+# knows, which libraries.py is given rather than read a Jamfile's text. Each
+# library's doc Jamfile is loaded, which a build loads only once it reaches
+# it; a library is a directory of libs/ with a build.jam, as the Jamroot
+# registers it.
+local rule declared-pages ( )
+{
+    local names = [ modules.peek project : JAMFILE ] ;
+    local pages ;
+    for local build in [ path.glob [ path.glob $(.root)/libs : * ] : build.jam ]
+    {
+        local library = [ path.basename [ path.parent $(build) ] ] ;
+        local doc = $(.root)/libs/$(library)/doc ;
+        if [ path.glob $(doc) : $(names) ]
+        {
+            project.load $(doc) ;
+        }
+        if $(.source.$(library))
+        {
+            local page = [ path.native $(.source.$(library)) ] ;
+            pages += "$(library)=$(page)" ;
+        }
+    }
+    return $(pages) ;
+}
+
+rule write-libraries ( targets * : sources * : properties * )
+{
+    PYTHON on $(targets) = $(.python) ;
+    SCRIPT on $(targets) = [ path.native $(.here)/libraries.py ] ;
+    ROOT on $(targets) = [ path.native $(.root) ] ;
+    PAGES on $(targets) = [ declared-pages ] ;
+    # A library whose page this build leaves out, a library it needs not found
+    # (webcpp.left-out), as <library>=<reason>.
+    local left ;
+    for local build in [ path.glob [ path.glob $(.root)/libs : * ] : build.jam ]
+    {
+        local library = [ path.basename [ path.parent $(build) ] ] ;
+        local why = [ modules.call-in webcpp : left-out $(library) ] ;
+        if $(why)
+        {
+            left += "$(library)=$(why)" ;
+        }
+    }
+    LEFT_OUT on $(targets) = $(left) ;
+}
+
+actions write-libraries
+{
+    "$(PYTHON)" "$(SCRIPT)" --root "$(ROOT)" --output "$(<)" --page$(_)"$(PAGES)" --left-out$(_)"$(LEFT_OUT)"
+}
+
+# doc-check.py on a library's page, whole, and on the files of its
+# repository; on the index page, alone.
+rule doc-check ( targets * : sources * : properties * )
+{
+    local id = [ feature.get-values <webcpp-doc-page> : $(properties) ] ;
+    PYTHON on $(targets) = $(.python) ;
+    SCRIPT on $(targets) = [ path.native $(.here)/doc-check.py ] ;
+    PAGE on $(targets) = [ path.native $(.source.$(id)) ] ;
+    SECTIONS on $(targets) = [ natives $(.sections.$(id)) ] ;
+    # Every page, the index included: its release notes include a library's
+    # changelog through {webcpp-root}/libs/<library>/....
+    WEBCPP_ROOT on $(targets) = [ path.native $(.root) ] ;
+    # Each empty for the index page, which leaves its option out, and TWINS
+    # for a library that declares none.
+    COMPLETE on $(targets) = ;
+    EXAMPLES on $(targets) = ;
+    TWINS on $(targets) = ;
+    REPOSITORY on $(targets) = ;
+    LIBRARY on $(targets) = ;
+    README on $(targets) = ;
+    LIBRARY_ROOT on $(targets) = ;
+    LINKED on $(targets) = ;
+    if $(id) != index
+    {
+        local library = $(.root)/libs/$(id) ;
+        COMPLETE on $(targets) = --complete ;
+        EXAMPLES on $(targets) = [ path.native $(library)/example ] ;
+        local twins = [ twins-of $(id) ] ;
+        TWINS on $(targets) = $(twins[2]) ;
+        REPOSITORY on $(targets) = [ path.native $(library) ] ;
+        LIBRARY on $(targets) = $(id) ;
+        README on $(targets) = [ path.native $(library)/README.md ] ;
+        LIBRARY_ROOT on $(targets) = [ path.native $(library) ] ;
+        LINKED on $(targets) = [ modules.call-in webcpp : linked-of $(id) ] ;
+    }
+}
+
+actions doc-check
+{
+    "$(PYTHON)" "$(SCRIPT)" --page "$(PAGE)" $(COMPLETE) --examples$(_)"$(EXAMPLES)" --twins$(_)"$(TWINS)" --repository$(_)"$(REPOSITORY)" --library$(_)"$(LIBRARY)" --readme$(_)"$(README)" --webcpp-root$(_)"$(WEBCPP_ROOT)" --library-root$(_)"$(LIBRARY_ROOT)" --linked$(_)"$(LINKED)" "$(SECTIONS)"
+}
+
+# What the oracle of library declares with webcpp.twins, its examples and
+# twins directories and its suffix, or nothing: tools/webcpp.jam loads the
+# library's test and example Jamfiles to know it, as declared-lanes does.
+local rule twins-of ( library )
+{
+    return [ modules.call-in webcpp : twins-of $(library) ] ;
+}
+
+# The counts of library that its page is given, each name=value: those of
+# tools/doc/counts.py from the programs tools/webcpp.jam recorded as it
+# loaded the library's test and example Jamfiles, from twins, and from the
+# library's own doc/counts.py. Computed as the page is
+# made, at every build; a count that cannot be made stops the build,
+# naming its fault.
+local rule counts ( library : twins * )
+{
+    local programs = [ modules.call-in webcpp : programs-of $(library) ] ;
+    local script = [ path.native $(.here)/counts.py ] ;
+    local directory = [ path.native $(.root)/libs/$(library) ] ;
+    local command = \"$(.python)\" \"$(script)\" --library \"$(directory)\" ;
+    for local program in $(programs)
+    {
+        command += --program \"$(program)\" ;
+    }
+    if $(twins)
+    {
+        command += --examples \"$(twins[1])\" --twins \"$(twins[2])\" --suffix \"$(twins[3])\" ;
+    }
+    # Its standard error, a fault or a warning of the library's own counts.py,
+    # goes to b2's own, and never into the attributes.
+    local counted = [ SHELL "$(command:J= )" : exit-status : strip-eol ] ;
+    if $(counted[2]) != 0
+    {
+        errors.user-error "webcpp.doc $(library): tools/doc/counts.py could not count what the"
+            "page states; its message is above" ;
+    }
+    local counts = [ SPLIT_BY_CHARACTERS $(counted[1]) : "\n" ] ;
+    # A value is English's, 1,234 from a thousand on.
+    for local count in $(counts)
+    {
+        if ! [ MATCH "^([a-z][a-z0-9-]*=[0-9]?[0-9]?[0-9](,[0-9][0-9][0-9])*)$" : $(count) ]
+        {
+            errors.user-error "webcpp.doc $(library): tools/doc/counts.py printed \"$(count)\","
+                "which is not a count name=<number>" ;
+        }
+    }
+    return $(counts) ;
+}
+
+rule convert ( targets * : sources * : properties * )
+{
+    local id = [ feature.get-values <webcpp-doc-page> : $(properties) ] ;
+    ASCIIDOCTOR on $(targets) = [ path.native $(.here)/node_modules/asciidoctor/bin/asciidoctor ] ;
+    EXTENSIONS on $(targets) = [ natives $(.here)/highlighter.mjs $(.here)/postprocess.mjs ] ;
+    INCLUDED on $(targets) = $(.included.$(id)) ;
+    # The included file, rooted here: Asciidoctor resolves a relative include
+    # against the page's own directory.
+    CWD on $(targets) = [ path.native [ path.pwd ] ] ;
+    local docinfo = [ path.native $(.here) ] ;
+    local root = [ path.native $(.root) ] ;
+    # webcpp-root is given to every page, the index included: its release
+    # notes include a library's changelog through
+    # {webcpp-root}/libs/<library>/....
+    local attributes = source-highlighter=hljs-static source-language=cpp docinfo=shared
+        docinfodir=$(docinfo) webfonts! reproducible nofooter webcpp-root=$(root) ;
+    if $(id) != index
+    {
+        local examples = [ path.native $(.root)/libs/$(id)/example ] ;
+        local twins = [ twins-of $(id) ] ;
+        local layout = [ layout ] ;
+        local library = [ path.native $(.root)/libs/$(id) ] ;
+        attributes += examples=$(examples) twins=$(twins[2]) library-root=$(library)
+            webcpp-libs=$(.webcpp-libs.$(layout)) webcpp-page=$(.webcpp-page.$(layout))
+            [ counts $(id) : $(twins) ] ;
+    }
+    else
+    {
+        attributes += $(.index-links) ;
+    }
+    ATTRIBUTES on $(targets) = $(attributes) ;
+}
+
+# Every message of Asciidoctor's fails the page: a warning, such as an
+# include that is not there, and the information, given with -v, of a
+# reference to no section.
+actions convert
+{
+    node "$(ASCIIDOCTOR)" -r$(_)"$(EXTENSIONS)" -v --failure-level INFO -S unsafe -a$(_)"$(ATTRIBUTES)" -a "$(INCLUDED)=$(>[2]:R=$(CWD))" -o "$(<)" "$(>[1])"
+}
+
+# A library's page is checked with the links of its library into the pages
+# of others, which its sources after the first are: the converted page of
+# each library it links, which doc-check.py names by its path.
+rule rendered-check ( targets * : sources * : properties * )
+{
+    local id = [ feature.get-values <webcpp-doc-page> : $(properties) ] ;
+    PYTHON on $(targets) = $(.python) ;
+    SCRIPT on $(targets) = [ path.native $(.here)/doc-check.py ] ;
+    # Each empty for the index page, which leaves its option out.
+    REPOSITORY on $(targets) = ;
+    LIBRARY on $(targets) = ;
+    WEBCPP_LIBS on $(targets) = ;
+    WEBCPP_PAGE on $(targets) = ;
+    if $(id) != index
+    {
+        local layout = [ layout ] ;
+        REPOSITORY on $(targets) = [ path.native $(.root)/libs/$(id) ] ;
+        LIBRARY on $(targets) = $(id) ;
+        WEBCPP_LIBS on $(targets) = $(.webcpp-libs.$(layout)) ;
+        WEBCPP_PAGE on $(targets) = $(.webcpp-page.$(layout)) ;
+    }
+}
+
+actions rendered-check
+{
+    "$(PYTHON)" "$(SCRIPT)" --rendered "$(>[1])" --repository$(_)"$(REPOSITORY)" --library$(_)"$(LIBRARY)" --webcpp-libs$(_)"$(WEBCPP_LIBS)" --webcpp-page$(_)"$(WEBCPP_PAGE)" --linked-page$(_)"$(>[2-])"
+}
+
+rule install-packages-in ( targets * : sources * : properties * )
+{
+    PYTHON on $(targets) = $(.python) ;
+    SCRIPT on $(targets) = [ path.native $(.root)/tools/node/install.py ] ;
+}
+
+# Installs the packages package-lock.json pins, from npm's cache when it holds
+# them, once per lockfile and never over an install in use, and links
+# node_modules to them (tools/node/install.py); the stamp says it ran. The
+# directory installed into is the one its sources, package.json and
+# package-lock.json, are found in: a Jamfile other than tools/doc's own uses
+# this rule too, and a module-level local set as doc.jam loads, such as
+# $(.here), would always be tools/doc's, never the caller's.
+actions install-packages-in
+{
+    set -e
+    here=`dirname "$(>[1])"`
+    "$(PYTHON)" "$(SCRIPT)" "$here"
+    echo installed > "$(<)"
+}

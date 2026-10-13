@@ -1,0 +1,34 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+project : requirements <library>/webcpp/pratt//pratt ;
+
+import webcpp ;
+
+webcpp.targets native emscripten wasip2 wasip3 ;
+
+webcpp.headers-alone pratt : ../include ;
+
+# config.hpp defines WEBCPP_PRATT_NO_EXCEPTIONS exactly when webcpp has no
+# exceptions, and keeps it when a developer defines it in a build that has
+# them.
+webcpp.compile config : config_test.cpp ;
+webcpp.compile config_developer_defined : config_test.cpp
+  : <define>WEBCPP_PRATT_NO_EXCEPTIONS <define>WEBCPP_TEST_PRATT_DEVELOPER_DEFINED ;
+# WEBCPP_NO_EXCEPTIONS, which a developer defines for every webcpp library at
+# once, defines WEBCPP_PRATT_NO_EXCEPTIONS in a build that has exceptions.
+webcpp.compile config_all_off : config_test.cpp
+  : <define>WEBCPP_NO_EXCEPTIONS <define>WEBCPP_TEST_PRATT_ALL_OFF ;
+
+webcpp.run errors : errors_test.cpp ;
+webcpp.run engine : engine_test.cpp ;
+webcpp.run sexpr : sexpr_test.cpp ;
+webcpp.run lexer : lexer_test.cpp ;
+webcpp.run calculator : calculator_test.cpp ;
+webcpp.run allocation : allocation_test.cpp ;
+webcpp.run depth : depth_test.cpp ;
+# The grammar of the openui REPL example, which the test shares with it.
+webcpp.run openui : openui_test.cpp : <include>../example ;

@@ -1,0 +1,653 @@
+From 1a90ac9dc6b5ceb51d39e4d302574e6815387f7b Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 08:19:19 -0400
+Subject: [PATCH 05/10] tools: programs named Boost's way, a page program's
+ variants, their manifest and their size table, kept by the CI
+
+---
+ .github/workflows/library.yml                 |   9 ++
+ AGENTS.md                                     |  70 ++++++++++
+ doc/releases/0.1.0.adoc                       |   5 +
+ tools/test/emscripten_test.py                 |  62 ++++++++-
+ .../browser_demo/test/variants/Jamfile        |  12 ++
+ .../browser_demo/test/variants/shell.cpp      |   9 ++
+ tools/variants/variants.py                    | 129 ++++++++++++++++++
+ tools/variants/variants_test.py               | 109 +++++++++++++++
+ tools/webcpp.jam                              |  78 +++++++++++
+ 9 files changed, 479 insertions(+), 4 deletions(-)
+ create mode 100644 tools/test/fixtures/browser_demo/test/variants/Jamfile
+ create mode 100644 tools/test/fixtures/browser_demo/test/variants/shell.cpp
+ create mode 100755 tools/variants/variants.py
+ create mode 100755 tools/variants/variants_test.py
+
+diff --git a/.github/workflows/library.yml b/.github/workflows/library.yml
+index 236cf16..3897f40 100644
+--- a/.github/workflows/library.yml
++++ b/.github/workflows/library.yml
+@@ -356,6 +356,15 @@ jobs:
+           if-no-files-found: error
+           retention-days: 7
+ 
++      # The size tables a lane wrote (webcpp.size-table), kept beyond the job.
++      - name: Upload the lane's size tables
++        if: always()
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: sizes-${{ matrix.id || matrix.name }}
++          path: bin/**/*.sizes.md
++          if-no-files-found: ignore
++
+   docs:
+     name: Documentation
+     needs: plan
+diff --git a/AGENTS.md b/AGENTS.md
+index 0b4edc9..e912e10 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -127,6 +127,10 @@ webcpp/
+     generated/        generated.jam, the rule of a library's generated files (chapter 9),
+                       generated.py, which runs a generator and checks or writes what it writes,
+                       and its test
++    variants/         variants.py, which writes the manifest of a page program's suspension
++                      variants (<name>.variants.json, for the page's loader) and the Markdown
++                      table of their sizes (<name>.sizes.md) that webcpp.variants and
++                      webcpp.size-table build (chapter 9), and its test
+     node/             install.py, which installs the Node packages of the documentation, an
+                       oracle and the lint once per lockfile, and its test
+     report/           report.py, lanes.py, pages.py: the test matrix, and the CI verdict
+@@ -1601,6 +1605,62 @@ webcpp.data         <directory> + ;   (requirements)
+ | `webcpp.headers-alone` | each public header compiles alone | one test per header, `alone-<path>` with `/` as `-` (`alone-xactor-scheduler`), against `/webcpp/<library>//<library>` and the requirements given, for the targets given or the Jamfile's; `only` restricts a call to the public headers its globs match, relative to `<include-root>/webcpp/` (`wasi/http/response.hpp`), a glob that matches none stopping the build; a library may call it several times, and a header two calls take stops the build, naming it |
+ | `webcpp.data` | | requirements, or usage requirements, that give a program of `webcpp.run` or `webcpp.run-fail` the absolute directories, each read at the same path on every target: on wasip2 and wasip3 wasmtime preopens it (`wasmtime --dir="<directory>" <program>`); natively and on emscripten (`-sNODERAWFS=1`) the program reads the host's files already. A relative directory stops the build, as does one whose path holds `"`, `$` or a backquote, which the shell would read inside `--dir="..."`, naming the character |
+ 
++**A program a page loads, in both variants** (`tools/webcpp.jam`). A page
++that runs a program which suspends loads the variant its browser supports: a
++test or example Jamfile declares the program once, with its manifest and the
++table of its sizes:
++
++```
++webcpp.variants   <name> : <sources> + : <requirements> * ;
++webcpp.size-table <name> : <variants> + ;
++```
++
++| Rule | Builds | Notes |
++| --- | --- | --- |
++| `webcpp.variants` | the explicit executable `<name>` and the explicit `<name>.variants.json` | on emscripten alone (`<build>no` elsewhere), linked with `-sMODULARIZE -sEXPORT_ES6`, an ES module whose factory a page calls, and never with `-sNODERAWFS=1`: node never runs it, so it is no test, and neither counted on a page nor listed by `declared-targets`. The manifest, beside the `jspi` artifact, builds the program as `<name>/<webcpp-suspend>jspi` and `<name>/<webcpp-suspend>asyncify` and names, for each variant, its `script` relative to itself, with `/`, and the `bytes` of the `.wasm` beside it, in sorted keys and four spaces (`tools/variants/variants.py manifest`), which a page's loader reads |
++| `webcpp.size-table` | the explicit `<name>.sizes.md` | on emscripten alone; a Markdown table of the manifest of each `<variants>` program of the Jamfile, one row per program, sorted, with its `jspi` and `asyncify` sizes and their ratio, which the build also prints (`tools/variants/variants.py table`), and which the CI keeps from an own lane's job as the artifact `sizes-<id>` (CI, below) |
++
++A manifest, `page.variants.json`:
++
++```json
++{
++    "asyncify": {
++        "bytes": 297636,
++        "script": "webcpp-suspend-asyncify/page-60-d-asyncify.js"
++    },
++    "jspi": {
++        "bytes": 102988,
++        "script": "page-60-d-jspi.js"
++    }
++}
++```
++
++and its table:
++
++```
++| program | jspi | asyncify | asyncify / jspi |
++| --- | ---: | ---: | ---: |
++| page | 102,988 | 297,636 | 2.89 |
++```
++
++Such a program is named Boost's way, by the tag rule `webcpp.suspend-tag`,
++`<tag>@webcpp%suspend-tag`, which a library may also give its programs as a
++usage requirement: on emscripten an executable is named by
++`common.format-name`'s tags joined by `-`, the toolset's version alone (`60`
++for Emscripten 6.0.11), `d` for a debug build and the variant, so
++`page-60-d-jspi.js`, `webcpp-suspend-asyncify/page-60-d-asyncify.js` and, in
++a release build, `page-60-jspi.js`; every other target, and every other
++toolset, keeps its name. `tools/test/emscripten_test.py` pins the names, the
++manifest, the table and that a native build builds none of them, on the
++fixture browser_demo's `test/variants/Jamfile`:
++
++```
++import webcpp ;
++
++webcpp.variants shell : shell.cpp ;
++webcpp.size-table shell : shell ;
++```
++
+ **WebAssembly components** (`tools/component/component.jam`). A library's
+ `build.jam` declares the C bindings of a world, and its test and example
+ Jamfiles the HTTP components that wasmtime serves:
+@@ -2133,6 +2193,11 @@ jobs:
+     --dump-tests --out-xml=<id>.xml toolset=<toolset> [<options>]
+     <directory>//<lane> ...`, and it uploads `<id>.xml` as a lane uploads its
+     XML, the artifact `lane-<id>`.
++  - Every own lane's job uploads the size tables its lane wrote
++    (`bin/**/*.sizes.md`, `webcpp.size-table`), whatever its outcome, as the
++    artifact `sizes-<id>`, or `sizes-<name>` for one that names no target,
++    so that the sizes of a page program's variants are kept beyond the job;
++    a lane that wrote none uploads nothing.
+   - An own lane of the kind `original` has the CI's Node, its entry's
+     `node` (`&node`): an oracle runs npm and its original with it, and a
+     driven test its driver, natively too. Without it, a native one would run
+@@ -2454,6 +2519,7 @@ superproject's new `main`. `main` is the only branch.
+     `tools/doc/doc_check_test.py`, `tools/doc/doc_comments_test.py`,
+     `tools/doc/extensions_test.py`, `tools/doc/counts_test.py`,
+     `tools/oracle/twins_test.py`, `tools/oracle/compare_test.py`,
++    `tools/variants/variants_test.py`,
+     `tools/example/run_example_test.py`, `tools/component/serve_test.py`,
+     `tools/drive/drive_test.py`, `tools/node/install_test.py`,
+     `tools/ci/matrix_test.py`, `tools/ci/assemble_test.py`,
+@@ -2685,6 +2751,10 @@ Each of these was measured; each has cost time.
+   Apple's clang searches `/usr/local/include` before every `-isystem`
+   directory, so clang keeps Boost's directory as `-I` and marks the headers
+   `<boost/...>` names as system ones (`--system-header-prefix=boost/`).
++- **A `<tag>` given as a usage requirement renames the dependent's
++  executable** (measured, `.superpowers/sdd/plan-reviews/asio-plan/b2-tag`),
++  and a target whose sources name `<program>/<feature>value` builds that
++  program with that value.
+ - **A checkout path that holds a space** builds: every path b2 hands to an
+   action is quoted, and the tests of the build run in such a path.
+ - **A target named `release-<word>` is no target.** b2 reads it as the
+diff --git a/doc/releases/0.1.0.adoc b/doc/releases/0.1.0.adoc
+index 95ccb46..4039417 100644
+--- a/doc/releases/0.1.0.adoc
++++ b/doc/releases/0.1.0.adoc
+@@ -154,6 +154,11 @@ with the first status it is given.
+ that Node runs, which would pass having run nothing.
+ * Fixed a test passing under Node when its `main` never ran, or when
+ `-sMODULARIZE` came among other flags of one value.
++* Added `webcpp.variants` and `webcpp.size-table`: a page's program in both
++suspension variants, its manifest for the page's loader, and its sizes,
++kept by the CI.
++* Added the tag rule `webcpp.suspend-tag`, which names an emscripten program
++Boost's way, with its suspension variant.
+ 
+ [#webcpp-0-1-0-compilers-tested]
+ == Compilers tested
+diff --git a/tools/test/emscripten_test.py b/tools/test/emscripten_test.py
+index 69c702f..6364a82 100644
+--- a/tools/test/emscripten_test.py
++++ b/tools/test/emscripten_test.py
+@@ -18,13 +18,16 @@ needs, asyncify in a directory of its own, and natively adds nothing. Every prog
+ the test support (/webcpp//node-test), whose fixture library node_test_demo pins each case's exact
+ status: a main that did not finish fails, the first status given through webcpp::test::exit_status
+ ends the test at once and is kept, and a test past its bound is stopped; a program node runs that
+-links -sMODULARIZE or -sEXPORT_ES6, which node would load without running, is refused. Each case
+-builds a scratch superproject with browser_demo and node_test_demo, whose path holds a space, and
+-the emsdk linked into its .local; Emscripten's cache is the one the harness gives every b2. Run
+-with the names of some cases to run only those."""
++links -sMODULARIZE or -sEXPORT_ES6, which node would load without running, is refused. A program a
++page loads (webcpp.variants) is named Boost's way in each variant, debug and release, with its
++manifest beside its jspi artifact and its size table (webcpp.size-table), and none of them is built
++natively. Each case builds a scratch superproject with browser_demo and node_test_demo, whose path
++holds a space, and the emsdk linked into its .local; Emscripten's cache is the one the harness
++gives every b2. Run with the names of some cases to run only those."""
+ 
+ from __future__ import annotations
+ 
++import json
+ import re
+ import subprocess
+ import sys
+@@ -313,6 +316,53 @@ def test_link_only_unresolved_symbol_fails(root):
+     assert not passed(result), result.stdout[-4000:]
+ 
+ 
++def test_artifacts_are_named_boost_s_way(root):
++    # common.format-name's tags joined by '-': the toolset's version alone (60), d for debug,
++    # and the variant; a release drops the d; asyncify builds in its own directory.
++    for request, name in (((), 'shell-60-d-jspi.js'),
++                          (('webcpp-suspend=asyncify',), 'shell-60-d-asyncify.js'),
++                          (('variant=release',), 'shell-60-jspi.js')):
++        result = harness.run_b2(root, '-a', *EMSCRIPTEN, *request,
++                                'libs/browser_demo/test/variants//shell')
++        harness.expect(result, True)
++        assert built(root, name), (request, name, sorted((root / 'bin').rglob('shell*.js')))
++    asyncify = built(root, 'shell-60-d-asyncify.js')
++    assert asyncify[0].parent.name == 'webcpp-suspend-asyncify', asyncify
++
++
++def test_variants_write_the_manifest_beside_the_jspi_artifact(root):
++    result = harness.run_b2(root, '-a', '-d+2', *EMSCRIPTEN,
++                            'libs/browser_demo/test/variants//shell.variants.json')
++    harness.expect(result, True)
++    manifests = built(root, 'shell.variants.json')
++    assert len(manifests) == 1, manifests
++    manifest = json.loads(manifests[0].read_text())
++    assert manifest['jspi']['script'] == 'shell-60-d-jspi.js', manifest
++    assert manifest['asyncify']['script'] == (
++        'webcpp-suspend-asyncify/shell-60-d-asyncify.js'), manifest
++    for entry in manifest.values():
++        wasm = (manifests[0].parent / entry['script']).with_suffix('.wasm')
++        assert wasm.stat().st_size == entry['bytes'], (entry, wasm)
++    # A page loads the glue as an ES module.
++    assert '-sMODULARIZE' in link_line(root, result, 'shell-60-d-jspi'), result.stdout[-4000:]
++    assert '-sEXPORT_ES6' in link_line(root, result, 'shell-60-d-asyncify')
++
++
++def test_the_size_table_lists_every_variant(root):
++    result = harness.run_b2(root, '-a', *EMSCRIPTEN,
++                            'libs/browser_demo/test/variants//shell.sizes.md')
++    harness.expect(result, True, '| shell |')
++    tables = built(root, 'shell.sizes.md')
++    assert len(tables) == 1 and tables[0].read_text().startswith('| program | jspi |'), tables
++
++
++def test_variants_are_not_built_natively(root):
++    harness.without_emscripten(root)
++    result = harness.run_b2(root, '-a', 'libs/browser_demo/test/variants//shell.sizes.md')
++    harness.expect(result, True)
++    assert not built(root, 'shell.sizes.md') and not built(root, 'shell.variants.json')
++
++
+ def test_drive_runs_its_program_on_each_target(root):
+     # The test builds driven and runs `node drive.mjs --program <program>`: the program's
+     # JavaScript on emscripten, the program itself natively.
+@@ -456,6 +506,10 @@ CASES = [prepared(case) for case in (
+     test_a_failure_reaches_the_report,
+     test_link_only_builds_and_never_runs,
+     test_link_only_unresolved_symbol_fails,
++    test_artifacts_are_named_boost_s_way,
++    test_variants_write_the_manifest_beside_the_jspi_artifact,
++    test_the_size_table_lists_every_variant,
++    test_variants_are_not_built_natively,
+     test_drive_runs_its_program_on_each_target,
+     test_a_hanging_drive_is_stopped_within_its_bound,
+     test_a_drive_outside_every_lane_is_refused,
+diff --git a/tools/test/fixtures/browser_demo/test/variants/Jamfile b/tools/test/fixtures/browser_demo/test/variants/Jamfile
+new file mode 100644
+index 0000000..3cc3009
+--- /dev/null
++++ b/tools/test/fixtures/browser_demo/test/variants/Jamfile
+@@ -0,0 +1,12 @@
++# Copyright (c) 2026 WebCpp.org
++#
++# Distributed under the Boost Software License, Version 1.0. (See
++# accompanying file LICENSE_1_0.txt or copy at
++# https://www.boost.org/LICENSE_1_0.txt)
++
++# A program as a page loads it, in both suspension variants, named Boost's
++# way, with its manifest, and their sizes.
++import webcpp ;
++
++webcpp.variants shell : shell.cpp ;
++webcpp.size-table shell : shell ;
+diff --git a/tools/test/fixtures/browser_demo/test/variants/shell.cpp b/tools/test/fixtures/browser_demo/test/variants/shell.cpp
+new file mode 100644
+index 0000000..a787e57
+--- /dev/null
++++ b/tools/test/fixtures/browser_demo/test/variants/shell.cpp
+@@ -0,0 +1,9 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++int main() {
++    return 0;
++}
+diff --git a/tools/variants/variants.py b/tools/variants/variants.py
+new file mode 100755
+index 0000000..fbd286c
+--- /dev/null
++++ b/tools/variants/variants.py
+@@ -0,0 +1,129 @@
++#!/usr/bin/env python3
++# Copyright (c) 2026 WebCpp.org
++#
++# Distributed under the Boost Software License, Version 1.0. (See
++# accompanying file LICENSE_1_0.txt or copy at
++# https://www.boost.org/LICENSE_1_0.txt)
++
++"""Writes the manifest of a page program's suspension variants, and the table of their sizes.
++
++Usage: variants.py manifest --out FILE --jspi SCRIPT --asyncify SCRIPT
++       variants.py table --out FILE MANIFEST...
++
++manifest writes FILE, <name>.variants.json, which a page's loader reads: for each variant, the
++script, its JavaScript glue, relative to FILE's directory and written with /, and the size in bytes
++of the .wasm beside it. Keys are sorted, indented by four spaces. A script or a .wasm that does not
++exist is refused before anything is written.
++
++table writes FILE, a Markdown table of every manifest's sizes, one row per program named by its
++manifest's file name less .variants.json, sorted, with asyncify's size over jspi's, and prints it.
++A manifest that lacks a variant, its script or a positive integer size is refused, naming it.
++
++A failure is a line on the standard error and status 1; a usage error is status 2.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import os
++import sys
++from pathlib import Path, PurePath
++from typing import Any
++
++VARIANTS = ('jspi', 'asyncify')
++SUFFIX = '.variants.json'
++
++
++class Refused(Exception):
++    """What makes variants.py stop with status 1, as the line it prints."""
++
++
++def manifest(out: Path, scripts: dict[str, Path]) -> None:
++    """Writes out, naming each variant's script relative to out's directory and its .wasm's
++    size; refuses a script or a .wasm that does not exist before it writes anything."""
++    entries: dict[str, dict[str, Any]] = {}
++    for variant, script in scripts.items():
++        wasm = script.with_suffix('.wasm')
++        for path in (script, wasm):
++            if not path.is_file():
++                raise Refused(f'{path} does not exist')
++        relative = os.path.relpath(script, out.parent)
++        entries[variant] = {'bytes': wasm.stat().st_size,
++                            'script': PurePath(relative).as_posix()}
++    out.write_text(json.dumps(entries, indent=4, sort_keys=True) + '\n')
++
++
++def sizes(path: Path) -> tuple[int, int]:
++    """The sizes, jspi's and asyncify's, that the manifest path records; refuses one that is not
++    a manifest, naming path and what it lacks."""
++    try:
++        read = json.loads(path.read_text())
++    except (OSError, ValueError) as error:
++        raise Refused(f'{path}: cannot be read as JSON: {error}') from error
++    if not isinstance(read, dict):
++        raise Refused(f'{path}: is not a JSON object')
++    found: list[int] = []
++    for variant in VARIANTS:
++        entry = read.get(variant)
++        if not isinstance(entry, dict):
++            raise Refused(f'{path}: has no variant {variant}')
++        if not isinstance(entry.get('script'), str):
++            raise Refused(f'{path}: {variant} has no script string')
++        size = entry.get('bytes')
++        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
++            raise Refused(f'{path}: {variant} has no positive integer bytes')
++        found.append(size)
++    return found[0], found[1]
++
++
++def program(path: Path) -> str:
++    """The program a manifest is of: its file name less .variants.json."""
++    name = path.name
++    return name[:-len(SUFFIX)] if name.endswith(SUFFIX) else name
++
++
++def table(out: Path, manifests: list[Path]) -> str:
++    """Writes out, the Markdown table of the manifests' sizes, and returns it; refuses a manifest
++    that is not one before it writes anything."""
++    rows = sorted((program(path), *sizes(path)) for path in manifests)
++    lines = ['| program | jspi | asyncify | asyncify / jspi |', '| --- | ---: | ---: | ---: |']
++    lines += [f'| {name} | {jspi:,} | {asyncify:,} | {asyncify / jspi:.2f} |'
++              for name, jspi, asyncify in rows]
++    text = '\n'.join(lines) + '\n'
++    out.write_text(text)
++    return text
++
++
++def parser() -> argparse.ArgumentParser:
++    """The command line: the subcommands manifest and table."""
++    parsed = argparse.ArgumentParser(
++        prog='variants.py', description="A page program's variants' manifest, and their sizes.")
++    commands = parsed.add_subparsers(dest='command', required=True)
++    written = commands.add_parser('manifest', help='write the manifest of a program')
++    written.add_argument('--out', type=Path, required=True)
++    for variant in VARIANTS:
++        written.add_argument(f'--{variant}', type=Path, required=True)
++    sized = commands.add_parser('table', help='write the table of the manifests\' sizes')
++    sized.add_argument('--out', type=Path, required=True)
++    sized.add_argument('manifests', type=Path, nargs='+')
++    return parsed
++
++
++def main(argv: list[str]) -> int:
++    """Runs the subcommand argv names; 0 when it is done, 1 when it refused."""
++    arguments = parser().parse_args(argv)
++    try:
++        if arguments.command == 'manifest':
++            manifest(arguments.out, {variant: getattr(arguments, variant)
++                                     for variant in VARIANTS})
++        else:
++            sys.stdout.write(table(arguments.out, arguments.manifests))
++    except Refused as refused:
++        print(f'variants.py: {refused}', file=sys.stderr)
++        return 1
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main(sys.argv[1:]))
+diff --git a/tools/variants/variants_test.py b/tools/variants/variants_test.py
+new file mode 100755
+index 0000000..49497bd
+--- /dev/null
++++ b/tools/variants/variants_test.py
+@@ -0,0 +1,109 @@
++#!/usr/bin/env python3
++# Copyright (c) 2026 WebCpp.org
++#
++# Distributed under the Boost Software License, Version 1.0. (See
++# accompanying file LICENSE_1_0.txt or copy at
++# https://www.boost.org/LICENSE_1_0.txt)
++
++"""Checks tools/variants/variants.py: a manifest names each variant's script relative to itself and
++the size of its .wasm, in sorted keys and four spaces; an artifact without its .wasm is refused
++before anything is written; a table lists each program with its sizes and their ratio, in the file
++and on the standard output; and a manifest that is not one is refused, naming it. Run with the
++names of some cases to run only those."""
++
++from __future__ import annotations
++
++import json
++import subprocess
++import sys
++import tempfile
++from collections.abc import Callable
++from pathlib import Path
++
++VARIANTS = Path(__file__).resolve().parent / 'variants.py'
++
++
++def scripts(root: Path) -> tuple[Path, Path]:
++    """A jspi and an asyncify artifact as b2 lays them out, each with its .wasm."""
++    jspi = root / 'page-60-d-jspi.js'
++    asyncify = root / 'webcpp-suspend-asyncify/page-60-d-asyncify.js'
++    for script, size in ((jspi, 102988), (asyncify, 297636)):
++        script.parent.mkdir(parents=True, exist_ok=True)
++        script.write_text('// glue\n')
++        script.with_suffix('.wasm').write_bytes(b'\0' * size)
++    return jspi, asyncify
++
++
++def variants(*arguments: Path | str) -> subprocess.CompletedProcess[str]:
++    """variants.py run with arguments, as the build runs it."""
++    return subprocess.run([sys.executable, str(VARIANTS), *map(str, arguments)],
++                          capture_output=True, text=True, check=False, timeout=120)
++
++
++def test_manifest_names_each_artifact_from_its_own_directory(root: Path) -> None:
++    jspi, asyncify = scripts(root)
++    out = root / 'page.variants.json'
++    result = variants('manifest', '--out', out, '--jspi', jspi, '--asyncify', asyncify)
++    assert result.returncode == 0, result.stderr
++    assert json.loads(out.read_text()) == {
++        'asyncify': {'bytes': 297636, 'script': 'webcpp-suspend-asyncify/page-60-d-asyncify.js'},
++        'jspi': {'bytes': 102988, 'script': 'page-60-d-jspi.js'}}
++    assert out.read_text().startswith('{\n    "asyncify": {\n'), out.read_text()
++
++
++def test_manifest_refuses_an_artifact_without_its_wasm(root: Path) -> None:
++    jspi, asyncify = scripts(root)
++    asyncify.with_suffix('.wasm').unlink()
++    result = variants('manifest', '--out', root / 'page.variants.json', '--jspi', jspi,
++                      '--asyncify', asyncify)
++    assert result.returncode == 1, result.returncode
++    assert f'{asyncify.with_suffix(".wasm")} does not exist' in result.stderr, result.stderr
++    assert not (root / 'page.variants.json').exists()
++
++
++def test_table_lists_each_program_with_its_ratio(root: Path) -> None:
++    jspi, asyncify = scripts(root)
++    manifest = root / 'page.variants.json'
++    variants('manifest', '--out', manifest, '--jspi', jspi, '--asyncify', asyncify)
++    out = root / 'sizes.md'
++    result = variants('table', '--out', out, manifest)
++    assert result.returncode == 0, result.stderr
++    table = ('| program | jspi | asyncify | asyncify / jspi |\n'
++             '| --- | ---: | ---: | ---: |\n'
++             '| page | 102,988 | 297,636 | 2.89 |\n')
++    assert out.read_text() == table and result.stdout == table, (out.read_text(), result.stdout)
++
++
++def test_table_refuses_a_manifest_that_is_not_one(root: Path) -> None:
++    bad = root / 'bad.variants.json'
++    bad.write_text('{"jspi": {}}\n')
++    result = variants('table', '--out', root / 'sizes.md', bad)
++    assert result.returncode == 1 and f'{bad}: ' in result.stderr, result.stderr
++
++
++CASES: list[Callable[[Path], None]] = [
++    test_manifest_names_each_artifact_from_its_own_directory,
++    test_manifest_refuses_an_artifact_without_its_wasm,
++    test_table_lists_each_program_with_its_ratio,
++    test_table_refuses_a_manifest_that_is_not_one,
++]
++
++
++def main(argv: list[str]) -> int:
++    """Runs every case, or those argv names, each in a directory of its own."""
++    unknown = set(argv) - {case.__name__ for case in CASES}
++    if unknown:
++        print(f'variants_test: no case named {", ".join(sorted(unknown))}', file=sys.stderr)
++        return 2
++    for case in CASES:
++        if argv and case.__name__ not in argv:
++            continue
++        with tempfile.TemporaryDirectory(prefix='webcpp variants ') as scratch:
++            case(Path(scratch))
++        print(f'{case.__name__}: ok')
++    print('variants_test: ok')
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main(sys.argv[1:]))
+diff --git a/tools/webcpp.jam b/tools/webcpp.jam
+index 350d0dc..77cdd96 100644
+--- a/tools/webcpp.jam
++++ b/tools/webcpp.jam
+@@ -21,6 +21,12 @@
+ #     webcpp.link name : sources + : requirements * : targets * ;
+ #     webcpp.data directories + ;  (requirements: a run's data on WASI)
+ #
++# the rules of a program a page loads, on emscripten alone, in both
++# suspension variants, its manifest and the table of their sizes:
++#
++#     webcpp.variants name : sources + : requirements * ;
++#     webcpp.size-table name : variants + ;
++#
+ # the rule with which any test or example Jamfile of a library declares one
+ # of its own lanes, which `b2 declared-lanes` lists, once per target it
+ # runs on:
+@@ -71,6 +77,7 @@
+ # without a word. On emscripten, b2's toolset runs a program with node
+ # itself, and a build that also gives testing.launcher stops, naming it.
+ import alias ;
++import common ;
+ import errors ;
+ import feature ;
+ import make ;
+@@ -157,6 +164,10 @@ if [ os.name ] = NT { .python = python ; } else { .python = python3 ; }
+ # action that runs it starts in the directory b2 was started in.
+ .runner = [ path.native [ path.join $(.tools) example/run_example.py ] ] ;
+ 
++# The script that writes a page program's manifest and the table of sizes,
++# as the runner is.
++.variants-script = [ path.native [ path.join $(.tools) variants/variants.py ] ] ;
++
+ # The Boost.Test framework of webcpp.boost-test, beside this file, as a plain
+ # file of /webcpp, this file's own project, by its location relative to the
+ # superproject: a suite's obj gets it the way throw_exception and boost_json
+@@ -436,6 +447,73 @@ rule link ( name : sources + : requirements * : targets * )
+     }
+ }
+ 
++# The name of a program on emscripten, Boost's way: its tags joined by '-',
++# the toolset's version (60 for Emscripten 6.0.11, which common.jam knows by
++# its version alone), d for a debug build, and the variant:
++# page-60-d-jspi.js. Other targets, and other toolsets, keep their names.
++rule suspend-tag ( name : type ? : property-set )
++{
++    if $(type) = EXE && [ $(property-set).get <toolset> ] = emscripten
++    {
++        return [ common.format-name <base> <toolset> <threading> <runtime>
++            <property:webcpp-suspend> : $(name) : $(type) : $(property-set) ] ;
++    }
++}
++
++# A program a page loads, in both suspension variants, and its manifest:
++# the explicit executable <name>, on emscripten alone, linked as an ES
++# module whose factory a page calls (-sMODULARIZE -sEXPORT_ES6), named
++# Boost's way; and the explicit <name>.variants.json, beside the jspi
++# artifact, which names each variant's script relative to itself and the
++# size of its .wasm, which webcpp-asio-loader.mjs reads. Never run by
++# node: no -sNODERAWFS=1.
++rule variants ( name : sources + : requirements * )
++{
++    local only = <webcpp-targets>emscripten <conditional>@webcpp%filter ;
++    exe $(name) : $(sources)
++      : $(requirements) $(only) $(.handler) <tag>@webcpp%suspend-tag
++        <linkflags>-sMODULARIZE <linkflags>-sEXPORT_ES6 ;
++    make $(name).variants.json
++      : $(name)/<webcpp-suspend>jspi $(name)/<webcpp-suspend>asyncify
++      : @webcpp%write-variants : $(only) ;
++    local found = [ where ] ;
++    $(found[1]).mark-target-as-explicit $(name) $(name).variants.json ;
++}
++
++rule write-variants ( targets * : sources * : properties * )
++{
++    PYTHON on $(targets) = $(.python) ;
++    SCRIPT on $(targets) = $(.variants-script) ;
++}
++
++actions write-variants
++{
++    "$(PYTHON)" "$(SCRIPT)" manifest --out "$(<)" --jspi "$(>[1])" --asyncify "$(>[2])"
++}
++
++# The sizes of the variants of each program webcpp.variants declared in this
++# Jamfile under the names variants: the explicit <name>.sizes.md, a Markdown
++# table the build also prints, and which the CI keeps from an own lane's job
++# (.github/workflows/library.yml, the artifact sizes-<lane>).
++rule size-table ( name : variants + )
++{
++    make $(name).sizes.md : $(variants).variants.json : @webcpp%write-size-table
++      : <webcpp-targets>emscripten <conditional>@webcpp%filter ;
++    local found = [ where ] ;
++    $(found[1]).mark-target-as-explicit $(name).sizes.md ;
++}
++
++rule write-size-table ( targets * : sources * : properties * )
++{
++    PYTHON on $(targets) = $(.python) ;
++    SCRIPT on $(targets) = $(.variants-script) ;
++}
++
++actions write-size-table
++{
++    "$(PYTHON)" "$(SCRIPT)" table --out "$(<)" "$(>)"
++}
++
+ # A test that passes when sources compile, which builds no program.
+ rule compile ( name : sources + : requirements * : targets * )
+ {
+-- 
+2.55.0
+

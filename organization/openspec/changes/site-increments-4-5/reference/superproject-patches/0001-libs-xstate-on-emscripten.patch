@@ -1,0 +1,50 @@
+From 7ee63102851d197459dd2054aef0845230b7abb6 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 12:58:38 -0400
+Subject: [PATCH 1/8] libs/xstate: on emscripten
+
+xstate's machine core builds and runs on emscripten, its tests and examples
+under node; the actor layer follows xactor there. README.md's and
+AGENTS.md's tables of the libraries say so.
+---
+ AGENTS.md   | 2 +-
+ README.md   | 2 +-
+ libs/xstate | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 4f4d260..e04a3c9 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -68,7 +68,7 @@ for web developers and for AI developers (chapter 13).
+ | Library | What it is | Targets | State |
+ | --- | --- | --- | --- |
+ | xactor | a deterministic actor system, webcpp's own | native, wasip2, wasip3 (`xactor_asio` native only) | a submodule at `libs/xactor`; the model for every port |
+-| xstate | a port of XState 5.33.2's state machines and actors; depends on xactor and Boost.JSON | native, wasip2, wasip3; its oracle lane | a submodule at `libs/xstate`; the first user of the shared oracle (chapter 5) |
++| xstate | a port of XState 5.33.2's state machines and actors; depends on xactor and Boost.JSON | native, wasip2, wasip3 (its machine core also on emscripten); its oracle lane | a submodule at `libs/xstate`; the first user of the shared oracle (chapter 5) |
+ | pratt | a Pratt parser engine, generic through concepts, with a calculator built on it, webcpp's own | native, emscripten, wasip2, wasip3 | a submodule at `libs/pratt`; born with the allocation rule (chapter 6) |
+ | wasi | header-only helpers for C++ built as WebAssembly components: the HTTP handler a component exports, webcpp's own | wasip2, wasip3 (`response.hpp` also natively); its own lanes `http`, the components wasmtime serves | a submodule at `libs/wasi`; the first library built as components (chapter 9) |
+ | trystero | a port of Trystero 0.26.0, serverless WebRTC rooms | native, emscripten; its own lanes `oracle` and `interop` | a submodule at `libs/trystero`; born with the allocation rule through `std::pmr` |
+diff --git a/README.md b/README.md
+index 0b01b1d..0127a76 100644
+--- a/README.md
++++ b/README.md
+@@ -23,7 +23,7 @@ system.
+ | Library | What it is | Targets |
+ | --- | --- | --- |
+ | [xactor](https://github.com/webcpporg/xactor) | A header-only, deterministic actor system: actors that handle one message at a time, with fuel per execution, timers and a lifecycle. | native, wasip2, wasip3 |
+-| [xstate](https://github.com/webcpporg/xstate) | A header-only port of XState's state machines and actors: machines read from XState's JSON config, stepped by XState's pure functions or run as actors on xactor. Ports XState 5.33.2, and is proven against it. | native, wasip2, wasip3 |
++| [xstate](https://github.com/webcpporg/xstate) | A header-only port of XState's state machines and actors: machines read from XState's JSON config, stepped by XState's pure functions or run as actors on xactor. Ports XState 5.33.2, and is proven against it. | native, wasip2, wasip3 (its machine core also on emscripten) |
+ | [pratt](https://github.com/webcpporg/pratt) | A header-only Pratt parser engine, generic through concepts, with a calculator built on it, exact in decimal by default; a library of webcpp's own. | native, emscripten, wasip2, wasip3 |
+ | [wasi](https://github.com/webcpporg/wasi) | Header-only helpers for C++ built as WebAssembly components: the HTTP handler a component exports on wasip2 and wasip3, and the macros a program writes its main between; a library of webcpp's own. | wasip2, wasip3 (its response also natively) |
+ | [trystero](https://github.com/webcpporg/trystero) | Serverless WebRTC rooms, wire compatible with Trystero: peers meet over public Nostr relays, natively over libdatachannel and in the browser over its own WebRTC. Ports Trystero 0.26.0, and is proven against it. | native, emscripten |
+diff --git a/libs/xstate b/libs/xstate
+index 3ce0a97..03796b1 160000
+--- a/libs/xstate
++++ b/libs/xstate
+@@ -1 +1 @@
+-Subproject commit 3ce0a9771f8ed727113371caa33efdc3c86f293f
++Subproject commit 03796b13d3ff8974f39d72ecb12ee7be439739fb
+-- 
+2.55.0
+

@@ -1,0 +1,471 @@
+From e629984c3c4088b496d7ca6f60198df4ed72e997 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 12:58:30 -0400
+Subject: [PATCH 20/25] trystero: comments say why, and cite no plan, task or
+ review
+
+---
+ include/webcpp/trystero/detail/app_impl.hpp   | 13 +++++----
+ include/webcpp/trystero/detail/connection.hpp | 21 +++++++--------
+ include/webcpp/trystero/detail/signaling.hpp  |  2 +-
+ include/webcpp/trystero/room.hpp              | 27 +++++++++----------
+ test/app_impl_test.cpp                        |  7 +++--
+ test/connection_test.cpp                      | 14 +++++-----
+ test/memory_backend_test.cpp                  |  6 ++---
+ test/room_test.cpp                            | 11 ++++----
+ test/support/memory_backend.hpp               |  6 ++---
+ test/support/rooms.hpp                        |  8 +++---
+ 10 files changed, 54 insertions(+), 61 deletions(-)
+
+diff --git a/include/webcpp/trystero/detail/app_impl.hpp b/include/webcpp/trystero/detail/app_impl.hpp
+index b89e3fb..0a23568 100644
+--- a/include/webcpp/trystero/detail/app_impl.hpp
++++ b/include/webcpp/trystero/detail/app_impl.hpp
+@@ -52,7 +52,7 @@ public:
+     /** A frame of this room's token from `peer` was kept. */
+     virtual void frame_kept(std::string_view peer) = 0;
+     /** The app's connection `ended` to `peer` ended: not always the one the room is bound to, so a
+-     * room acts only on what it holds on `ended` (review of Task 4, I1). */
++     * room acts only on what it holds on `ended`. */
+     virtual void connection_ended(const std::shared_ptr<connection>& ended, std::string_view peer,
+                                   std::string_view reason) = 0;
+ 
+@@ -69,7 +69,7 @@ protected:
+  *
+  * Tip: its users are the `app` handle and every room not yet ended; when the last goes, it ends
+  * every connection at that call. Its destructor ends nothing: it may run while the io_context is
+- * destroyed, from the last operation pending there (the spec's section 4.2, "The app's users").
++ * destroyed, from the last operation pending there.
+  */
+ class app_impl : public std::enable_shared_from_this<app_impl> {
+ public:
+@@ -187,9 +187,8 @@ public:
+     /** How many rooms the registry holds. */
+     [[nodiscard]] std::size_t counted_rooms() const { return rooms_.size(); }
+ 
+-    /** Registers a room by a weak reference (the spec's section 4.1): its control block is in the
+-     * room's resource, so the room unregisters before its state goes, in every way it ends, its
+-     * destructor included (review I10). */
++    /** Registers a room by a weak reference: its control block is in the room's resource, so the
++     * room unregisters before its state goes, in every way it ends, its destructor included. */
+     void register_room(std::string_view room_id, std::string_view token,
+                        const std::shared_ptr<room_endpoint>& room) {
+         rooms_.insert_or_assign(std::pmr::string(token, memory_),
+@@ -200,7 +199,7 @@ public:
+                                 });
+     }
+ 
+-    /** Forgets the room of `token`, if it is still `room`'s entry (review M7). */
++    /** Forgets the room of `token`, if it is still `room`'s entry. */
+     void unregister_room(std::string_view token, const room_endpoint* room) {
+         if (const auto it = rooms_.find(token); it != rooms_.end() && it->second.raw == room) {
+             rooms_.erase(it);
+@@ -229,7 +228,7 @@ public:
+      * Tip: a stale connection to the peer, one whose channel is closing, ends first, as Trystero
+      * clears it (C/shared-peer.mjs:142-149): the rooms hear its end before the new connection is
+      * adopted, and a room may adopt one to the peer from inside that call, which is then the one
+-     * shared, or ends in its turn if it is stale by then (review of Task 3, r1). One whose end is
++     * shared, or ends in its turn if it is stale by then. One whose end is
+      * already under way, further up the stack, is let go: it ends no second time. */
+     std::shared_ptr<connection> adopt(std::string_view peer_view,
+                                       std::shared_ptr<backend::peer_connection> pc,
+diff --git a/include/webcpp/trystero/detail/connection.hpp b/include/webcpp/trystero/detail/connection.hpp
+index 382ed8e..02cfc4b 100644
+--- a/include/webcpp/trystero/detail/connection.hpp
++++ b/include/webcpp/trystero/detail/connection.hpp
+@@ -66,7 +66,7 @@ class binding;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
+  * | room frame, any other T             | dropped                                                   |
+  *
+  * Tip: it holds plain pointers to its bindings, which remove themselves before they go, so that it
+- * keeps nothing of a room's resource after the room has ended (the spec's section 4.1).
++ * keeps nothing of a room's resource after the room has ended.
+  */
+ class connection : public std::enable_shared_from_this<connection> {
+ public:
+@@ -165,8 +165,7 @@ public:
+     [[nodiscard]] std::string_view peer() const { return peer_; }
+ 
+     /** Not stale, as Trystero says it: not ended, and its channel neither closing nor closed. A
+-     * connection is adopted once its channel is open, so "still opening" does not arise here
+-     * (review M6). */
++     * connection is adopted once its channel is open, so "still opening" does not arise here. */
+     [[nodiscard]] bool live() const { return !ended_ && channel_->is_open(); }
+ 
+     /** How many frames are kept for rooms not bound yet. */
+@@ -254,7 +253,7 @@ private:
+     std::shared_ptr<backend::timer> idle_timer_;
+     std::shared_ptr<backend::timer> disconnect_timer_;
+     // Bindings are named by id, never by address: a binding made during a drain may take the block
+-    // of one destroyed in it, and must not inherit its turn (review of Task 2, I1).
++    // of one destroyed in it, and must not inherit its turn.
+     std::pmr::deque<std::uint64_t> drain_order_;
+     std::pmr::map<std::uint64_t, binding*> attached_;  // by id: in the order of attachment
+     std::uint64_t next_binding_id_ = 0;
+@@ -284,7 +283,7 @@ public:
+ 
+     /** Leaves the connection quietly: its waiters freed uncalled, its place in the connection
+      * forgotten, and nothing ended, idled, closed or called back, since it may run while the
+-     * io_context is destroyed (review I10; the spec's section 4.2, M10). */
++     * io_context is destroyed. */
+     ~binding() {
+         if (std::exchange(detached_, true)) {
+             return;
+@@ -343,7 +342,7 @@ public:
+             return;
+         }
+         // The room may detach or destroy this binding from inside the call (a kick): it and its
+-        // delivery stay alive until the call returns (review C1). A lock, not shared_from_this,
++        // delivery stay alive until the call returns. A lock, not shared_from_this,
+         // which would abort without exceptions when no shared_ptr owns the binding.
+         const auto self = weak_from_this().lock();
+         deliver_(std::move(frame), action);
+@@ -445,9 +444,9 @@ inline void connection::end(std::string_view reason_view) {
+     // The bindings are let go before anyone is told: a room may destroy its binding, or itself,
+     // from inside `ended` (Trystero's clear, C/shared-peer.mjs:170-180). Every attached binding is
+     // told, those of the drain order first, then the others in the order they attached: an end
+-    // from inside a drain's turn leaves waiters of that drain in no drain order (review of Task 2,
+-    // I2). A failure may detach or destroy another binding, so each is looked up before its turn
+-    // (review M5); one attached meanwhile finds the connection not live, and fails at once.
++    // from inside a drain's turn leaves waiters of that drain in no drain order. A failure may
++    // detach or destroy another binding, so each is looked up before its turn; one attached
++    // meanwhile finds the connection not live, and fails at once.
+     bound_.clear();
+     auto order = std::exchange(drain_order_, std::pmr::deque<std::uint64_t>(memory_));
+     for (const auto& [id, b] : attached_) {
+@@ -531,7 +530,7 @@ inline void connection::forget_kept_if_empty() {
+         return;
+     }
+     kept_timer_.reset();
+-    // A cleared deque keeps blocks (libc++ keeps up to two): a new one frees them (I5).
++    // A cleared deque keeps blocks (libc++ keeps up to two): a new one frees them.
+     kept_ = decltype(kept_)(memory_);
+ }
+ 
+@@ -559,7 +558,7 @@ inline void connection::on_state(backend::connection_state state) {
+ inline void connection::on_drained(bool open) {
+     // Every binding waiting at this drain gets its turn, in the order it began to wait. A turn may
+     // detach another binding of the snapshot, even destroy it: each is looked up by its id before
+-    // its turn (review M5), so that one made meanwhile, at the same address, is not taken for it.
++    // its turn, so that one made meanwhile, at the same address, is not taken for it.
+     const auto self = shared_from_this();
+     const auto order = std::exchange(drain_order_, std::pmr::deque<std::uint64_t>(memory_));
+     for (const auto id : order) {
+diff --git a/include/webcpp/trystero/detail/signaling.hpp b/include/webcpp/trystero/detail/signaling.hpp
+index 8a3c743..8ee9716 100644
+--- a/include/webcpp/trystero/detail/signaling.hpp
++++ b/include/webcpp/trystero/detail/signaling.hpp
+@@ -195,7 +195,7 @@ public:
+     }
+ 
+     /** A room is bound to `peer`: its negotiation ends, its entry stays marked connected, and every
+-     * later signal of that peer is ignored until `forget` (the spec's ruling 9, I1). */
++     * later signal of that peer is ignored until `forget`. */
+     void bound(std::string_view peer) {
+         auto it = peers_.find(peer);
+         if (it == peers_.end()) {
+diff --git a/include/webcpp/trystero/room.hpp b/include/webcpp/trystero/room.hpp
+index e90bbb0..03930f1 100644
+--- a/include/webcpp/trystero/room.hpp
++++ b/include/webcpp/trystero/room.hpp
+@@ -565,9 +565,8 @@ public:
+ 
+     /**
+      * Leaves the app's registry and lets go quietly: it may run while the io_context is destroyed,
+-     * so it ends no connection, idles none, calls nothing back and releases no user of the app
+-     * (review I10; the spec's section 4.2, M10). Its peers' bindings leave their connections as
+-     * they go.
++     * so it ends no connection, idles none, calls nothing back and releases no user of the app.
++     * Its peers' bindings leave their connections as they go.
+      */
+     ~room_impl() { app_->unregister_room(token_, this); }
+ 
+@@ -664,8 +663,8 @@ public:
+             log_, memory_, json_);
+         log_("room", "joining room ", room_id_, " of app ", app_->app_id(), " as ", app_->self_id(),
+              " over ", app_->relay_urls().size(), " relays");
+-        // By a weak reference (the spec's section 4.1): the room leaves the registry before it
+-        // ends, its destructor included.
++        // By a weak reference: the room leaves the registry before it ends, its destructor
++        // included.
+         app_->register_room(room_id_, token_,
+                             std::static_pointer_cast<room_endpoint>(shared_from_this()));
+         app_->add_user();
+@@ -726,7 +725,8 @@ public:
+         if (!present && peers_.contains(peer)) {
+             remove_peer(peer, "peer left the room", end_kind::withdrawn);
+         }
+-        // Binding on presence is increment 2's (Task 6).
++        // Does not bind the peer here: a peer is bound only when its negotiation connects
++        // (on_connected), never from presence alone.
+     }
+ 
+     [[nodiscard]] bool keeps_frames_from(std::string_view /*peer*/) const override { return true; }
+@@ -736,7 +736,7 @@ public:
+     void connection_ended(const std::shared_ptr<connection>& ended, std::string_view peer,
+                           std::string_view reason) override {
+         // The peer may be bound to another connection by now: a late end of an older one is not
+-        // its end (review of Task 4, I1).
++        // its end.
+         if (const auto it = peers_.find(peer);
+             it != peers_.end() && it->second.link->is_on(ended)) {
+             remove_peer(peer, reason, end_kind::connection_end);
+@@ -1055,19 +1055,18 @@ private:
+         bind_peer(peer, c);
+     }
+ 
+-    /** Binds this room to `c` for `peer`, as the spec's section 4.2 orders it: the negotiation
++    /** Binds this room to `c` for `peer`, in the order the specification sets: the negotiation
+      * marked connected, the peer's state and handshake timer, then the handshake's first message.
+-     * Task 6 delivers the frames the connection kept before that message.
++     * The frames the connection kept before that message are not delivered here.
+      *
+      * Tip: the peer's id is copied first, since every step may run code that removes the peer's
+-     * entry (a kick); the entry is never held by reference across such a step (review C1). Each
++     * entry (a kick); the entry is never held by reference across such a step. Each
+      * lambda keeps its own copy in the room's resource, named: a plain copy of a std::pmr::string
+-     * takes the default resource (review N2). */
++     * takes the default resource. */
+     void bind_peer(std::string_view peer_view, const std::shared_ptr<connection>& c) {
+         // A peer is bound once until its removal, as the connection's attach requires: the
+         // signaling hands over no channel while its entry is connected, which `on_channel_open`
+-        // and `bound` set and only `forget` clears, after `remove_peer` has taken the peer out
+-        // (review of Task 2, r2).
++        // and `bound` set and only `forget` clears, after `remove_peer` has taken the peer out.
+         BOOST_ASSERT(!peers_.contains(peer_view));
+         const std::pmr::string peer(peer_view, memory_);
+         const auto weak = weak_from_this();
+@@ -1267,7 +1266,7 @@ private:
+         }
+         signaling_->forget(peer);
+         // Announcements find peers without a connection; over a live one every rebinding goes
+-        // through it (the spec's ruling 9).
++        // through it.
+         if (!app_->find(peer)) {
+             strategy_->restart_announcements();
+         }
+diff --git a/test/app_impl_test.cpp b/test/app_impl_test.cpp
+index ef69d59..712b996 100644
+--- a/test/app_impl_test.cpp
++++ b/test/app_impl_test.cpp
+@@ -303,7 +303,7 @@ void every_allocation_goes_through_the_apps_resource() {
+ }
+ 
+ // Rooms are found by id through a weak reference, and a room leaves the registry only by its own
+-// entry (review M7).
++// entry.
+ void the_registry_holds_rooms_by_a_weak_reference() {
+     asio::io_context io;
+     trystero::test::memory_network net(io);
+@@ -502,8 +502,7 @@ void an_adoption_from_inside_a_stale_end_is_the_one_kept() {
+ 
+ // A room adopts a connection to the peer from inside the stale connection's end, and its channel
+ // starts closing before the outer adoption goes on: that one is stale too, and ends before the
+-// outer one is adopted, so no room hears an end once the outer one is the peer's (review of Task 3,
+-// r1).
++// outer one is adopted, so no room hears an end once the outer one is the peer's.
+ void a_nested_adoption_gone_stale_ends_before_the_outer_one() {
+     asio::io_context io;
+     trystero::test::memory_network net(io);
+@@ -634,7 +633,7 @@ void a_view_into_the_stale_connection_names_its_replacement() {
+ }
+ 
+ // The app's destruction ends nothing and calls nothing back, and a connection that outlives it
+-// routes nothing (the spec's section 4.2).
++// routes nothing.
+ void the_apps_destruction_is_quiet() {
+     asio::io_context io;
+     trystero::test::memory_network net(io);
+diff --git a/test/connection_test.cpp b/test/connection_test.cpp
+index 3090882..1233aad 100644
+--- a/test/connection_test.cpp
++++ b/test/connection_test.cpp
+@@ -317,8 +317,7 @@ void kept_frames_are_bounded_and_dropped_after_10_s() {
+     BOOST_TEST(p.b.c->take_kept("T2").empty());
+ }
+ 
+-// A connection whose channel is closing or closed is not live, so the app does not reuse it
+-// (review M6).
++// A connection whose channel is closing or closed is not live, so the app does not reuse it.
+ void a_closing_channel_is_not_live() {
+     const std::array<std::string_view, 1> tokens{"T1"};
+     link_pair p(tokens, tokens);
+@@ -330,7 +329,7 @@ void a_closing_channel_is_not_live() {
+ }
+ 
+ // The bindings waiting at one drain each get their turn, in the order they began to wait, and a
+-// binding destroyed by an earlier turn gets none (review M5).
++// binding destroyed by an earlier turn gets none.
+ void drain_turns_follow_the_order_of_waiting() {
+     const std::array<std::string_view, 3> tokens{"T1", "T2", "T3"};
+     link_pair p(tokens, tokens);
+@@ -452,7 +451,7 @@ void the_last_binding_ends_or_idles_the_connection() {
+ 
+ // A turn destroys a binding that waits after it and makes another in the same resource, which a
+ // pool gives the freed block: the new binding began to wait during this drain, so its turn is the
+-// next drain, once the channel has drained, never the old one's (review of Task 2, I1).
++// next drain, once the channel has drained, never the old one's.
+ void a_binding_made_during_a_drain_waits_for_the_next() {
+     const std::array<std::string_view, 3> tokens{"T1", "T2", "T3"};
+     link_pair p(tokens, tokens);
+@@ -485,8 +484,7 @@ void a_binding_made_during_a_drain_waits_for_the_next() {
+     BOOST_TEST_LE(t3_buffered_at_its_turn, trystero::backend::data_channel::low_threshold);
+ }
+ 
+-// A turn that ends the connection: every binding still waiting after it is told `false` (review
+-// of Task 2, I2).
++// A turn that ends the connection: every binding still waiting after it is told `false`.
+ void an_end_inside_a_drain_fails_the_waiters_after_it() {
+     const std::array<std::string_view, 2> tokens{"T1", "T2"};
+     link_pair p(tokens, tokens);
+@@ -510,7 +508,7 @@ void an_end_inside_a_drain_fails_the_waiters_after_it() {
+ 
+ /** A binding of T1 on `p`'s b side whose delivery kicks the peer (`destroy` false) or drops the
+  * binding (`destroy` true), then reads its own capture, as a room's delivery passes its `peer`
+- * on after a kick. Under the sanitizers (review of Task 2, I3). */
++ * on after a kick: a use-after-free here would fail under the sanitizers. */
+ void a_delivery_that_lets_its_binding_go(bool destroy) {
+     const std::array<std::string_view, 1> tokens{"T1"};
+     link_pair p(tokens, tokens);
+@@ -550,7 +548,7 @@ void a_delivery_that_drops_its_binding() {
+ }
+ 
+ // A waiter told `false` by `detach` releases the room's last reference to the binding, as a
+-// transfer's failure may (review of Task 2, I3).
++// transfer's failure may.
+ void a_waiter_that_releases_its_binding_during_detach() {
+     const std::array<std::string_view, 1> tokens{"T1"};
+     link_pair p(tokens, tokens);
+diff --git a/test/memory_backend_test.cpp b/test/memory_backend_test.cpp
+index c60fd1a..86f64d1 100644
+--- a/test/memory_backend_test.cpp
++++ b/test/memory_backend_test.cpp
+@@ -329,7 +329,7 @@ void a_release_after_the_sending_channel_was_replaced_drops_its_frames() {
+     BOOST_TEST(p.at_answerer.empty());
+ }
+ 
+-// A frame held for an end whose sender is gone is dropped on release (review M14).
++// A frame held for an end whose sender is gone is dropped on release.
+ void a_release_after_the_sender_went_drops_its_frames() {
+     asio::io_context io;
+     memory_network net{io};
+@@ -421,7 +421,7 @@ private:
+     }
+ };
+ 
+-// Review N1: a virtual timer restarted, cancelled or destroyed leaves the clock at once, so its
++// A virtual timer restarted, cancelled or destroyed leaves the clock at once, so its
+ // memory, in the resource of the room or connection that made it, is back at once, not at its due
+ // time.
+ void a_virtual_timer_leaves_the_clock_at_once() {
+@@ -442,7 +442,7 @@ void a_virtual_timer_leaves_the_clock_at_once() {
+     BOOST_TEST(net.advance(20s));
+ }
+ 
+-// Review N4: a timer that re-arms itself without delay would never let the clock move; advance
++// A timer that re-arms itself without delay would never let the clock move; advance
+ // stops after max_steps timers and says so, and the test fails instead of hanging.
+ void a_timer_rearmed_without_delay_stops_the_clock() {
+     asio::io_context io;
+diff --git a/test/room_test.cpp b/test/room_test.cpp
+index 9c2d33f..509b572 100644
+--- a/test/room_test.cpp
++++ b/test/room_test.cpp
+@@ -1180,7 +1180,7 @@ void a_frame_of_an_unknown_token_is_dropped() {
+     BOOST_TEST_LT(memory.in_use, before + (std::size_t{64} * 1024));
+ }
+ 
+-// Review Focus 3: malformed envelopes end the connection; a frame of exactly 16,515 bytes does not.
++// Malformed envelopes end the connection; a frame of exactly 16,515 bytes does not.
+ void malformed_envelopes_end_the_connection() {
+     const auto zero_token = std::vector<std::uint8_t>{2, 1, 0, 0};
+     std::vector<std::uint8_t> long_token{2, 1, 0, 129};
+@@ -1219,9 +1219,8 @@ void malformed_envelopes_end_the_connection() {
+     BOOST_TEST_EQ(leaves, 0);
+ }
+ 
+-// A room acts on the end of the connection its peer is bound to, and on no other (review of Task 4,
+-// I1): a late end of the peer's first connection keeps the peer, bound to the second; the second's
+-// end removes it.
++// A room acts on the end of the connection its peer is bound to, and on no other: a late end of
++// the peer's first connection keeps the peer, bound to the second; the second's end removes it.
+ void a_late_end_of_another_connection_keeps_the_peer() {
+     fixture f{true};
+     const std::string b_id = "UUUUUUUUUUUUUUUUUUUU";
+@@ -1308,8 +1307,8 @@ void a_kick_by_the_last_room_ends_the_connection() {
+     a.room->abandon();
+ }
+ 
+-// A room left with no idle time still says so on the connection, before its departure ends it
+-// (review of Task 4, item 2): Trystero's idle close is always a later timer.
++// A room left with no idle time still says so on the connection, before its departure ends it:
++// Trystero's idle close is always a later timer.
+ void a_room_left_with_no_idle_time_sends_its_presence() {
+     fixture f{true};
+     const auto a = make_app_room(f, "ZZZZZZZZZZZZZZZZZZZZ", "no-idle",
+diff --git a/test/support/memory_backend.hpp b/test/support/memory_backend.hpp
+index 1fdb314..79e7278 100644
+--- a/test/support/memory_backend.hpp
++++ b/test/support/memory_backend.hpp
+@@ -72,7 +72,7 @@ class memory_timer;
+ /** The virtual clock: the timers scheduled on it, each once, by due time and then by the order of
+  * scheduling. A timer leaves when it fires, and when it is restarted, cancelled or destroyed, so
+  * that nothing keeps it, or its memory in the resource of the room or connection that made it,
+- * past that call (review N1). */
++ * past that call. */
+ struct virtual_clock_state {
+     using key = std::pair<double, std::uint64_t>;
+     std::map<key, memory_timer*> due;
+@@ -986,7 +986,7 @@ inline void memory_network::release(std::size_t to) {
+ }
+ 
+ inline void memory_network::deliver(std::size_t from, std::span<const std::uint8_t> frame) {
+-    // A frame released after its sending end was destroyed is dropped (review M14), as is one whose
++    // A frame released after its sending end was destroyed is dropped, as is one whose
+     // sending connection's channel is no longer paired: a connection pairs once, so its channel's
+     // other end is the end the frame was sent to while it was paired.
+     const auto sender = find(from);
+@@ -1059,7 +1059,7 @@ inline bool memory_network::due_by(double until_ms) const {
+ }
+ 
+ inline bool memory_network::step(double until_ms) {
+-    // The clock moves from the first step, before any timer is made (review I1).
++    // The clock moves from the first step, before any timer is made.
+     if (virtual_clock && !clock_) {
+         clock_ = std::make_shared<virtual_clock_state>();
+     }
+diff --git a/test/support/rooms.hpp b/test/support/rooms.hpp
+index 7c73cd8..9495566 100644
+--- a/test/support/rooms.hpp
++++ b/test/support/rooms.hpp
+@@ -62,7 +62,7 @@ struct fixture {
+     boost::asio::io_context io;
+     memory_network net{io};
+ 
+-    /** A memory network with two relays; with `virtual_time`, on the virtual clock (Task 1). */
++    /** A memory network with two relays; with `virtual_time`, on the virtual clock. */
+     explicit fixture(bool virtual_time = false) {
+         net.virtual_clock = virtual_time;
+         net.relay(relay_a);
+@@ -72,8 +72,8 @@ struct fixture {
+ 
+ /** Runs until `done` holds, for at most `limit`: of the virtual clock when the fixture has one,
+  * moving it from timer to timer, else of the wall clock. On the virtual clock it fires at most
+- * `max_steps` timers, and fails the case by name past them (review N4): a timer re-armed without
+- * delay would otherwise hold the clock still forever. */
++ * `max_steps` timers, and fails the case by name past them: a timer re-armed without delay would
++ * otherwise hold the clock still forever. */
+ inline bool run_until(fixture& f, const std::function<bool()>& done,
+                       std::chrono::milliseconds limit = std::chrono::seconds(10)) {
+     if (!f.net.virtual_clock) {
+@@ -95,7 +95,7 @@ inline bool run_until(fixture& f, const std::function<bool()>& done,
+ }
+ 
+ /** Moves the virtual clock by `by`, firing every timer due meanwhile; fails the case by name when
+- * the clock stopped at its step bound (review N4). Called with milliseconds: an argument of
++ * the clock stopped at its step bound. Called with milliseconds: an argument of
+  * another duration finds std::advance by its namespace, which GCC prefers, as an exact match. */
+ inline void advance(fixture& f, std::chrono::milliseconds by) {
+     if (!f.net.advance(by)) {
+-- 
+2.55.0
+

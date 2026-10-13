@@ -1,0 +1,111 @@
+// Copyright (c) 2026 WebCpp.org
+//
+// Distributed under the Boost Software License, Version 1.0. (See
+// accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+
+[#lexical-uris]
+== URIs and IRIs
+
+`is_uri` is Boost.URL's `parse_uri`, RFC 3986's `URI`, a scheme required and
+a fragment allowed, and `is_uri_reference` is Boost.URL's
+`parse_uri_reference`, a URI or a relative reference, each with a guard of
+lexical's, and so are their rules, `uri_rule` and `uri_reference_rule`.
+RFC 3986 4.2 gives a relative
+reference that has an authority a `path-abempty`, empty or led by `/`.
+Boost.URL 1.92 accepts `+//example.com:abc/p+`, read as host `example.com`, an
+empty port and the path `abc/p`, and `+//a@b@example.com/+`, read as user `a`,
+host `b` and the path `+@example.com/+`. With a scheme it refuses both, and
+stops the URI at the authority, so that inside a larger grammar Boost.URL's
+rule matches `+http://a@b+` of `+http://a@b@example.com/+`. lexical refuses a
+relative reference whose path after an authority is neither empty nor led by
+`/`, and `uri_reference_rule` refuses both forms alike with `error::invalid`.
+The guard stays until a Boost release refuses those references itself.
+
+RFC 3986 holds `[` and `]` only around an IP literal (3.2.2): a path, a query
+and a fragment hold them percent-encoded, as `%5B` and `%5D`. Boost.URL 1.92
+refuses them in a path and a fragment, and accepts them in a query:
+`+http://a/?[x]+` is a URI for Boost.URL. lexical refuses a bracket in a query,
+in `is_uri`, `is_uri_reference`, `is_iri`, `is_iri_reference` and their rules
+alike, which give `error::invalid` for it inside a larger grammar; an IP
+literal, `+http://[::1]/+`, and `%5B` in a query stay valid. This guard stays
+until a Boost release refuses those brackets itself.
+
+RFC 3986 3.5 gives a fragment `pchar`, `/` and `?` alone: the first `+#+`
+starts the fragment, and a second is held only percent-encoded, as `%23`.
+Boost.URL 1.92 adds `+#+` to its fragment characters on purpose, so
+`+http://a/#x#y+` is a URI for Boost.URL, whose fragment is `+x#y+`. lexical
+refuses a `+#+` in a fragment, in the same four functions and their rules,
+which give `error::invalid` for it inside a larger grammar; `+#x%23y+` stays
+valid. This guard stays until a Boost release refuses it itself.
+
+`is_iri` and `is_iri_reference` check RFC 3987's IRI and IRI reference,
+which allow non-ASCII code points, by mapping the IRI to a URI as RFC 3987
+3.1 says and handing it to Boost.URL. Each non-ASCII code point must be
+well-formed UTF-8 and in `ucschar`, or in `iprivate` within the query; the
+bidirectional formatting characters U+200E, U+200F and U+202A to U+202E are
+refused anywhere, as RFC 3987 4.1 requires, and so is any non-ASCII code
+point inside an IP literal: RFC 3987 takes its IP literal from RFC 3986,
+ASCII alone. Each octet of a non-ASCII code point
+then becomes `%XX`, which RFC 3986 allows everywhere else that RFC 3987
+allows `ucschar`, so a non-ASCII code point in a scheme or a port is refused
+by Boost.URL. No IDNA is involved: an IRI's host is a registered name of any
+`ucschar`.
+
+The mapped URI needs contiguous storage. An ASCII IRI is parsed as it is,
+never copied; a non-ASCII one is mapped into a buffer of 1,024 octets on the
+stack, which holds any IRI of up to 341 octets; a longer one takes one buffer
+of its mapped length from the memory resource given to
+`is_iri(s, resource)`, or from `std::pmr::get_default_resource()`. A resource
+of a program's own, here a buffer that refuses to grow:
+
+[source]
+----
+include::{examples}/lexical_iri.cpp[tag=resource,indent=0]
+----
+
+It prints:
+
+[listing]
+----
+include::{examples}/lexical_iri.expected[]
+----
+
+RFC 3986 3.2.2's IP literal holds an IPv6 address or an `IPvFuture`, and no
+zone identifier. RFC 6874 added one, `+http://[fe80::1%25eth0]/+`, which
+Boost.URL 1.92 takes; RFC 9844 obsoleted RFC 6874 in 2025 and reverted its
+change to RFC 3986. lexical refuses a zone identifier, in the same four
+functions and their rules, which give `error::invalid` for it inside a larger
+grammar; `%25` outside an IP literal stays valid. This guard stays until a
+Boost release refuses zone identifiers itself. Each guard, and the one verdict
+of Boost.URL that lexical keeps though RFC 3986 differs, is listed in
+<<lexical-known-deviations>>.
+
+Boost.URL is a compiled library: a program that uses these formats links
+`/webcpp//boost_url`, which `/webcpp/lexical//lexical` brings. Measured on
+2026-10-09 with Boost 1.92 and wasi-sdk 34, built with b2's release flags
+(`-O3`, wasm exceptions) and stripped at link time, a wasm32-wasip2 program
+that calls `is_uri` is 85,625 bytes larger than an empty one.
+
+[#lexical-known-deviations]
+=== Known deviations
+
+lexical is faithful to RFC 3986, the reference JSON Schema names for these
+formats, where Boost.URL 1.92 is more liberal. lexical refuses four things
+Boost.URL accepts: a relative reference whose path after an authority is
+neither empty nor led by `/`; `[` or `]` in a query; `+#+` in a fragment; and
+a zone identifier in an IP literal. Its rules also refuse a reference that
+Boost.URL's would stop at an authority before a path segment, as at the
+second `@` of `+http://a@b@example.com/+`. The tests pin each of these
+verdicts.
+
+lexical keeps one verdict of Boost.URL that RFC 3986 does not give, since it
+never loosens Boost.URL: an `IPvFuture` led by an uppercase `V`,
+`+http://[V1.x]/+`, is refused, though RFC 5234 makes ABNF's quoted strings
+case-insensitive and RFC 3986's `"v"` matches it; `+http://[v1.x]/+` is
+valid.
+
+These are all the differences found on 2026-10-09, when the verdicts of
+Boost.URL 1.92 and of lexical were compared with a transcription of RFC
+3986's ABNF, on inputs that put every ASCII character but NUL and line feed
+into each part of a reference, and on references generated at random.

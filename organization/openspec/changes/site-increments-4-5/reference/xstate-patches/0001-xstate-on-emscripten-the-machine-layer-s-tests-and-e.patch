@@ -1,0 +1,460 @@
+From 03796b13d3ff8974f39d72ecb12ee7be439739fb Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 12:58:34 -0400
+Subject: [PATCH] xstate on emscripten: the machine layer's tests and examples
+ in the browser's target
+
+test/Jamfile and example/Jamfile declare native, emscripten, wasip2 and
+wasip3. Every program of the machine core builds and runs on emscripten
+under node, unchanged: 26 tests and 89 examples, also in a user's build
+without exceptions.
+
+The programs that include <webcpp/xactor.hpp> (the actor layer's 5 tests,
+57 examples, user_aggregates and 4 of its public headers compiled alone)
+declare native, wasip2 and wasip3, through one variable per Jamfile. xactor's
+drivers.hpp includes Boost.Asio outside WASI, and Boost.Asio 1.92 does not
+compile for Emscripten 6.0.11's single-threaded wasm32 (signal_blocker.hpp,
+"Only Windows and POSIX are supported!"). They come to emscripten with xactor.
+
+The page, the README and CONVERSION.md say which programs run on emscripten,
+with the counts computed.
+---
+ README.md                      |  10 ++-
+ doc/appendices/rationale.adoc  |   6 +-
+ doc/introduction/overview.adoc |  12 ++--
+ doc/testing.adoc               |  42 ++++++++---
+ doc/xstate.adoc                |   3 +-
+ example/Jamfile                | 124 +++++++++++++++++----------------
+ test/CONVERSION.md             |   7 +-
+ test/Jamfile                   |  42 ++++++++---
+ 8 files changed, 156 insertions(+), 90 deletions(-)
+
+diff --git a/README.md b/README.md
+index e74c7e9..815f598 100644
+--- a/README.md
++++ b/README.md
+@@ -21,8 +21,10 @@ Every name is in the namespace `webcpp::xstate`. xstate throws nothing and
+ reports every error as a value, so its headers compile without exceptions,
+ which the lint checks by compiling every public header, and every test and
+ example, without them; it runs natively, on wasm32-wasip2 and on
+-wasm32-wasip3, with exceptions, and whether a program uses them is its own
+-choice.
++wasm32-wasip3, and its machine core also in the browser, on emscripten, with
++exceptions, and whether a program uses them is its own choice. The actor
++layer comes to emscripten with xactor, whose Asio driver does not build there
++yet.
+ 
+ ## A minimal example
+ 
+@@ -92,7 +94,9 @@ builds the tests and the examples natively, runs every example and compares
+ its output with the `.expected` file beside it.
+ `toolset=clang-wasip2 testing.launcher=wasmtime` and
+ `toolset=clang-wasip3 testing.launcher=wasmtime` do the same for WASI, with
+-the toolsets that `user-config.jam` registers against wasi-sdk. A b2 project
++the toolsets that `user-config.jam` registers against wasi-sdk, and
++`toolset=emscripten` for the machine core's tests and examples on
++emscripten, run by node. A b2 project
+ uses xstate through `/webcpp/xstate//xstate`, which adds xstate's headers,
+ xactor's, Boost's, and Boost.JSON's definitions, compiled once per variant.
+ 
+diff --git a/doc/appendices/rationale.adoc b/doc/appendices/rationale.adoc
+index 3e5f64f..5df5527 100644
+--- a/doc/appendices/rationale.adoc
++++ b/doc/appendices/rationale.adoc
+@@ -318,7 +318,8 @@ library of webcpp is, so that people who know these tools can review it:
+   a test case for each ported case, natively, in its header-only form, so
+   the build compiles no Boost library (<<testing-suites>>).
+ * *Every target is tested.* The tests and the examples run natively and for
+-  wasm32-wasip2 and wasm32-wasip3, each with exceptions, and the lint
++  wasm32-wasip2 and wasm32-wasip3, and those of the machine core on
++  emscripten, each with exceptions, and the lint
+   compiles every public header, and every test and example, without them, so
+   that a library that works without them is a checked fact rather than a
+   claim. Every public header also compiles on its own, and the machine core
+@@ -333,7 +334,8 @@ library of webcpp is, so that people who know these tools can review it:
+   headers, and a message of Asciidoctor's fails the build.
+ 
+ The continuous integration runs all of it with GCC, Clang, Apple Clang and
+-MSVC, and for wasm32-wasip2 and wasm32-wasip3 (<<testing-targets>>).
++MSVC, for wasm32-wasip2 and wasm32-wasip3, and on emscripten
++(<<testing-targets>>).
+ 
+ [#rationale-evidence]
+ === The oracle and the twins as evidence
+diff --git a/doc/introduction/overview.adoc b/doc/introduction/overview.adoc
+index 959aed1..9faf6a3 100644
+--- a/doc/introduction/overview.adoc
++++ b/doc/introduction/overview.adoc
+@@ -138,8 +138,9 @@ The reason is portability. The same headers build the same way wherever a
+ {cpp}20 compiler does, natively or as a WebAssembly component, with no build
+ of their own to port to each target and no binary to match to each
+ compiler. Every program of this documentation is built and run natively,
+-with GCC, Clang and MSVC, and for wasm32-wasip2 and wasm32-wasip3 with the
+-Clang of wasi-sdk, under wasmtime, with exceptions on every target: whether
++with GCC, Clang and MSVC, for wasm32-wasip2 and wasm32-wasip3 with the
++Clang of wasi-sdk, under wasmtime, and, for the machine core's, for the
++browser with Emscripten, under node, with exceptions on every target: whether
+ a program uses them is its own choice. xstate throws nothing, and its
+ headers compile without them (<<overview-errors>>).
+ 
+@@ -147,7 +148,9 @@ The dependencies follow the same rule. Boost.System, which gives xstate its
+ `result` and its error codes, is header-only, and so are xactor and
+ Boost.Asio, which xactor includes outside a WASI build for its Asio driver
+ (link:{webcpp-libs}/xactor/{webcpp-page}#xactor-drivers-asio[xactor's Asio
+-driver]). Boost.JSON is
++driver]). Boost.Asio does not compile for Emscripten's single-threaded
++wasm32, so the actor layer, which includes xactor, is not built for the
++browser until xactor is (<<testing-targets>>). Boost.JSON is
+ compiled by the program itself, once: one of its translation units includes
+ `<boost/json/src.hpp>` (<<overview-requirements>>). No Boost library is
+ built.
+@@ -523,7 +526,8 @@ builds all four for machines (<<xstate-on-xactor>>).
+ 
+ * *A {cpp}20 compiler.* xstate's tests and examples are built and run
+   natively, and for wasm32-wasip2 and wasm32-wasip3 with the Clang of
+-  wasi-sdk, under wasmtime (<<testing-targets>>).
++  wasi-sdk, under wasmtime; those of the machine core also on emscripten,
++  under node (<<testing-targets>>).
+ * *xstate's headers and xactor's*, `libs/xstate/include` and
+   `libs/xactor/include` in a webcpp checkout. The machine core needs only
+   xstate's; the actor layer needs xactor's too. Nothing of xstate is
+diff --git a/doc/testing.adoc b/doc/testing.adoc
+index 7380cc3..1b6e7ce 100644
+--- a/doc/testing.adoc
++++ b/doc/testing.adoc
+@@ -553,7 +553,7 @@ every example of this page that it can run (<<testing-twins>>). The tests
+ written by hand cover the rest: what XState has no test for, what the oracle
+ cannot see, and a few of XState's expectations, copied where no case can
+ hold them (<<testing-suites>>). Every program of this page is a test too,
+-built and run on every target (<<testing-examples>>).
++built and run on every target it is declared for (<<testing-examples>>).
+ 
+ Each is a target of b2, run from the root of a webcpp checkout:
+ 
+@@ -575,6 +575,11 @@ being native only, and the {n-examples-wasip2} examples, each run by
+ wasmtime (<<testing-targets>>). `toolset=clang-wasip3` does the same for
+ wasm32-wasip3: {n-tests-wasip3} tests and {n-examples-wasip3} examples.
+ 
++`b2 libs/xstate/test libs/xstate/example toolset=emscripten`::
++The same on emscripten for every program that does not include
++`<webcpp/xactor.hpp>`, the machine core's: {n-tests-emscripten} tests and
++{n-examples-emscripten} examples, each run by node, b2's toolset itself (<<testing-targets>>).
++
+ `b2 libs/xstate/test/oracle//oracle`::
+ The oracle lane: XState 5.33.2 runs every case, and what it records must be
+ what the suites hold (<<testing-oracle>>); and every twin runs on XState and
+@@ -594,8 +599,9 @@ working on it.
+ ==== Targets
+ 
+ `test/Jamfile` and `example/Jamfile` declare the targets they are built for,
+-`webcpp.targets native wasip2 wasip3`, and b2 builds each program for those
+-alone:
++`webcpp.targets native emscripten wasip2 wasip3`, and b2 builds each program
++for those alone, except the programs that include `<webcpp/xactor.hpp>`,
++the actor layer's, which declare `native wasip2 wasip3`:
+ 
+ [cols="1,3",options="header"]
+ |===
+@@ -607,6 +613,16 @@ alone:
+   `tools/throw_exception.cpp`. The {n-boost-test-suites} Boost.Test suites
+   are built for this target alone.
+ 
++| emscripten
++| b2's toolset `emscripten`, for wasm32, single-threaded, run by node. With
++  exceptions, as WebAssembly's exception handling. {n-tests-emscripten}
++  tests and {n-examples-emscripten} examples: the machine core's, and the
++  actor layer's headers that include only xactor's ids and errors, each
++  compiled alone. A program that includes `<webcpp/xactor.hpp>`, as the
++  actor layer's programs do, is not built for it until xactor is: xactor's
++  `drivers.hpp` includes Boost.Asio outside WASI, and Boost.Asio does not
++  compile for Emscripten's single-threaded wasm32.
++
+ | wasip2
+ | The toolset `clang-wasip2`, the Clang of wasi-sdk for wasm32-wasip2, run by
+   wasmtime. With exceptions, as WebAssembly's exception handling, as on
+@@ -636,14 +652,18 @@ instantiates: an exception goes through `boost::throw_exception`.
+ The WASI toolsets are b2's `clang`, which a `user-config.jam` registers
+ against wasi-sdk, as
+ link:{webcpp-libs}/xactor/{webcpp-page}#xactor-testing-targets[xactor's page]
+-shows. The Boost.Test suites read the fixture files at run time, which a
+-wasm program cannot without a directory its runtime opens for it, so they
+-run natively; every other test, and every example, runs on native, wasip2
+-and wasip3.
++shows. The emscripten toolset is registered against emsdk, as
++link:{webcpp-libs}/trystero/{webcpp-page}#trystero-building-emscripten[trystero's
++page] shows, and runs a program with node itself, never with a
++`testing.launcher`. The Boost.Test suites read the fixture files at run
++time, which a wasm program cannot without a directory its runtime opens for
++it, so they run natively; every other test, and every example, runs on
++native, wasip2 and wasip3, and those of the machine core on emscripten
++too.
+ 
+ The continuous integration runs xstate's tests and examples in lanes, one
+ toolset each: GCC 14 and 15, Clang 18 and 22, Apple Clang, MSVC 14.3 and
+-14.5, and wasip2 and wasip3. On Linux, GCC and Clang build with libstdc{plus}{plus},
++14.5, wasip2, wasip3 and emscripten. On Linux, GCC and Clang build with libstdc{plus}{plus},
+ the system's standard library there, so the lanes `clang-linux-18` and
+ `clang-linux-22` run xstate with Clang on libstdc{plus}{plus}. Each lane builds from
+ scratch and records what b2 built and ran:
+@@ -890,7 +910,8 @@ author to delete.
+ xstate's tests are under `test/`, each declared in `test/Jamfile` with one of
+ webcpp's rules. Most are programs of Boost.Core's
+ https://www.boost.org/doc/libs/release/libs/core/doc/html/core/lightweight_test.html[lightweight_test],
+-declared with `webcpp.run` and run on every target. Each test case is a
++declared with `webcpp.run` and run on every target they are declared for
++(<<testing-targets>>). Each test case is a
+ function, `main` calls them all and returns `boost::report_errors()`, and a
+ case that cannot go on after a failed check returns; a helper, which cannot
+ return from its case, calls `webcpp::test::require`, of `test/require.hpp`,
+@@ -1019,7 +1040,8 @@ compares again, whatever b2 holds up to date, so a run never passes on the
+ result of an earlier one.
+ 
+ The same programs build for wasm32-wasip2 and wasm32-wasip3, and run under
+-wasmtime, through which `run_example.py` runs each (<<testing-targets>>). A
++wasmtime, through which `run_example.py` runs each, and those of the machine
++core build on emscripten, and run under node (<<testing-targets>>). A
+ program's output is compared with the same `<name>.expected` on every target,
+ so it prints the same on every target, each of which builds it with
+ exceptions.
+diff --git a/doc/xstate.adoc b/doc/xstate.adoc
+index ef14896..9548574 100644
+--- a/doc/xstate.adoc
++++ b/doc/xstate.adoc
+@@ -21,7 +21,8 @@ XState's pure functions or as an actor.
+ This page teaches xstate as Stately's documentation teaches XState: each
+ concept, why it exists, its smallest example, its variations and its rules.
+ Every program it shows was compiled and run, natively and for wasm32-wasip2
+-and wasm32-wasip3, and printed the output shown under it. Every program is
++and wasm32-wasip3, and those of the machine core for the browser too, with
++Emscripten, and printed the output shown under it. Every program is
+ also proven against XState: its twin, the same program written for XState
+ 5.33.2, prints the same output, or the output of a difference xstate makes
+ on purpose, unless it shows something XState does not have
+diff --git a/example/Jamfile b/example/Jamfile
+index 372fdc7..67a0048 100644
+--- a/example/Jamfile
++++ b/example/Jamfile
+@@ -8,7 +8,7 @@ project : requirements <library>/webcpp/xstate//xstate ;
+ 
+ import webcpp ;
+ 
+-webcpp.targets native wasip2 wasip3 ;
++webcpp.targets native emscripten wasip2 wasip3 ;
+ 
+ # Machines run through XState's pure functions, by the core alone.
+ webcpp.example xstate/actions_order.cpp ;
+@@ -101,61 +101,67 @@ webcpp.example xstate/transitions_reenter.cpp ;
+ webcpp.example xstate/transitions_selection.cpp ;
+ webcpp.example xstate/transitions_targets.cpp ;
+ 
+-# Machines run as actors on xactor, by the actor layer.
+-webcpp.example actors/actions_assign.cpp ;
+-webcpp.example actors/actions_custom.cpp ;
+-webcpp.example actors/actions_delayed.cpp ;
+-webcpp.example actors/actions_emit.cpp ;
+-webcpp.example actors/actions_log.cpp ;
+-webcpp.example actors/actions_send_to.cpp ;
+-webcpp.example actors/actors_create.cpp ;
+-webcpp.example actors/actors_errors.cpp ;
+-webcpp.example actors/actors_fuel.cpp ;
+-webcpp.example actors/actors_host.cpp ;
+-webcpp.example actors/actors_inspect.cpp ;
+-webcpp.example actors/actors_invoke.cpp ;
+-webcpp.example actors/actors_machine.cpp ;
+-webcpp.example actors/actors_options.cpp ;
+-webcpp.example actors/actors_sending.cpp ;
+-webcpp.example actors/actors_spawn.cpp ;
+-webcpp.example actors/actors_system.cpp ;
+-webcpp.example actors/actors_time.cpp ;
+-webcpp.example actors/actors_watching.cpp ;
+-webcpp.example actors/concepts_actor.cpp ;
+-webcpp.example actors/concepts_mailbox.cpp ;
+-webcpp.example actors/concepts_mapping.cpp ;
+-webcpp.example actors/concepts_spawn_child.cpp ;
+-webcpp.example actors/concepts_spawning.cpp ;
+-webcpp.example actors/concepts_system.cpp ;
+-webcpp.example actors/context_actor.cpp ;
+-webcpp.example actors/context_input.cpp ;
+-webcpp.example actors/diff_callbacks.cpp ;
+-webcpp.example actors/diff_construction.cpp ;
+-webcpp.example actors/diff_development.cpp ;
+-webcpp.example actors/diff_earlier_tick.cpp ;
+-webcpp.example actors/diff_emit.cpp ;
+-webcpp.example actors/diff_failures.cpp ;
+-webcpp.example actors/diff_fuel.cpp ;
+-webcpp.example actors/diff_interleaving.cpp ;
+-webcpp.example actors/diff_listeners.cpp ;
+-webcpp.example actors/diff_spawn_id.cpp ;
+-webcpp.example actors/gl_actors.cpp ;
+-webcpp.example actors/gl_fuel.cpp ;
+-webcpp.example actors/io_done_actor.cpp ;
+-webcpp.example actors/io_init_event.cpp ;
+-webcpp.example actors/io_invoke_input.cpp ;
+-webcpp.example actors/io_invoke_input_computed.cpp ;
+-webcpp.example actors/io_machine_input.cpp ;
+-webcpp.example actors/io_machine_output.cpp ;
+-webcpp.example actors/io_spawn_input.cpp ;
+-webcpp.example actors/ov_counter.cpp ;
+-webcpp.example actors/qs_actor.cpp ;
+-webcpp.example actors/qs_context.cpp ;
+-webcpp.example actors/qs_delayed.cpp ;
+-webcpp.example actors/qs_input.cpp ;
+-webcpp.example actors/testing_actors.cpp ;
+-webcpp.example actors/testing_effects.cpp ;
+-webcpp.example actors/testing_fuel.cpp ;
+-webcpp.example actors/testing_host.cpp ;
+-webcpp.example actors/testing_time_actor.cpp ;
+-webcpp.example actors/transitions_after_actor.cpp ;
++# Machines run as actors on xactor, by the actor layer: native, wasip2 and
++# wasip3, until xactor builds for emscripten. Its drivers.hpp includes
++# Boost.Asio outside WASI, and Boost.Asio 1.92 does not compile for
++# Emscripten 6.0.11's single-threaded wasm32 (asio/detail/signal_blocker.hpp:
++# "Only Windows and POSIX are supported!").
++.xactor-targets = native wasip2 wasip3 ;
++
++webcpp.example actors/actions_assign.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actions_custom.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actions_delayed.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actions_emit.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actions_log.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actions_send_to.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_create.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_errors.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_fuel.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_host.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_inspect.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_invoke.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_machine.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_options.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_sending.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_spawn.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_system.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_time.cpp : : $(.xactor-targets) ;
++webcpp.example actors/actors_watching.cpp : : $(.xactor-targets) ;
++webcpp.example actors/concepts_actor.cpp : : $(.xactor-targets) ;
++webcpp.example actors/concepts_mailbox.cpp : : $(.xactor-targets) ;
++webcpp.example actors/concepts_mapping.cpp : : $(.xactor-targets) ;
++webcpp.example actors/concepts_spawn_child.cpp : : $(.xactor-targets) ;
++webcpp.example actors/concepts_spawning.cpp : : $(.xactor-targets) ;
++webcpp.example actors/concepts_system.cpp : : $(.xactor-targets) ;
++webcpp.example actors/context_actor.cpp : : $(.xactor-targets) ;
++webcpp.example actors/context_input.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_callbacks.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_construction.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_development.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_earlier_tick.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_emit.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_failures.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_fuel.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_interleaving.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_listeners.cpp : : $(.xactor-targets) ;
++webcpp.example actors/diff_spawn_id.cpp : : $(.xactor-targets) ;
++webcpp.example actors/gl_actors.cpp : : $(.xactor-targets) ;
++webcpp.example actors/gl_fuel.cpp : : $(.xactor-targets) ;
++webcpp.example actors/io_done_actor.cpp : : $(.xactor-targets) ;
++webcpp.example actors/io_init_event.cpp : : $(.xactor-targets) ;
++webcpp.example actors/io_invoke_input.cpp : : $(.xactor-targets) ;
++webcpp.example actors/io_invoke_input_computed.cpp : : $(.xactor-targets) ;
++webcpp.example actors/io_machine_input.cpp : : $(.xactor-targets) ;
++webcpp.example actors/io_machine_output.cpp : : $(.xactor-targets) ;
++webcpp.example actors/io_spawn_input.cpp : : $(.xactor-targets) ;
++webcpp.example actors/ov_counter.cpp : : $(.xactor-targets) ;
++webcpp.example actors/qs_actor.cpp : : $(.xactor-targets) ;
++webcpp.example actors/qs_context.cpp : : $(.xactor-targets) ;
++webcpp.example actors/qs_delayed.cpp : : $(.xactor-targets) ;
++webcpp.example actors/qs_input.cpp : : $(.xactor-targets) ;
++webcpp.example actors/testing_actors.cpp : : $(.xactor-targets) ;
++webcpp.example actors/testing_effects.cpp : : $(.xactor-targets) ;
++webcpp.example actors/testing_fuel.cpp : : $(.xactor-targets) ;
++webcpp.example actors/testing_host.cpp : : $(.xactor-targets) ;
++webcpp.example actors/testing_time_actor.cpp : : $(.xactor-targets) ;
++webcpp.example actors/transitions_after_actor.cpp : : $(.xactor-targets) ;
+diff --git a/test/CONVERSION.md b/test/CONVERSION.md
+index eaf63ab..25eeb27 100644
+--- a/test/CONVERSION.md
++++ b/test/CONVERSION.md
+@@ -4,9 +4,10 @@ xstate's tests came from xstate-cpp (`main`, `cc11cec`): the six Boost.Test file
+ `test/xstate/`, four that test the machine core and two that test the actor layer, built by that
+ repository's `suite` rule with `test/runner.cpp`, and the two programs of `test/headers/` that are
+ not a header compiled alone. Four of the six files are now Boost.Core lightweight_test programs
+-(`<boost/core/lightweight_test.hpp>`), which `test/Jamfile` declares with `webcpp.run` for
+-native, wasip2 and wasip3: `values`, `machine` and `cursor`, one program each, and
+-`actors_test.cpp`, split into five programs by responsibility. The other two, `cases` and
++(`<boost/core/lightweight_test.hpp>`), which `test/Jamfile` declares with `webcpp.run`:
++`values`, `machine` and `cursor`, one program each, for native, emscripten, wasip2 and wasip3,
++and `actors_test.cpp`, split into five programs by responsibility, for native, wasip2 and wasip3,
++since the actor layer includes xactor, which does not build for emscripten yet. The other two, `cases` and
+ `actors_cases`, stay on Boost.Test, declared with `webcpp.boost-test`, natively only: each reads
+ the fixture files and registers one test case per ported case, and a wasm target cannot read them
+ without a preopened directory. This file records what each old test checked and where the new one
+diff --git a/test/Jamfile b/test/Jamfile
+index ff602b4..1992fc3 100644
+--- a/test/Jamfile
++++ b/test/Jamfile
+@@ -9,9 +9,30 @@ project : requirements <library>/webcpp/xstate//xstate ;
+ import regex ;
+ import webcpp ;
+ 
+-webcpp.targets native wasip2 wasip3 ;
++webcpp.targets native emscripten wasip2 wasip3 ;
+ 
+-webcpp.headers-alone xstate : ../include ;
++# The actor layer runs on xactor, whose drivers.hpp includes Boost.Asio
++# outside WASI; Boost.Asio 1.92 does not compile for Emscripten 6.0.11's
++# single-threaded wasm32 (asio/detail/signal_blocker.hpp: "Only Windows and
++# POSIX are supported!"). So every program that includes <webcpp/xactor.hpp>,
++# directly or through the actor layer, is built for native, wasip2 and wasip3,
++# until xactor builds for emscripten; the machine core, and the actor layer's
++# headers that include no more of xactor than its ids and errors, build on
++# every target.
++.xactor-targets = native wasip2 wasip3 ;
++
++webcpp.headers-alone xstate : ../include
++  : xstate.hpp xstate/actions.hpp xstate/clock.hpp xstate/config.hpp
++    xstate/definition.hpp xstate/errors.hpp xstate/event.hpp
++    xstate/functions.hpp xstate/guards.hpp xstate/implementations.hpp
++    xstate/machine.hpp xstate/macrostep.hpp xstate/microstep.hpp
++    xstate/node_set.hpp xstate/snapshot.hpp xstate/state_node.hpp
++    xstate/state_value.hpp xstate/actors/fuel.hpp xstate/actors/message.hpp
++    xstate/actors/system_state.hpp ;
++webcpp.headers-alone xstate : ../include
++  : xstate/actors.hpp xstate/actors/actor_system.hpp
++    xstate/actors/host_logic.hpp xstate/actors/machine_logic.hpp
++  : : $(.xactor-targets) ;
+ 
+ # config.hpp defines WEBCPP_XSTATE_NO_EXCEPTIONS exactly when the build has
+ # no exceptions, and keeps it when a developer defines it in a build that
+@@ -25,7 +46,7 @@ webcpp.compile core_alone : core_alone.cpp ;
+ 
+ # A user's designated initializers that leave members out, compiled as user
+ # code (not as system headers) with -Wextra -Werror.
+-webcpp.compile user_aggregates : user_aggregates.cpp ;
++webcpp.compile user_aggregates : user_aggregates.cpp : : $(.xactor-targets) ;
+ 
+ # The machine core, one program per file.
+ webcpp.run values : values_test.cpp ;
+@@ -36,11 +57,16 @@ webcpp.run cursor : cursor_test.cpp ;
+ # the actor layer, as the one file they were split from did, and that file
+ # needed MSVC's /bigobj: an object of theirs has nearly as many sections
+ # (CONVERSION.md).
+-webcpp.run actors_lifecycle : actors_lifecycle_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
+-webcpp.run actors_sending : actors_sending_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
+-webcpp.run actors_children : actors_children_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
+-webcpp.run actors_time : actors_time_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
+-webcpp.run actors_host : actors_host_test.cpp : <toolset>msvc:<cxxflags>/bigobj ;
++webcpp.run actors_lifecycle : actors_lifecycle_test.cpp : <toolset>msvc:<cxxflags>/bigobj
++  : $(.xactor-targets) ;
++webcpp.run actors_sending : actors_sending_test.cpp : <toolset>msvc:<cxxflags>/bigobj
++  : $(.xactor-targets) ;
++webcpp.run actors_children : actors_children_test.cpp : <toolset>msvc:<cxxflags>/bigobj
++  : $(.xactor-targets) ;
++webcpp.run actors_time : actors_time_test.cpp : <toolset>msvc:<cxxflags>/bigobj
++  : $(.xactor-targets) ;
++webcpp.run actors_host : actors_host_test.cpp : <toolset>msvc:<cxxflags>/bigobj
++  : $(.xactor-targets) ;
+ 
+ # The cases ported from XState's tests: a Boost.Test suite, native only,
+ # which reads the fixture files and registers one test case for each case.
+-- 
+2.55.0
+

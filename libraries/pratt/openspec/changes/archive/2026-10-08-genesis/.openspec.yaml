@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-10-08
+webcpp:
+  library: pratt
+  title: "pratt: a generic Pratt parser engine for C++20, with a decimal calculator"
+  kind: own
+  port_of: null
+  status: implemented
+  release: "0.1.0"
+  implementation: https://github.com/webcpporg/pratt/tree/d78451b
+  decided: 2026-10-08

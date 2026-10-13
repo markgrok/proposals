@@ -1,0 +1,43 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+
+# Every proposal is checked on every push and pull request: OpenSpec's strict validation of each
+# root (the organization and every library), the tool's own tests, and tools/proposals.py check
+# (the metadata, proposal.md's sections, reference code, forbidden text, the README's table).
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.7.0
+      - name: OpenSpec, every root
+        run: |
+          npm install --global @fission-ai/openspec@1.10.0
+          failed=0
+          for root in organization libraries/*; do
+            [ -d "$root/openspec" ] || continue
+            echo "::group::$root"
+            (cd "$root" && openspec validate --all --strict --no-interactive) || failed=1
+            echo "::endgroup::"
+          done
+          exit "$failed"
+      - name: The tool's tests
+        run: python3 tools/proposals_test.py
+      - name: The proposals
+        run: python3 tools/proposals.py check

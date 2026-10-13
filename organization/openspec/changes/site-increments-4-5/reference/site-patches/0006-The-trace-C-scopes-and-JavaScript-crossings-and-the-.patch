@@ -1,0 +1,1398 @@
+From acf5c1ed50e71a5855d8bde4383e9c25663875de Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 18:16:36 -0400
+Subject: [PATCH 6/7] The trace, C++ scopes and JavaScript crossings, and the
+ player's sound
+
+---
+ Jamfile                       |   7 +-
+ README.md                     |  11 +-
+ app/Jamfile                   |  14 +-
+ app/site_app.cpp              |  14 ++
+ app/site_app.hpp              |   4 +-
+ app/test/trace_test.cpp       |  54 +++++++
+ app/trace.cpp                 |  28 ++++
+ include/webcpp_site/trace.hpp |  98 ++++++++++++
+ src/sound.ts                  | 145 +++++++++++++++++
+ src/trace.ts                  | 225 ++++++++++++++++++++++++++
+ test/sound_test.mjs           | 286 ++++++++++++++++++++++++++++++++++
+ test/trace_test.mjs           | 149 ++++++++++++++++++
+ test/wasm/trace.mjs           | 110 +++++++++++++
+ 13 files changed, 1132 insertions(+), 13 deletions(-)
+ create mode 100644 app/test/trace_test.cpp
+ create mode 100644 app/trace.cpp
+ create mode 100644 include/webcpp_site/trace.hpp
+ create mode 100644 src/sound.ts
+ create mode 100644 src/trace.ts
+ create mode 100644 test/sound_test.mjs
+ create mode 100644 test/trace_test.mjs
+ create mode 100644 test/wasm/trace.mjs
+
+diff --git a/Jamfile b/Jamfile
+index fe8587d..8abd87a 100644
+--- a/Jamfile
++++ b/Jamfile
+@@ -78,11 +78,12 @@ actions pages
+ # pretest, so npm alone never reads a stale build/server.mjs) and runs every
+ # test/**/*_test.mjs, none of which needs the C++ build; its npm test:wasm,
+ # test/wasm/*.mjs, which runs the site's wasm, built and copied into build/app/
+-# first; its typecheck; and machine_host's native tests (app/), on the player's
+-# machine and on the install flow's. b2 /webcpp/site//test.
++# first; its typecheck; and the native tests of app/: machine_host's, on the
++# player's machine and on the install flow's, and the trace's, which proves its
++# scope nothing outside the site's build. b2 /webcpp/site//test.
+ notfile test : @test
+   : : <dependency>node-modules <dependency>app//wasm <dependency>app//site_app_test
+-    <dependency>app//install_test <webcpp-boost-check>off ;
++    <dependency>app//install_test <dependency>app//trace_test <webcpp-boost-check>off ;
+ 
+ rule test ( targets * : sources * : properties * )
+ {
+diff --git a/README.md b/README.md
+index 9ee43c1..a315905 100644
+--- a/README.md
++++ b/README.md
+@@ -97,13 +97,13 @@ b2 alone, at the superproject's root:
+ | `b2 site` | builds the whole site into `bin/site/`: this repository's pages, every library's page and the report, every link checked; the preview channel, the development version served at https://webcpporg.github.io/, whose every page carries `noindex` and which writes no sitemap |
+ | `b2 site -sWEBCPP_SITE=release -sWEBCPP_SITE_VERSION=<version>` | the same, for the release channel, served at https://webcpp.org/: indexed, with its sitemap |
+ | `b2 site-serve` | builds the site and serves it at http://127.0.0.1:8765/ |
+-| `b2 /webcpp/site//test` | the site's own tests: the native test of `app/`, then, with the site's wasm built, its JavaScript tests, those of the wasm among them, and their type check |
++| `b2 /webcpp/site//test` | the site's own tests: the native tests of `app/`, then, with the site's wasm built, its JavaScript tests, those of the wasm among them, and their type check |
+ | `b2 /webcpp/site/app//wasm` | the site's wasm alone, built with Emscripten in release and copied into `build/app/` |
+ 
+ The site's C++ is a project like any user's of webcpp: its wasm's own code
+ is in `app/`, which runs the site's machines (`machines/`) on
+-webcpp::xstate; its trace points will be in `include/webcpp_site/`, and each
+-example in a directory of its own under `examples/`, all built for
++webcpp::xstate; its trace points are in `include/webcpp_site/`, and each
++example will be in a directory of its own under `examples/`, all built for
+ Emscripten by `b2 site`, whatever toolset b2 runs with.
+ 
+ The prerequisites are the superproject's, Emscripten among them (its
+@@ -117,8 +117,9 @@ Python for the report: one more tool on `PATH`, at version 26.7.0.
+ | `Jamfile` | the site's targets; `b2 site`, at the superproject, runs them |
+ | `package.json`, `package-lock.json` | the site's own node dependencies, pinned, and its scripts: `build`, `test`, `test:wasm`, `typecheck`, `dev` and `serve` |
+ | `pages/` | the site's pages, in OpenUI Lang: `index.oui` is the home, `<name>.oui` the page `<name>/` |
+-| `src/` | the components pages are written with, and the renderer: `server.tsx` prerenders a page, `client.tsx` hydrates it in the browser; `machine.ts` loads the site's wasm and gives a component a machine of it (`useMachine`); the PWA: `sw.ts`, the service worker, bundled to the site's `sw.js`, and `install.tsx`, the offer to install the site, which runs the install flow (`install_flow.ts`) on the site's wasm |
+-| `app/` | the site's wasm, `site-app.mjs` and `site-app.wasm`, laid out at the site's `assets/app/`: C++ on webcpp::xstate's machine layer that runs the site's machines, its embind bindings, and its native tests |
++| `src/` | the components pages are written with, and the renderer: `server.tsx` prerenders a page, `client.tsx` hydrates it in the browser; `machine.ts` loads the site's wasm and gives a component a machine of it (`useMachine`); the PWA: `sw.ts`, the service worker, bundled to the site's `sw.js`, and `install.tsx`, the offer to install the site, which runs the install flow (`install_flow.ts`) on the site's wasm; `trace.ts`, the trace of every call between JavaScript and a wasm and of the C++ scopes it marks, and `sound.ts`, the player's tones |
++| `app/` | the site's wasm, `site-app.mjs` and `site-app.wasm`, laid out at the site's `assets/app/`: C++ on webcpp::xstate's machine layer that runs the site's machines, its embind bindings, the trace's import (`trace.cpp`), and its native tests |
++| `include/webcpp_site/` | `trace.hpp`, `WEBCPP_SITE_TRACE_SCOPE`, which marks a C++ scope for the trace inside the site's build and is nothing elsewhere |
+ | `machines/` | the site's state machines, as XState's JSON configs: `player.json`, the visualizer's player, and `install.json`, the flow that installs the site for offline use |
+ | `assets/` | the styles, the logo and `card.svg`, the social cards' template, copied to the site's `assets/`; `manifest.webmanifest`, which the build completes with the icons and the theme's colours at the site's root |
+ | `seo/queries.json` | the searches the site answers, each with the page that answers it, which a test checks |
+diff --git a/app/Jamfile b/app/Jamfile
+index 793ed59..d249fe3 100644
+--- a/app/Jamfile
++++ b/app/Jamfile
+@@ -5,11 +5,13 @@
+ # https://www.boost.org/LICENSE_1_0.txt)
+ #
+ # The site's own wasm, the module SiteApp: machine_host, which runs the site's
+-# machines (machines/*.json) on webcpp::xstate's machine layer, and its
+-# embind bindings; and machine_host's native test.
++# machines (machines/*.json) on webcpp::xstate's machine layer, its embind
++# bindings and the trace's import; and the native tests.
+ #
+ #   site_app_test  machine_host on the player's machine, natively;
+ #   install_test   machine_host on the install flow's machine, natively;
++#   trace_test     the trace's scope outside the site's build, natively: no
++#                  token at all;
+ #   site-app       the wasm, on emscripten alone: site-app.js and, beside
+ #                  it, site-app.wasm, which em++ writes and b2 does not know;
+ #   wasm           site-app built with emscripten in release, whatever the
+@@ -25,7 +27,7 @@ import testing ;
+ .site = [ path.parent [ path.parent [ path.root [ path.make
+     [ modules.binding $(__name__) ] ] [ path.pwd ] ] ] ] ;
+ 
+-project : requirements <library>/webcpp/xstate//xstate <include>. ;
++project : requirements <library>/webcpp/xstate//xstate <include>. <include>../include ;
+ 
+ # <build>no unless the toolset is emscripten's, and the reverse: the wasm
+ # needs Emscripten's headers, and the test reads its argument from the host's
+@@ -50,9 +52,13 @@ run test/site_app_test.cpp site_app.cpp : : ../machines/player.json
+   : <conditional>@native-only : site_app_test ;
+ run test/install_test.cpp site_app.cpp : : ../machines/install.json
+   : <conditional>@native-only : install_test ;
++run test/trace_test.cpp : : : <conditional>@native-only : trace_test ;
+ 
+-exe site-app : site_app.cpp bindings.cpp
++# Built with WEBCPP_SITE_TRACE, so that the scopes the C++ marks reach the
++# trace (include/webcpp_site/trace.hpp), through the import trace.cpp defines.
++exe site-app : site_app.cpp bindings.cpp trace.cpp
+   : <conditional>@emscripten-only
++    <define>WEBCPP_SITE_TRACE
+     <linkflags>-lembind
+     <linkflags>-sMODULARIZE
+     <linkflags>-sEXPORT_ES6
+diff --git a/app/site_app.cpp b/app/site_app.cpp
+index dd7df5b..c2e65ca 100644
+--- a/app/site_app.cpp
++++ b/app/site_app.cpp
+@@ -7,6 +7,7 @@
+ #include "site_app.hpp"
+ 
+ #include <webcpp/xstate.hpp>
++#include <webcpp_site/trace.hpp>
+ 
+ #include <boost/json.hpp>
+ #include <boost/system/error_code.hpp>
+@@ -31,10 +32,12 @@ const std::int64_t* context_int64(const xstate::action_args& args, std::string_v
+ }
+ 
+ xstate::result<boost::json::object> reset_played(const xstate::action_args& /*args*/) {
++    WEBCPP_SITE_TRACE_SCOPE("resetPlayed");
+     return boost::json::object{{"played", 0}};
+ }
+ 
+ xstate::result<boost::json::object> count_played(const xstate::action_args& args) {
++    WEBCPP_SITE_TRACE_SCOPE("countPlayed", args.event.type, args.context);
+     const std::int64_t* played = context_int64(args, "played");
+     if (played == nullptr) {
+         return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
+@@ -43,6 +46,7 @@ xstate::result<boost::json::object> count_played(const xstate::action_args& args
+ }
+ 
+ xstate::result<boost::json::object> set_speed(const xstate::action_args& args) {
++    WEBCPP_SITE_TRACE_SCOPE("setSpeed", args.event.type, args.context);
+     const boost::json::value* speed = args.event.payload.if_contains("speed");
+     if (speed == nullptr) {
+         return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
+@@ -55,6 +59,7 @@ xstate::result<boost::json::object> set_speed(const xstate::action_args& args) {
+  Tip: JSON gives 1 and 2 as integers and 0.5 as a double, so each is read as a double.
+ */
+ xstate::result<bool> is_speed(const xstate::action_args& args) {
++    WEBCPP_SITE_TRACE_SCOPE("isSpeed", args.event.type, args.context);
+     const boost::json::value* speed = args.event.payload.if_contains("speed");
+     if (speed == nullptr || !speed->is_number()) {
+         return false;
+@@ -71,6 +76,7 @@ const boost::json::value* event_member(const xstate::action_args& args, std::str
+ 
+ /** `missing` = the event's `bytes`, `version` = its `version`: what MISSING says is not cached. */
+ xstate::result<boost::json::object> set_missing(const xstate::action_args& args) {
++    WEBCPP_SITE_TRACE_SCOPE("setMissing", args.event.type, args.context);
+     const boost::json::value* bytes = event_member(args, "bytes");
+     const boost::json::value* version = event_member(args, "version");
+     if (bytes == nullptr || !bytes->is_int64() || version == nullptr || !version->is_string()) {
+@@ -80,10 +86,12 @@ xstate::result<boost::json::object> set_missing(const xstate::action_args& args)
+ }
+ 
+ xstate::result<boost::json::object> start_install(const xstate::action_args& /*args*/) {
++    WEBCPP_SITE_TRACE_SCOPE("startInstall");
+     return boost::json::object{{"done", 0}, {"reason", ""}};
+ }
+ 
+ xstate::result<boost::json::object> add_done(const xstate::action_args& args) {
++    WEBCPP_SITE_TRACE_SCOPE("addDone", args.event.type, args.context);
+     const std::int64_t* done = context_int64(args, "done");
+     const boost::json::value* bytes = event_member(args, "bytes");
+     if (done == nullptr || bytes == nullptr || !bytes->is_int64()) {
+@@ -93,6 +101,7 @@ xstate::result<boost::json::object> add_done(const xstate::action_args& args) {
+ }
+ 
+ xstate::result<boost::json::object> set_reason(const xstate::action_args& args) {
++    WEBCPP_SITE_TRACE_SCOPE("setReason", args.event.type, args.context);
+     const boost::json::value* reason = event_member(args, "reason");
+     if (reason == nullptr || !reason->is_string()) {
+         return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
+@@ -101,6 +110,7 @@ xstate::result<boost::json::object> set_reason(const xstate::action_args& args)
+ }
+ 
+ xstate::result<boost::json::object> set_update_error(const xstate::action_args& args) {
++    WEBCPP_SITE_TRACE_SCOPE("setUpdateError", args.event.type, args.context);
+     const boost::json::value* reason = event_member(args, "reason");
+     if (reason == nullptr || !reason->is_string()) {
+         return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
+@@ -109,6 +119,7 @@ xstate::result<boost::json::object> set_update_error(const xstate::action_args&
+ }
+ 
+ xstate::result<boost::json::object> offer_reload(const xstate::action_args& /*args*/) {
++    WEBCPP_SITE_TRACE_SCOPE("offerReload");
+     return boost::json::object{{"reload", true}};
+ }
+ 
+@@ -118,6 +129,7 @@ xstate::result<boost::json::object> offer_reload(const xstate::action_args& /*ar
+  declined.
+ */
+ xstate::result<bool> was_declined(const xstate::action_args& args) {
++    WEBCPP_SITE_TRACE_SCOPE("wasDeclined", args.event.type, args.context);
+     const boost::json::value* declined = event_member(args, "declined");
+     const boost::json::value* version = event_member(args, "version");
+     return declined != nullptr && declined->is_string() && version != nullptr &&
+@@ -153,6 +165,7 @@ webcpp::xstate::implementations site_implementations() {
+ }
+ 
+ boost::system::result<machine_host> machine_host::create(std::string_view config_json) {
++    WEBCPP_SITE_TRACE_SCOPE("machine_host::create");
+     boost::system::error_code failed;
+     const boost::json::value config = boost::json::parse(config_json, failed);
+     if (failed) {
+@@ -168,6 +181,7 @@ boost::system::result<machine_host> machine_host::create(std::string_view config
+ }
+ 
+ boost::system::result<std::string> machine_host::send(std::string_view event_json) {
++    WEBCPP_SITE_TRACE_SCOPE("machine_host::send", event_json);
+     boost::system::error_code failed;
+     const boost::json::value json = boost::json::parse(event_json, failed);
+     if (failed) {
+diff --git a/app/site_app.hpp b/app/site_app.hpp
+index ef475a1..0d52d01 100644
+--- a/app/site_app.hpp
++++ b/app/site_app.hpp
+@@ -7,7 +7,9 @@
+ /**
+  The site's machines, each an XState machine whose JSON config is one of
+  machines/, run by webcpp::xstate's machine layer: the code the site's wasm
+- exports to the pages (bindings.cpp), testable natively.
++ exports to the pages (bindings.cpp), testable natively. create, send and
++ each implementation mark their scope for the site's trace
++ (webcpp_site/trace.hpp), which is nothing outside the site's wasm.
+ */
+ #ifndef WEBCPP_SITE_APP_SITE_APP_HPP
+ #define WEBCPP_SITE_APP_SITE_APP_HPP
+diff --git a/app/test/trace_test.cpp b/app/test/trace_test.cpp
+new file mode 100644
+index 0000000..5e098d9
+--- /dev/null
++++ b/app/test/trace_test.cpp
+@@ -0,0 +1,54 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++/**
++ Tests that WEBCPP_SITE_TRACE_SCOPE is nothing outside the site's build: it
++ expands to no token at all, so code that marks its scopes compiles as it would
++ without them, and its arguments are never evaluated.
++*/
++
++#include <webcpp_site/trace.hpp>
++
++#include <boost/core/lightweight_test.hpp>
++
++#include <string_view>
++
++#ifdef WEBCPP_SITE_TRACE
++#error "trace_test checks the trace outside the site's build, without WEBCPP_SITE_TRACE"
++#endif
++
++/** The text a macro call expands to, as a string literal. */
++#define TRACE_TEST_EXPANDED(...) TRACE_TEST_QUOTED(__VA_ARGS__)
++#define TRACE_TEST_QUOTED(...) #__VA_ARGS__
++
++static_assert(
++    std::string_view(TRACE_TEST_EXPANDED(WEBCPP_SITE_TRACE_SCOPE("add", 1, "two"))).empty());
++static_assert(std::string_view(TRACE_TEST_EXPANDED(WEBCPP_SITE_TRACE_SCOPE("idle"))).empty());
++
++namespace {
++
++/** A sum through two marked scopes. */
++int add(int left, int right) {
++    WEBCPP_SITE_TRACE_SCOPE("add", left, right);
++    const int sum = left + right;
++    {
++        WEBCPP_SITE_TRACE_SCOPE("add.result", sum);
++        return sum;
++    }
++}
++
++}  // namespace
++
++int main() {
++    BOOST_TEST_EQ(add(1, 2), 3);
++    // Never const: the trace's argument below would change it, were it evaluated.
++    int evaluated = 0;  // NOLINT(misc-const-correctness)
++    {
++        WEBCPP_SITE_TRACE_SCOPE("evaluated", ++evaluated);
++    }
++    BOOST_TEST_EQ(evaluated, 0);
++    return boost::report_errors();
++}
+diff --git a/app/trace.cpp b/app/trace.cpp
+new file mode 100644
+index 0000000..ff42084
+--- /dev/null
++++ b/app/trace.cpp
+@@ -0,0 +1,28 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++/**
++ The trace's import, webcpp_site_trace, which include/webcpp_site/trace.hpp
++ declares: one definition per wasm, in this file alone, since EM_JS defines a
++ symbol. It hands each event to the function webcpp_site_trace of the module's
++ option webcppSiteImports, which src/trace.ts's loadTraced installs, and does
++ nothing when the module was loaded without it.
++*/
++
++#include <webcpp_site/trace.hpp>
++
++#include <emscripten/em_js.h>
++
++// clang-format off
++EM_JS(void, webcpp_site_trace,
++      (int kind, const char* name, const char* file, int line, const char* args_json), {
++    var imports = Module['webcppSiteImports'];
++    var trace = imports && imports['webcpp_site_trace'];
++    if (trace) {
++        trace(kind, UTF8ToString(name), UTF8ToString(file), line, UTF8ToString(args_json));
++    }
++});
++// clang-format on
+diff --git a/include/webcpp_site/trace.hpp b/include/webcpp_site/trace.hpp
+new file mode 100644
+index 0000000..598e5db
+--- /dev/null
++++ b/include/webcpp_site/trace.hpp
+@@ -0,0 +1,98 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++/**
++ The trace points of the site's C++: WEBCPP_SITE_TRACE_SCOPE marks a scope the
++ site's visualizer shows. Inside the site's build, which defines
++ WEBCPP_SITE_TRACE, the scope sends cpp_enter with its name, file, line and
++ arguments as JSON when it starts, and cpp_exit when it ends, through the one
++ JavaScript import webcpp_site_trace (app/trace.cpp); elsewhere the macro
++ expands to no token at all, and its arguments are never evaluated.
++*/
++#ifndef WEBCPP_SITE_TRACE_HPP
++#define WEBCPP_SITE_TRACE_HPP
++
++#ifdef WEBCPP_SITE_TRACE
++
++#include <boost/json/array.hpp>
++#include <boost/json/serialize.hpp>
++#include <boost/json/value_from.hpp>
++
++#include <emscripten/em_macros.h>
++
++#include <string>
++
++/**
++ The trace's import: kind 0 is cpp_enter and 1 cpp_exit; args_json is a JSON
++ array, "" for cpp_exit.
++ Tip: C strings, which the JavaScript side reads with UTF8ToString; a scope's
++ name and file are literals.
++*/
++extern "C" void webcpp_site_trace(int kind, const char* name, const char* file, int line,
++                                  const char* args_json) EM_IMPORT(webcpp_site_trace);
++
++namespace webcpp_site::detail {
++
++inline constexpr int trace_enter = 0;
++inline constexpr int trace_exit = 1;
++
++/** The arguments as a JSON array, each converted by Boost.JSON's value_from. */
++template <class... Args>
++std::string trace_arguments(const Args&... args) {
++    boost::json::array array;
++    array.reserve(sizeof...(Args));
++    (array.emplace_back(boost::json::value_from(args)), ...);
++    return boost::json::serialize(array);
++}
++
++/** Sends cpp_enter when constructed and cpp_exit when destroyed. */
++class scope {
++public:
++    template <class... Args>
++    scope(const char* name, const char* file, int line, const Args&... args)
++        : name_(name), file_(file), line_(line) {
++        const std::string json = trace_arguments(args...);
++        webcpp_site_trace(trace_enter, name_, file_, line_, json.c_str());
++    }
++
++    scope(const scope&) = delete;
++    scope(scope&&) = delete;
++    scope& operator=(const scope&) = delete;
++    scope& operator=(scope&&) = delete;
++
++    ~scope() { webcpp_site_trace(trace_exit, name_, file_, line_, ""); }
++
++private:
++    const char* name_;
++    const char* file_;
++    int line_;
++};
++
++}  // namespace webcpp_site::detail
++
++#define WEBCPP_SITE_TRACE_CONCAT_(left, right) left##right
++#define WEBCPP_SITE_TRACE_CONCAT(left, right) WEBCPP_SITE_TRACE_CONCAT_(left, right)
++
++/**
++ Marks the enclosing scope, from here to its end, as name, with the arguments
++ shown beside it.
++ Tip: the file is its name alone (__FILE_NAME__), the same wherever the site is
++ built. Outside the site's build the arguments are gone, so a variable that
++ only they read is unused there: a trace point shows what the code already
++ uses.
++*/
++#define WEBCPP_SITE_TRACE_SCOPE(name, ...)                          \
++    const ::webcpp_site::detail::scope WEBCPP_SITE_TRACE_CONCAT(    \
++        webcpp_site_trace_scope_, __COUNTER__)(name, __FILE_NAME__, \
++                                               __LINE__ __VA_OPT__(, ) __VA_ARGS__)
++
++#else
++
++#define WEBCPP_SITE_TRACE_SCOPE(name, ...)
++
++#endif
++
++#endif  // WEBCPP_SITE_TRACE_HPP
+diff --git a/src/sound.ts b/src/sound.ts
+new file mode 100644
+index 0000000..f865ddc
+--- /dev/null
++++ b/src/sound.ts
+@@ -0,0 +1,145 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The player's sound: a short tone per kind of trace event, synthesized with Web Audio, with no
++// audio file. Nothing sounds before the reader's first gesture on the page, which browsers require
++// before an AudioContext may start, nor once the reader mutes it, a choice remembered in storage
++// where the browser keeps it. A browser that refuses an AudioContext, or its storage, gets a silent
++// player that works as any other: the sound never throws.
++
++import type {TraceEvent} from './trace.ts'
++
++/** A tone: its waveform, its pitch in hertz and its length in seconds. */
++export type Tone = {type: OscillatorType; frequency: number; duration: number}
++
++/**
++ * The tone of each kind of event: a call into the wasm and its return a rising and a falling
++ * pair, a call out of it higher still, the C++ scopes lower and softer in timbre, the log lowest.
++ */
++export const tones: Record<TraceEvent['kind'], Tone> = {
++    js_to_wasm: {type: 'triangle', frequency: 659.25, duration: 0.09},
++    return: {type: 'triangle', frequency: 523.25, duration: 0.09},
++    wasm_to_js: {type: 'triangle', frequency: 783.99, duration: 0.09},
++    cpp_enter: {type: 'sine', frequency: 440, duration: 0.07},
++    cpp_exit: {type: 'sine', frequency: 392, duration: 0.07},
++    log: {type: 'sine', frequency: 329.63, duration: 0.12},
++}
++
++/** The peak of a tone's gain, quiet beside the page's own. */
++const peak = 0.08
++/** How long a tone takes to reach its peak, in seconds. */
++const attack = 0.01
++/** Where a tone's gain ends: an exponential ramp cannot reach 0. */
++const floor = 0.0001
++
++/** The key the mute control is remembered under. */
++const mutedKey = 'webcpp-site:sound-muted'
++
++/** The player's sound. */
++export type Sound = {
++    /** Sounds the tone of kind, unless muted, or before the reader's first gesture. */
++    play(kind: TraceEvent['kind']): void
++    /** Whether the reader has muted the sound. */
++    readonly muted: boolean
++    /** Mutes or unmutes the sound, remembered where the browser's storage works. */
++    setMuted(muted: boolean): void
++}
++
++type AudioContextClass = new () => AudioContext
++
++/**
++ * Whether the reader has made a gesture on the page. A browser that cannot say (no userActivation)
++ * leaves it to its own autoplay policy, which keeps a context suspended until a gesture resumes it.
++ */
++function hasGesture(): boolean {
++    const activation = (globalThis.navigator as {userActivation?: {hasBeenActive: boolean}} | undefined)
++        ?.userActivation
++    return activation === undefined || activation.hasBeenActive
++}
++
++function readMuted(): boolean {
++    try {
++        return globalThis.localStorage.getItem(mutedKey) === 'true'
++    } catch {
++        return false
++    }
++}
++
++function writeMuted(muted: boolean): void {
++    try {
++        globalThis.localStorage.setItem(mutedKey, String(muted))
++    } catch {
++        // Kept for this page alone, by the sound itself.
++    }
++}
++
++/** A new AudioContext, or null where the browser has none or refuses one. */
++function newContext(): AudioContext | null {
++    const scope = globalThis as {AudioContext?: AudioContextClass; webkitAudioContext?: AudioContextClass}
++    const Context = scope.AudioContext ?? scope.webkitAudioContext
++    if (Context === undefined) {
++        return null
++    }
++    try {
++        return new Context()
++    } catch {
++        return null
++    }
++}
++
++/** Schedules tone on context, now on its clock: an oscillator through a gain envelope. */
++function schedule(context: AudioContext, tone: Tone): void {
++    const start = context.currentTime
++    const end = start + tone.duration
++    const oscillator = context.createOscillator()
++    const gain = context.createGain()
++    oscillator.type = tone.type
++    oscillator.frequency.setValueAtTime(tone.frequency, start)
++    gain.gain.setValueAtTime(0, start)
++    gain.gain.linearRampToValueAtTime(peak, start + attack)
++    gain.gain.exponentialRampToValueAtTime(floor, end)
++    oscillator.connect(gain)
++    gain.connect(context.destination)
++    oscillator.start(start)
++    oscillator.stop(end)
++}
++
++/**
++ * The player's sound, unmuted unless the reader muted it before. Its AudioContext is created on
++ * the first play after the reader's first gesture, and resumed when the browser has suspended it.
++ */
++export function createSound(): Sound {
++    let muted = readMuted()
++    let context: AudioContext | null = null
++    return {
++        play(kind) {
++            if (muted || !hasGesture()) {
++                return
++            }
++            context ??= newContext()
++            if (context === null) {
++                return
++            }
++            try {
++                if (context.state === 'suspended') {
++                    context.resume().catch(() => {
++                        // Still suspended: the next play, after a gesture, asks again.
++                    })
++                }
++                schedule(context, tones[kind])
++            } catch {
++                // A context that cannot play stays silent.
++            }
++        },
++        get muted() {
++            return muted
++        },
++        setMuted(next) {
++            muted = next
++            writeMuted(next)
++        },
++    }
++}
+diff --git a/src/trace.ts b/src/trace.ts
+new file mode 100644
+index 0000000..8317e4b
+--- /dev/null
++++ b/src/trace.ts
+@@ -0,0 +1,225 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The trace the visualizer draws: every call between JavaScript and a wasm module, each way, and
++// every C++ scope the module marks with WEBCPP_SITE_TRACE_SCOPE (include/webcpp_site/trace.hpp), as
++// one stream of events in the order they happen, numbered by seq. The program runs at full speed;
++// the visualizer replays the stream at a pace a person can follow.
++
++/** One event of the trace. */
++export type TraceEvent =
++    | {seq: number; kind: 'js_to_wasm' | 'wasm_to_js'; name: string; args: unknown[]}
++    | {seq: number; kind: 'return'; name: string; result: unknown}
++    | {seq: number; kind: 'cpp_enter'; name: string; file: string; line: number; args: unknown[]}
++    | {seq: number; kind: 'cpp_exit'; name: string}
++    | {seq: number; kind: 'log'; text: string}
++
++/** An event before the trace numbers it. */
++type Unnumbered<E> = E extends unknown ? Omit<E, 'seq'> : never
++
++type Emit = (event: Unnumbered<TraceEvent>) => void
++
++/** The C++ trace's import, called by app/trace.cpp: kind 0 is cpp_enter, 1 cpp_exit. */
++const traceChannel = 'webcpp_site_trace'
++/** What the program writes, stdout and stderr alike. */
++const logChannel = 'webcpp_site_log'
++
++/** A sink whose events are numbered in the order they reach it, from 0. */
++function numbered(sink: (event: TraceEvent) => void): Emit {
++    let next = 0
++    return event => {
++        sink({...event, seq: next++} as TraceEvent)
++    }
++}
++
++function messageOf(error: unknown): string {
++    return error instanceof Error ? error.message : String(error)
++}
++
++/**
++ * Whether value is an instance of a class the module defines, such as an embind class, which the
++ * trace follows as it follows the module: a function, or an object whose class is not one of
++ * JavaScript's own (a plain object, an array, a Promise, a typed array).
++ */
++function isModuleObject(value: unknown): value is object {
++    if (typeof value === 'function') {
++        return true
++    }
++    if (value === null || typeof value !== 'object') {
++        return false
++    }
++    const constructor: unknown = Object.getPrototypeOf(value)?.constructor
++    return typeof constructor === 'function' &&
++        !Function.prototype.toString.call(constructor).includes('[native code]')
++}
++
++/** The name an object of the module is traced by: its class's, or its own for a function. */
++function nameOf(value: object): string {
++    if (typeof value === 'function') {
++        return value.name
++    }
++    const constructor = (Object.getPrototypeOf(value) as {constructor?: {name?: string}}).constructor
++    return constructor?.name ?? 'object'
++}
++
++/** A call's result as the trace holds it: an object of the module by its class's name. */
++function resultOf(value: unknown): unknown {
++    if (typeof value === 'function') {
++        return {function: value.name}
++    }
++    return isModuleObject(value) ? {object: nameOf(value)} : value
++}
++
++/** Runs call as the crossing name, between its first event and its return, rethrowing a throw. */
++function crossing(emit: Emit, kind: 'js_to_wasm' | 'wasm_to_js', name: string, args: unknown[],
++                  call: () => unknown): unknown {
++    emit({kind, name, args: [...args]})
++    let result: unknown
++    try {
++        result = call()
++    } catch (error) {
++        emit({kind: 'return', name, result: {error: messageOf(error)}})
++        throw error
++    }
++    emit({kind: 'return', name, result: resultOf(result)})
++    return result
++}
++
++/**
++ * The wrappers of one module: each object of the module is wrapped once, so that a wrapper read
++ * twice is the same object, and each of its functions once per object it is read from, since a
++ * class's method is one function shared by every instance.
++ */
++class Wrappers {
++    private readonly emit: Emit
++    private readonly objects = new WeakMap<object, object>()
++    private readonly methods = new WeakMap<object, Map<PropertyKey, Function>>()
++
++    constructor(emit: Emit) {
++        this.emit = emit
++    }
++
++    /** The module itself, whose functions are traced by their own names. */
++    root<M extends object>(module: M): M {
++        return new Proxy(module, this.members<M>(undefined))
++    }
++
++    /** value, traced, named by its class, when it is an object of the module; any other as it is. */
++    private wrap(value: unknown): unknown {
++        if (!isModuleObject(value)) {
++            return value
++        }
++        let wrapper = this.objects.get(value)
++        if (wrapper === undefined) {
++            wrapper = typeof value === 'function'
++                ? this.traceFunction(value as Function, nameOf(value), undefined)
++                : new Proxy(value, this.members(nameOf(value)))
++            this.objects.set(value, wrapper)
++        }
++        return wrapper
++    }
++
++    /** The handler of an object named prefix, whose functions are traced as prefix.<member>. */
++    private members<T extends object>(prefix: string | undefined): ProxyHandler<T> {
++        return {
++            get: (target: T, key, receiver) => {
++                const value: unknown = Reflect.get(target, key, receiver)
++                const descriptor = Reflect.getOwnPropertyDescriptor(target, key)
++                // A proxy must answer a property that can never change with the property itself.
++                if (typeof key === 'symbol' ||
++                    (descriptor !== undefined && !descriptor.configurable && !descriptor.writable)) {
++                    return value
++                }
++                if (typeof value !== 'function') {
++                    return this.wrap(value)
++                }
++                return this.method(target, key, value as Function,
++                    prefix === undefined ? key : `${prefix}.${key}`)
++            },
++        }
++    }
++
++    /** owner's function at key, traced as name and called on owner. */
++    private method(owner: object, key: PropertyKey, fn: Function, name: string): Function {
++        let byKey = this.methods.get(owner)
++        if (byKey === undefined) {
++            byKey = new Map()
++            this.methods.set(owner, byKey)
++        }
++        let wrapper = byKey.get(key)
++        if (wrapper === undefined) {
++            wrapper = this.traceFunction(fn, name, owner)
++            byKey.set(key, wrapper)
++        }
++        return wrapper
++    }
++
++    /**
++     * fn traced as name: a call, on owner when it has one, or a construction with new, each a
++     * crossing whose result is traced in turn; its own members (a class's static functions) are
++     * traced as name.<member>.
++     */
++    private traceFunction(fn: Function, name: string, owner: object | undefined): Function {
++        return new Proxy<Function>(fn, {
++            ...this.members<Function>(name),
++            apply: (target, self, args: unknown[]) => crossing(this.emit, 'js_to_wasm', name, args,
++                () => this.wrap(Reflect.apply(target, owner ?? self, args))),
++            construct: (target, args: unknown[]) => crossing(this.emit, 'js_to_wasm', name, args,
++                () => this.wrap(Reflect.construct(target, args))) as object,
++        })
++    }
++}
++
++/**
++ * Traces imports in place: each function already there becomes a wasm_to_js crossing, and the two
++ * channels of the trace's own are added, the C++ scopes' and the program's output.
++ */
++function traceImports(imports: Record<string, Function>, emit: Emit): void {
++    for (const [name, fn] of Object.entries(imports)) {
++        imports[name] = (...args: unknown[]) => crossing(emit, 'wasm_to_js', name, args, () => fn(...args))
++    }
++    imports[traceChannel] = (kind: number, name: string, file: string, line: number, args: string) => {
++        if (kind === 0) {
++            emit({kind: 'cpp_enter', name, file, line, args: JSON.parse(args) as unknown[]})
++        } else {
++            emit({kind: 'cpp_exit', name})
++        }
++    }
++    imports[logChannel] = (text: string) => {
++        emit({kind: 'log', text})
++    }
++}
++
++/**
++ * The module, traced: each call into one of its functions, and into a function or a method of an
++ * object one of them returns, is a js_to_wasm crossing; each call the module makes into imports, a
++ * wasm_to_js crossing; each followed by its return, whose result is `{error: message}` for a throw,
++ * which is rethrown. imports is changed in place, so the module, which reads it as it calls, calls
++ * the traced functions, and gains the channels app/trace.cpp and the program's output use.
++ */
++export function traced<M extends object>(module: M, imports: Record<string, Function>,
++                                         sink: (e: TraceEvent) => void): M {
++    const emit = numbered(sink)
++    traceImports(imports, emit)
++    return new Wrappers(emit).root(module)
++}
++
++/**
++ * The emscripten module at url (MODULARIZE, EXPORT_ES6), instantiated and traced: its imports, the
++ * module option webcppSiteImports that app/trace.cpp reads, are traced before the module starts,
++ * and what the program writes is a log event, in one stream with every other.
++ */
++export async function loadTraced<M extends object>(url: string, sink: (e: TraceEvent) => void,
++                                                   imports: Record<string, Function> = {}): Promise<M> {
++    const emit = numbered(sink)
++    traceImports(imports, emit)
++    const log = (text: string) => {
++        emit({kind: 'log', text})
++    }
++    const factory = (await import(url)) as {default: (options: object) => Promise<M>}
++    const module = await factory.default({webcppSiteImports: imports, print: log, printErr: log})
++    return new Wrappers(emit).root(module)
++}
+diff --git a/test/sound_test.mjs b/test/sound_test.mjs
+new file mode 100644
+index 0000000..fbb5466
+--- /dev/null
++++ b/test/sound_test.mjs
+@@ -0,0 +1,286 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// src/sound.ts on a fake Web Audio, never a real one: each tone is checked by what it schedules on
++// the audio clock, never by listening or by a timer. No sound before the reader's first gesture;
++// none, and no throw, when the browser refuses an AudioContext or its storage; the mute control
++// remembered where storage works and kept for the session where it does not; and sound apart from
++// the reduced-motion preference.
++
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import {createSound, tones} from '../src/sound.ts'
++
++/** Runs body with each of globals defined on globalThis, then puts back what was there. */
++async function withGlobals(globals, body) {
++    const before = Object.keys(globals).map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)])
++    for (const [name, descriptor] of Object.entries(globals)) {
++        Object.defineProperty(globalThis, name, {configurable: true, ...descriptor})
++    }
++    try {
++        await body()
++    } finally {
++        for (const [name, descriptor] of before) {
++            if (descriptor === undefined) {
++                delete globalThis[name]
++            } else {
++                Object.defineProperty(globalThis, name, descriptor)
++            }
++        }
++    }
++}
++
++/** An AudioParam that records what is scheduled on it, as [method, value, time]. */
++function fakeParam() {
++    const calls = []
++    const record = method => (value, time) => {
++        calls.push([method, value, time])
++    }
++    return {
++        calls,
++        setValueAtTime: record('setValueAtTime'),
++        linearRampToValueAtTime: record('linearRampToValueAtTime'),
++        exponentialRampToValueAtTime: record('exponentialRampToValueAtTime'),
++    }
++}
++
++/**
++ * A fake AudioContext class, its clock at `time`, whose instances and the nodes they make are
++ * recorded; `state` is the state each starts in, and `resume` what resume does.
++ */
++function fakeAudio({time = 2.5, state = 'running', resume = () => Promise.resolve()} = {}) {
++    const contexts = []
++    class AudioContext {
++        constructor() {
++            this.currentTime = time
++            this.state = state
++            this.destination = {name: 'destination'}
++            this.oscillators = []
++            this.gains = []
++            this.resumed = 0
++            contexts.push(this)
++        }
++
++        resume() {
++            this.resumed += 1
++            return resume()
++        }
++
++        createOscillator() {
++            const oscillator = {
++                type: 'sine',
++                frequency: fakeParam(),
++                connected: [],
++                started: [],
++                stopped: [],
++                connect(node) {
++                    this.connected.push(node)
++                    return node
++                },
++                start(at) {
++                    this.started.push(at)
++                },
++                stop(at) {
++                    this.stopped.push(at)
++                },
++            }
++            this.oscillators.push(oscillator)
++            return oscillator
++        }
++
++        createGain() {
++            const gain = {
++                gain: fakeParam(),
++                connected: [],
++                connect(node) {
++                    this.connected.push(node)
++                    return node
++                },
++            }
++            this.gains.push(gain)
++            return gain
++        }
++    }
++    return {AudioContext, contexts}
++}
++
++/** A localStorage that works, over a Map. */
++function memoryStorage() {
++    const items = new Map()
++    return {
++        items,
++        getItem: key => items.get(key) ?? null,
++        setItem: (key, value) => {
++            items.set(key, String(value))
++        },
++    }
++}
++
++/** A navigator whose user activation says whether the reader has made a gesture yet. */
++function activation(hasBeenActive) {
++    return {value: {userActivation: {hasBeenActive}}}
++}
++
++/** The globals of a page whose reader has clicked, with a working storage and audio. */
++function page(audio, storage = memoryStorage()) {
++    return {
++        AudioContext: {value: audio.AudioContext},
++        localStorage: {value: storage},
++        navigator: activation(true),
++    }
++}
++
++const kinds = ['js_to_wasm', 'wasm_to_js', 'return', 'cpp_enter', 'cpp_exit', 'log']
++
++test('each kind of event has a tone of its own', () => {
++    assert.deepEqual(Object.keys(tones).sort(), [...kinds].sort())
++    const frequencies = kinds.map(kind => tones[kind].frequency)
++    assert.equal(new Set(frequencies).size, kinds.length, 'no two kinds sound the same')
++    for (const kind of kinds) {
++        assert.ok(tones[kind].duration > 0 && tones[kind].duration <= 0.2, `${kind} is short`)
++    }
++})
++
++test('play schedules its tone on the audio clock: an oscillator through a gain envelope', async () => {
++    const audio = fakeAudio({time: 2.5})
++    await withGlobals(page(audio), () => {
++        const sound = createSound()
++        sound.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 1)
++        const [context] = audio.contexts
++        const [oscillator] = context.oscillators
++        const [gain] = context.gains
++        const tone = tones.js_to_wasm
++        assert.equal(oscillator.type, tone.type)
++        assert.deepEqual(oscillator.frequency.calls, [['setValueAtTime', tone.frequency, 2.5]])
++        assert.deepEqual(oscillator.connected, [gain])
++        assert.deepEqual(gain.connected, [context.destination])
++        assert.deepEqual(oscillator.started, [2.5])
++        assert.deepEqual(oscillator.stopped, [2.5 + tone.duration])
++        const [start, attack, release] = gain.gain.calls
++        assert.deepEqual(start, ['setValueAtTime', 0, 2.5])
++        assert.equal(attack[0], 'linearRampToValueAtTime')
++        assert.ok(attack[1] > 0 && attack[1] <= 0.2, 'a quiet peak')
++        assert.ok(attack[2] > 2.5 && attack[2] < 2.5 + tone.duration, 'the attack inside the tone')
++        assert.deepEqual(release.slice(0, 1), ['exponentialRampToValueAtTime'])
++        assert.ok(release[1] > 0 && release[1] < attack[1], 'released to near silence, never 0')
++        assert.equal(release[2], 2.5 + tone.duration)
++
++        sound.play('cpp_exit')
++        assert.equal(audio.contexts.length, 1, 'one AudioContext for every tone')
++        assert.deepEqual(context.oscillators[1].frequency.calls, [['setValueAtTime', tones.cpp_exit.frequency, 2.5]])
++    })
++})
++
++test('no sound before the reader has made a gesture: the AudioContext is created after it', async () => {
++    const audio = fakeAudio()
++    const userActivation = {hasBeenActive: false}
++    await withGlobals({...page(audio), navigator: {value: {userActivation}}}, () => {
++        const sound = createSound()
++        sound.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 0)
++        userActivation.hasBeenActive = true
++        sound.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 1)
++        assert.equal(audio.contexts[0].oscillators.length, 1)
++    })
++    const older = fakeAudio()
++    await withGlobals({...page(older), navigator: {value: {}}}, () => {
++        createSound().play('js_to_wasm')
++        assert.equal(older.contexts.length, 1, "without userActivation, the browser's own policy decides")
++    })
++})
++
++test('a suspended AudioContext is resumed, and a refused resume throws nothing', async () => {
++    const audio = fakeAudio({state: 'suspended', resume: () => Promise.reject(new Error('not allowed'))})
++    await withGlobals(page(audio), async () => {
++        const sound = createSound()
++        sound.play('return')
++        assert.equal(audio.contexts[0].resumed, 1)
++        await new Promise(setImmediate)
++    })
++})
++
++test('an AudioContext that cannot be created leaves play silent, and play never throws', async () => {
++    let attempts = 0
++    class AudioContext {
++        constructor() {
++            attempts += 1
++            throw new Error('no audio device')
++        }
++    }
++    await withGlobals({...page({AudioContext}), webkitAudioContext: {value: undefined}}, () => {
++        const sound = createSound()
++        assert.doesNotThrow(() => sound.play('js_to_wasm'))
++        assert.doesNotThrow(() => sound.play('return'))
++        assert.ok(attempts >= 1)
++    })
++    await withGlobals({...page({AudioContext: undefined}), webkitAudioContext: {value: undefined}}, () => {
++        assert.doesNotThrow(() => createSound().play('log'))
++    })
++    const broken = fakeAudio()
++    broken.AudioContext.prototype.createOscillator = () => {
++        throw new Error('closed')
++    }
++    await withGlobals(page(broken), () => {
++        assert.doesNotThrow(() => createSound().play('cpp_enter'))
++    })
++})
++
++test('the mute control is remembered for the reader, and a muted sound plays nothing', async () => {
++    const audio = fakeAudio()
++    const storage = memoryStorage()
++    await withGlobals(page(audio, storage), () => {
++        const first = createSound()
++        assert.equal(first.muted, false, 'unmuted until the reader mutes it')
++        first.setMuted(true)
++        assert.equal(first.muted, true)
++        first.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 0, 'muted, no AudioContext')
++
++        const next = createSound()
++        assert.equal(next.muted, true, 'remembered on the next page')
++        next.setMuted(false)
++        assert.equal(createSound().muted, false)
++        next.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 1)
++    })
++})
++
++test('a localStorage that throws: unmuted for the session, and setMuted still works', async () => {
++    const audio = fakeAudio()
++    await withGlobals({
++        ...page(audio),
++        localStorage: {
++            get() {
++                throw new DOMException('The operation is insecure.', 'SecurityError')
++            },
++        },
++    }, () => {
++        const sound = createSound()
++        assert.equal(sound.muted, false)
++        sound.setMuted(true)
++        assert.equal(sound.muted, true)
++        sound.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 0)
++        sound.setMuted(false)
++        assert.equal(sound.muted, false)
++        sound.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 1)
++    })
++})
++
++test('sound and motion are separate preferences: reduced motion still sounds', async () => {
++    const audio = fakeAudio()
++    await withGlobals({
++        ...page(audio),
++        matchMedia: {value: query => ({matches: query === '(prefers-reduced-motion: reduce)', media: query})},
++    }, () => {
++        createSound().play('wasm_to_js')
++        assert.equal(audio.contexts.length, 1)
++        assert.deepEqual(audio.contexts[0].oscillators[0].started, [2.5])
++    })
++})
+diff --git a/test/trace_test.mjs b/test/trace_test.mjs
+new file mode 100644
+index 0000000..1d951c5
+--- /dev/null
++++ b/test/trace_test.mjs
+@@ -0,0 +1,149 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// src/trace.ts without the site's wasm: traced over fake modules, whose exports and imports stand
++// for the wasm's. Each call across is recorded in order, with its arguments and its result, a throw
++// as the error it carries; the C++ scopes and the program's output arrive through the channels
++// traced adds to the imports; and what the module answers is never changed. test/wasm/trace.mjs
++// runs the same on the wasm itself.
++
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import {loadTraced, traced} from '../src/trace.ts'
++
++/** A sink that keeps every event, and the events it kept. */
++function recorder() {
++    const events = []
++    return {events, sink: event => events.push(event)}
++}
++
++/** The events without their seq, which the tests check apart. */
++function unsequenced(events) {
++    return events.map(({seq, ...event}) => event)
++}
++
++test('a call from JavaScript into an export is js_to_wasm, then its return, in order', () => {
++    const {events, sink} = recorder()
++    const imports = {log(text) {}}
++    const module = traced({add: (a, b) => a + b}, imports, sink)
++    assert.equal(module.add(1, 2), 3)
++    assert.deepEqual(unsequenced(events), [
++        {kind: 'js_to_wasm', name: 'add', args: [1, 2]},
++        {kind: 'return', name: 'add', result: 3},
++    ])
++    assert.ok(events[0].seq < events[1].seq, 'seq increases')
++})
++
++test('an export that throws records its return as the error, and the error is rethrown', () => {
++    const {events, sink} = recorder()
++    const failure = new Error('no such machine')
++    const module = traced({start() { throw failure }}, {}, sink)
++    assert.throws(() => module.start('player'), error => error === failure)
++    assert.deepEqual(unsequenced(events), [
++        {kind: 'js_to_wasm', name: 'start', args: ['player']},
++        {kind: 'return', name: 'start', result: {error: 'no such machine'}},
++    ])
++})
++
++test('a call from the wasm into an import is wasm_to_js, nested in the call that made it', () => {
++    const {events, sink} = recorder()
++    const imports = {now: () => 42}
++    const module = traced({stamp: () => `at ${imports.now()}`}, imports, sink)
++    assert.equal(module.stamp(), 'at 42')
++    assert.deepEqual(unsequenced(events), [
++        {kind: 'js_to_wasm', name: 'stamp', args: []},
++        {kind: 'wasm_to_js', name: 'now', args: []},
++        {kind: 'return', name: 'now', result: 42},
++        {kind: 'return', name: 'stamp', result: 'at 42'},
++    ])
++    assert.deepEqual(events.map(event => event.seq), [0, 1, 2, 3])
++})
++
++test("a C++ scope and the program's output arrive through traced's channels, in sequence", () => {
++    const {events, sink} = recorder()
++    const imports = {}
++    const module = traced({
++        send(event) {
++            imports.webcpp_site_trace(0, 'machine_host::send', 'site_app.cpp', 12, JSON.stringify([event]))
++            imports.webcpp_site_log('sent')
++            imports.webcpp_site_trace(1, 'machine_host::send', 'site_app.cpp', 12, '')
++            return 'ok'
++        },
++    }, imports, sink)
++    module.send('{"type":"PLAY"}')
++    assert.deepEqual(unsequenced(events), [
++        {kind: 'js_to_wasm', name: 'send', args: ['{"type":"PLAY"}']},
++        {kind: 'cpp_enter', name: 'machine_host::send', file: 'site_app.cpp', line: 12, args: ['{"type":"PLAY"}']},
++        {kind: 'log', text: 'sent'},
++        {kind: 'cpp_exit', name: 'machine_host::send'},
++        {kind: 'return', name: 'send', result: 'ok'},
++    ])
++})
++
++/** A module shaped as embind's: a class whose static function returns an instance of it. */
++function embindLike() {
++    class MachineHost {
++        static create(config) {
++            return new MachineHost(config)
++        }
++
++        constructor(config) {
++            this.taken = config.length
++        }
++
++        send(event) {
++            this.taken += 1
++            return `${event}:${this.taken}`
++        }
++    }
++    return {MachineHost}
++}
++
++test("an object an export returns is traced too, named by its class, and the answers are the module's", () => {
++    const {events, sink} = recorder()
++    const plain = embindLike().MachineHost.create('abc')
++    const module = traced(embindLike(), {}, sink)
++    const host = module.MachineHost.create('abc')
++    assert.equal(host.send('PLAY'), plain.send('PLAY'))
++    assert.equal(host.send('TICK'), plain.send('TICK'))
++    assert.equal(host.taken, plain.taken)
++    assert.ok(module.MachineHost === module.MachineHost, 'one wrapper per object')
++    assert.deepEqual(unsequenced(events), [
++        {kind: 'js_to_wasm', name: 'MachineHost.create', args: ['abc']},
++        {kind: 'return', name: 'MachineHost.create', result: {object: 'MachineHost'}},
++        {kind: 'js_to_wasm', name: 'MachineHost.send', args: ['PLAY']},
++        {kind: 'return', name: 'MachineHost.send', result: 'PLAY:4'},
++        {kind: 'js_to_wasm', name: 'MachineHost.send', args: ['TICK']},
++        {kind: 'return', name: 'MachineHost.send', result: 'TICK:5'},
++    ])
++})
++
++test("loadTraced instantiates a module with traced's channels and its output as log events", async () => {
++    const {events, sink} = recorder()
++    const source = `export default async function factory(options) {
++        options.print('ready')
++        return {
++            hello(name) {
++                options.webcppSiteImports.webcpp_site_trace(0, 'hello', 'hello.cpp', 3, JSON.stringify([name]))
++                options.printErr('greeted')
++                options.webcppSiteImports.webcpp_site_trace(1, 'hello', 'hello.cpp', 3, '')
++                return 'hello ' + name
++            },
++        }
++    }`
++    const url = `data:text/javascript,${encodeURIComponent(source)}`
++    const module = await loadTraced(url, sink)
++    assert.equal(module.hello('wasm'), 'hello wasm')
++    assert.deepEqual(unsequenced(events), [
++        {kind: 'log', text: 'ready'},
++        {kind: 'js_to_wasm', name: 'hello', args: ['wasm']},
++        {kind: 'cpp_enter', name: 'hello', file: 'hello.cpp', line: 3, args: ['wasm']},
++        {kind: 'log', text: 'greeted'},
++        {kind: 'cpp_exit', name: 'hello'},
++        {kind: 'return', name: 'hello', result: 'hello wasm'},
++    ])
++    assert.deepEqual(events.map(event => event.seq), [0, 1, 2, 3, 4, 5])
++})
+diff --git a/test/wasm/trace.mjs b/test/wasm/trace.mjs
+new file mode 100644
+index 0000000..6aa29ca
+--- /dev/null
++++ b/test/wasm/trace.mjs
+@@ -0,0 +1,110 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The site's wasm, build/app/site-app.mjs, built with WEBCPP_SITE_TRACE, loaded by src/trace.ts's
++// loadTraced and running the player's machine, machines/player.json: every call across between
++// JavaScript and the wasm, and every C++ scope app/site_app.cpp marks, arrive as one ordered
++// stream, each scope with its file, its line and its arguments; and the trace never changes what
++// the machine answers, nor writes anything when nothing listens.
++//
++// The npm script test:wasm runs it, never npm test, which needs no C++ build.
++
++import assert from 'node:assert/strict'
++import {existsSync, readFileSync} from 'node:fs'
++import {join} from 'node:path'
++import test from 'node:test'
++import {pathToFileURL} from 'node:url'
++import {loadSiteApp} from '../../src/machine.ts'
++import {loadTraced} from '../../src/trace.ts'
++import {site} from '../site.mjs'
++
++const module = join(site, 'build/app/site-app.mjs')
++const config = readFileSync(join(site, 'machines/player.json'), 'utf8')
++const source = readFileSync(join(site, 'app/site_app.cpp'), 'utf8')
++
++function url() {
++    assert.ok(existsSync(module), `${module} is missing: build it at the superproject's root with ` +
++        'b2 /webcpp/site/app//wasm (b2 /webcpp/site//test and b2 site build it first)')
++    return pathToFileURL(module).href
++}
++
++/** The line of app/site_app.cpp that marks the scope name. */
++function lineOf(name) {
++    const index = source.split('\n').findIndex(line => line.includes(`WEBCPP_SITE_TRACE_SCOPE("${name}"`))
++    assert.ok(index >= 0, `app/site_app.cpp marks ${name}`)
++    return index + 1
++}
++
++const events = ['{"type":"PLAY"}', '{"type":"TICK"}', '{"type":"SPEED","speed":2}', '{"type":"PAUSE"}']
++
++/** Runs the player's machine on app through events, and returns what create and each send answered. */
++function run(app) {
++    const host = app.MachineHost.create(config)
++    try {
++        return [host.snapshot(), ...events.map(event => host.send(event))]
++    } finally {
++        host.delete()
++    }
++}
++
++/** A scope's two events, cpp_enter with its arguments and cpp_exit, around the events inside it. */
++function scope(name, args, inside = []) {
++    return [
++        {kind: 'cpp_enter', name, file: 'site_app.cpp', line: lineOf(name), args},
++        ...inside,
++        {kind: 'cpp_exit', name},
++    ]
++}
++
++/** A call from JavaScript into the wasm around the events inside it, and its return. */
++function crossing(name, args, result, inside = []) {
++    return [{kind: 'js_to_wasm', name, args}, ...inside, {kind: 'return', name, result}]
++}
++
++test("the player's machine runs traced: each crossing and each C++ scope, in order", async () => {
++    const trace = []
++    const app = await loadTraced(url(), event => trace.push(event))
++    const answers = run(app)
++    const [initial, played, ticked, faster, paused] = answers
++    const context = (speed, played) => ({speed, played})
++    const expected = [
++        ...crossing('MachineHost.create', [config], {object: 'MachineHost'}, scope('machine_host::create', [])),
++        ...crossing('MachineHost.snapshot', [], initial),
++        ...crossing('MachineHost.send', [events[0]], played, scope('machine_host::send', [events[0]], [
++            ...scope('resetPlayed', []),
++        ])),
++        ...crossing('MachineHost.send', [events[1]], ticked, scope('machine_host::send', [events[1]], [
++            ...scope('countPlayed', ['TICK', context(1, 0)]),
++        ])),
++        ...crossing('MachineHost.send', [events[2]], faster, scope('machine_host::send', [events[2]], [
++            ...scope('isSpeed', ['SPEED', context(1, 1)]),
++            ...scope('setSpeed', ['SPEED', context(1, 1)]),
++        ])),
++        ...crossing('MachineHost.send', [events[3]], paused, scope('machine_host::send', [events[3]])),
++        ...crossing('MachineHost.delete', [], undefined),
++    ]
++    assert.deepEqual(trace.map(({seq, ...event}) => event), expected)
++    assert.deepEqual(trace.map(event => event.seq), trace.map((event, index) => index), 'seq counts every event')
++})
++
++test('the trace never changes what the machine answers, and is silent when nothing listens', async () => {
++    const traced = run(await loadTraced(url(), () => {}))
++    const written = []
++    const log = console.log
++    const error = console.error
++    console.log = (...args) => written.push(args)
++    console.error = (...args) => written.push(args)
++    try {
++        const plain = run(await loadSiteApp(url()))
++        assert.deepEqual(traced, plain)
++        assert.equal(JSON.parse(plain.at(-1)).value, 'paused')
++        assert.deepEqual(JSON.parse(plain.at(-1)).context, {speed: 2, played: 1})
++    } finally {
++        console.log = log
++        console.error = error
++    }
++    assert.deepEqual(written, [])
++})
+-- 
+2.55.0
+

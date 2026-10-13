@@ -1,0 +1,99 @@
+# Copyright (c) 2026 WebCpp.org
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# https://www.boost.org/LICENSE_1_0.txt)
+#
+# trystero, serverless WebRTC rooms, wire compatible with Trystero. A program
+# uses /webcpp/trystero//trystero, the rooms and the browser backend, or
+# /webcpp/trystero//native for the native backend.
+
+project /webcpp/trystero ;
+
+# libsecp256k1, libdatachannel and OpenSSL, which webcpp does not build
+# until it builds them from third_party/, are found where
+# -sSECP256K1_ROOT=<dir>, -sSECP256K1_EMSCRIPTEN_ROOT=<dir>,
+# -sLIBDATACHANNEL_ROOT=<dir> and -sOPENSSL_ROOT=<dir> on b2's command line
+# say, a relative one from b2's working directory, else in the
+# superproject's .local/, where webcpp's CI installs them, else, natively
+# outside Windows, in /usr/include or /usr/local/include, where a system
+# install is legitimate (webcpp.external and webcpp.external-found). The
+# environment is never read. When none holds a library, trystero is left
+# out, with one message that names it, unless the build gives
+# webcpp-require-external=on, as the CI does, which stops it instead.
+import webcpp ;
+
+# MSVC's names are CMake's there: libsecp256k1.lib, and OpenSSL's libssl.lib
+# and libcrypto.lib, which an installation of Shining Light Productions, as
+# GitHub's Windows images have, keeps in lib/VC/x64/MD. A static
+# libsecp256k1 on Windows needs SECP256K1_STATIC, or its header declares
+# every function imported from a DLL.
+# tag::dependencies[]
+local secp256k1-root = [ webcpp.external trystero : libsecp256k1
+    : SECP256K1_ROOT : secp256k1-native : secp256k1.h : native ] ;
+local secp256k1-emscripten-root = [ webcpp.external trystero : libsecp256k1
+    : SECP256K1_EMSCRIPTEN_ROOT : secp256k1-emscripten : secp256k1.h : emscripten ] ;
+local libdatachannel-root = [ webcpp.external trystero : libdatachannel
+    : LIBDATACHANNEL_ROOT : libdatachannel : rtc/rtc.hpp : native ] ;
+local openssl-root = [ webcpp.external trystero : OpenSSL : OPENSSL_ROOT : openssl
+    : openssl/ssl.h : native ] ;
+lib secp256k1 : : <name>secp256k1 <toolset>emscripten
+    <search>$(secp256k1-emscripten-root)/lib
+  : : <include>$(secp256k1-emscripten-root)/include ;
+lib secp256k1 : : <name>libsecp256k1 <toolset>msvc
+    <search>$(secp256k1-root)/lib
+  : : <include>$(secp256k1-root)/include <define>SECP256K1_STATIC ;
+lib secp256k1 : : <name>secp256k1 <search>$(secp256k1-root)/lib
+  : : <include>$(secp256k1-root)/include ;
+lib datachannel : : <name>datachannel <search>$(libdatachannel-root)/lib
+  : : <include>$(libdatachannel-root)/include
+    <dll-path>$(libdatachannel-root)/lib ;
+lib ssl : : <name>libssl <toolset>msvc <search>$(openssl-root)/lib
+    <search>$(openssl-root)/lib/VC/x64/MD
+  : : <include>$(openssl-root)/include ;
+lib ssl : : <name>ssl <search>$(openssl-root)/lib
+  : : <include>$(openssl-root)/include ;
+lib crypto : : <name>libcrypto <toolset>msvc <search>$(openssl-root)/lib
+    <search>$(openssl-root)/lib/VC/x64/MD
+  : : <include>$(openssl-root)/include ;
+lib crypto : : <name>crypto <search>$(openssl-root)/lib
+  : : <include>$(openssl-root)/include ;
+# end::dependencies[]
+
+# The dependencies of the rooms: libsecp256k1, the emscripten build of it on
+# emscripten. Checked only when a target that uses trystero is built.
+rule trystero-dependencies ( properties * )
+{
+    return [ webcpp.external-found trystero : libsecp256k1 : $(properties) ] ;
+}
+
+# The native backend's own dependencies, checked only when a target that
+# uses it is built.
+rule native-dependencies ( properties * )
+{
+    return [ webcpp.external-found trystero : libdatachannel OpenSSL
+        : $(properties) ] ;
+}
+
+# On emscripten, the browser has no threads (the event loop drives Asio), and
+# the browser backend reaches the page through embind: -lembind, what b2's
+# <embind>on links, which as a usage requirement it would drop (measured: a
+# program then fails to link, undefined _embind_register_function), since
+# b2 takes only free features from usage requirements.
+# tag::trystero[]
+alias trystero : : <conditional>@trystero-dependencies
+  : : <include>include <library>/boost//headers <library>/webcpp//boost_json
+  <library>/webcpp/config//config <library>secp256k1
+  <toolset>emscripten:<define>BOOST_ASIO_DISABLE_THREADS
+  <toolset>emscripten:<linkflags>-lembind ;
+# end::trystero[]
+
+# The native backend needs exceptions: libdatachannel reports errors by
+# throwing, and data_channel.hpp and peer_connection.hpp catch them. Each
+# headers-alone call, test and program of it declares
+# <exception-handling>on itself, since b2 lets no usage requirement override
+# a build's exception-handling=off.
+# tag::native[]
+alias native : : <conditional>@native-dependencies
+  : : <library>trystero <library>datachannel <library>ssl <library>crypto ;
+# end::native[]

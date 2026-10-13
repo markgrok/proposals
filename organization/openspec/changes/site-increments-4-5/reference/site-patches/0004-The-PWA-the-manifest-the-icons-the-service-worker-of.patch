@@ -1,0 +1,3138 @@
+From b17766bd835ff66ff0a3c5d9e096b665bc23a6a5 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 16:35:23 -0400
+Subject: [PATCH 4/7] The PWA: the manifest, the icons, the service worker of
+ the site's own, and the install flow on webcpp::xstate
+
+---
+ Jamfile                     |   6 +-
+ README.md                   |  10 +-
+ app/Jamfile                 |   3 +
+ app/site_app.cpp            |  58 ++++++
+ app/site_app.hpp            |   6 +
+ app/test/install_test.cpp   | 237 +++++++++++++++++++++++++
+ assets/manifest.webmanifest |   9 +
+ assets/site.css             | 193 ++++++++++++++++++++
+ machines/install.json       |  40 +++++
+ src/assets.d.ts             |   6 +
+ src/components/header.tsx   |   5 +-
+ src/install.tsx             | 188 ++++++++++++++++++++
+ src/install_flow.ts         | 340 ++++++++++++++++++++++++++++++++++++
+ src/library.ts              |   5 +-
+ src/machine.ts              |   2 +-
+ src/precache.ts             |  90 ++++++++++
+ src/server.tsx              |   8 +
+ src/sw.ts                   | 323 ++++++++++++++++++++++++++++++++++
+ src/theme.ts                |  34 ++++
+ test/install_test.mjs       | 308 ++++++++++++++++++++++++++++++++
+ test/manifest_test.mjs      |  81 +++++++++
+ test/oracle.mjs             |  77 ++++++++
+ test/precache_test.mjs      |  97 ++++++++++
+ test/pwa.mjs                |  97 ++++++++++
+ test/sw_test.mjs            | 216 +++++++++++++++++++++++
+ test/wasm/install.mjs       |  86 +++++++++
+ test/wasm/machine.mjs       |  26 +--
+ tools/build.mjs             |  68 ++++++--
+ tools/precache.mjs          |  67 +++++++
+ tsconfig.json               |   3 +-
+ 30 files changed, 2644 insertions(+), 45 deletions(-)
+ create mode 100644 app/test/install_test.cpp
+ create mode 100644 assets/manifest.webmanifest
+ create mode 100644 machines/install.json
+ create mode 100644 src/install.tsx
+ create mode 100644 src/install_flow.ts
+ create mode 100644 src/precache.ts
+ create mode 100644 src/sw.ts
+ create mode 100644 src/theme.ts
+ create mode 100644 test/install_test.mjs
+ create mode 100644 test/manifest_test.mjs
+ create mode 100644 test/oracle.mjs
+ create mode 100644 test/precache_test.mjs
+ create mode 100644 test/pwa.mjs
+ create mode 100644 test/sw_test.mjs
+ create mode 100644 test/wasm/install.mjs
+ create mode 100644 tools/precache.mjs
+
+diff --git a/Jamfile b/Jamfile
+index 7dd257f..fe8587d 100644
+--- a/Jamfile
++++ b/Jamfile
+@@ -78,11 +78,11 @@ actions pages
+ # pretest, so npm alone never reads a stale build/server.mjs) and runs every
+ # test/**/*_test.mjs, none of which needs the C++ build; its npm test:wasm,
+ # test/wasm/*.mjs, which runs the site's wasm, built and copied into build/app/
+-# first; its typecheck; and machine_host's native test (app/).
+-# b2 /webcpp/site//test.
++# first; its typecheck; and machine_host's native tests (app/), on the player's
++# machine and on the install flow's. b2 /webcpp/site//test.
+ notfile test : @test
+   : : <dependency>node-modules <dependency>app//wasm <dependency>app//site_app_test
+-    <webcpp-boost-check>off ;
++    <dependency>app//install_test <webcpp-boost-check>off ;
+ 
+ rule test ( targets * : sources * : properties * )
+ {
+diff --git a/README.md b/README.md
+index 93f158d..9ee43c1 100644
+--- a/README.md
++++ b/README.md
+@@ -117,12 +117,12 @@ Python for the report: one more tool on `PATH`, at version 26.7.0.
+ | `Jamfile` | the site's targets; `b2 site`, at the superproject, runs them |
+ | `package.json`, `package-lock.json` | the site's own node dependencies, pinned, and its scripts: `build`, `test`, `test:wasm`, `typecheck`, `dev` and `serve` |
+ | `pages/` | the site's pages, in OpenUI Lang: `index.oui` is the home, `<name>.oui` the page `<name>/` |
+-| `src/` | the components pages are written with, and the renderer: `server.tsx` prerenders a page, `client.tsx` hydrates it in the browser; `machine.ts` loads the site's wasm and gives a component a machine of it (`useMachine`) |
+-| `app/` | the site's wasm, `site-app.mjs` and `site-app.wasm`, laid out at the site's `assets/app/`: C++ on webcpp::xstate's machine layer that runs the site's machines, its embind bindings, and its native test |
+-| `machines/` | the site's state machines, as XState's JSON configs: `player.json`, the visualizer's player |
+-| `assets/` | the styles, the logo and `card.svg`, the social cards' template, copied to the site's `assets/` |
++| `src/` | the components pages are written with, and the renderer: `server.tsx` prerenders a page, `client.tsx` hydrates it in the browser; `machine.ts` loads the site's wasm and gives a component a machine of it (`useMachine`); the PWA: `sw.ts`, the service worker, bundled to the site's `sw.js`, and `install.tsx`, the offer to install the site, which runs the install flow (`install_flow.ts`) on the site's wasm |
++| `app/` | the site's wasm, `site-app.mjs` and `site-app.wasm`, laid out at the site's `assets/app/`: C++ on webcpp::xstate's machine layer that runs the site's machines, its embind bindings, and its native tests |
++| `machines/` | the site's state machines, as XState's JSON configs: `player.json`, the visualizer's player, and `install.json`, the flow that installs the site for offline use |
++| `assets/` | the styles, the logo and `card.svg`, the social cards' template, copied to the site's `assets/`; `manifest.webmanifest`, which the build completes with the icons and the theme's colours at the site's root |
+ | `seo/queries.json` | the searches the site answers, each with the page that answers it, which a test checks |
+-| `tools/build.mjs` | the `build` script: the bundles, the pages rendered to HTML with their social cards (`tools/cards.mjs`), the header of the libraries' pages, and the indexing files (`--index`) |
++| `tools/build.mjs` | the `build` script: the bundles, the pages rendered to HTML with their social cards (`tools/cards.mjs`), the header of the libraries' pages, the indexing files (`--index`), and the list the service worker caches, `precache.json` (`--pwa`, `tools/precache.mjs`), written last |
+ | `tools/indexing.mjs` | `robots.txt`, `llms.txt`, `libraries.json` and, on the release channel, `sitemap.xml`, written once `b2 site` has laid the whole site out |
+ | `tools/serve.mjs`, `tools/dev.mjs` | the `serve` and `dev` scripts |
+ | `test/` | the site's checks, and `fixtures/catalogue.json`, the catalogue they and `npm run dev` render the pages with; `wasm/`, the checks of the site's wasm, which `npm run test:wasm` runs |
+diff --git a/app/Jamfile b/app/Jamfile
+index 03db629..793ed59 100644
+--- a/app/Jamfile
++++ b/app/Jamfile
+@@ -9,6 +9,7 @@
+ # embind bindings; and machine_host's native test.
+ #
+ #   site_app_test  machine_host on the player's machine, natively;
++#   install_test   machine_host on the install flow's machine, natively;
+ #   site-app       the wasm, on emscripten alone: site-app.js and, beside
+ #                  it, site-app.wasm, which em++ writes and b2 does not know;
+ #   wasm           site-app built with emscripten in release, whatever the
+@@ -47,6 +48,8 @@ rule native-only ( properties * )
+ 
+ run test/site_app_test.cpp site_app.cpp : : ../machines/player.json
+   : <conditional>@native-only : site_app_test ;
++run test/install_test.cpp site_app.cpp : : ../machines/install.json
++  : <conditional>@native-only : install_test ;
+ 
+ exe site-app : site_app.cpp bindings.cpp
+   : <conditional>@emscripten-only
+diff --git a/app/site_app.cpp b/app/site_app.cpp
+index b12d4c7..eefd4ba 100644
+--- a/app/site_app.cpp
++++ b/app/site_app.cpp
+@@ -64,6 +64,58 @@ xstate::result<bool> is_speed(const xstate::action_args& args) {
+     return !inexact && (value == 0.5 || value == 1.0 || value == 2.0);
+ }
+ 
++/** The member key of the event, or nullptr when it has none. */
++const boost::json::value* event_member(const xstate::action_args& args, std::string_view key) {
++    return args.event.payload.if_contains(key);
++}
++
++/** `missing` = the event's `bytes`, `version` = its `version`: what MISSING says is not cached. */
++xstate::result<boost::json::object> set_missing(const xstate::action_args& args) {
++    const boost::json::value* bytes = event_member(args, "bytes");
++    const boost::json::value* version = event_member(args, "version");
++    if (bytes == nullptr || !bytes->is_int64() || version == nullptr || !version->is_string()) {
++        return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
++    }
++    return boost::json::object{{"missing", *bytes}, {"version", *version}};
++}
++
++xstate::result<boost::json::object> start_install(const xstate::action_args& /*args*/) {
++    return boost::json::object{{"done", 0}, {"reason", ""}};
++}
++
++xstate::result<boost::json::object> add_done(const xstate::action_args& args) {
++    const std::int64_t* done = context_int64(args, "done");
++    const boost::json::value* bytes = event_member(args, "bytes");
++    if (done == nullptr || bytes == nullptr || !bytes->is_int64()) {
++        return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
++    }
++    return boost::json::object{{"done", *done + bytes->get_int64()}};
++}
++
++xstate::result<boost::json::object> set_reason(const xstate::action_args& args) {
++    const boost::json::value* reason = event_member(args, "reason");
++    if (reason == nullptr || !reason->is_string()) {
++        return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
++    }
++    return boost::json::object{{"reason", *reason}};
++}
++
++xstate::result<boost::json::object> offer_reload(const xstate::action_args& /*args*/) {
++    return boost::json::object{{"reload", true}};
++}
++
++/**
++ Whether the event's `declined`, the version the reader said Not now to, is its `version`.
++ Tip: the page reads `declined` from its storage: null, or no member, when the reader never
++ declined.
++*/
++xstate::result<bool> was_declined(const xstate::action_args& args) {
++    const boost::json::value* declined = event_member(args, "declined");
++    const boost::json::value* version = event_member(args, "version");
++    return declined != nullptr && declined->is_string() && version != nullptr &&
++           version->is_string() && declined->get_string() == version->get_string();
++}
++
+ std::string_view status_name(xstate::status of) {
+     switch (of) {
+         case xstate::status::active: return "active";
+@@ -80,7 +132,13 @@ webcpp::xstate::implementations site_implementations() {
+     registry.actions.emplace("resetPlayed", xstate::assign_action{.assignment = reset_played});
+     registry.actions.emplace("countPlayed", xstate::assign_action{.assignment = count_played});
+     registry.actions.emplace("setSpeed", xstate::assign_action{.assignment = set_speed});
++    registry.actions.emplace("setMissing", xstate::assign_action{.assignment = set_missing});
++    registry.actions.emplace("startInstall", xstate::assign_action{.assignment = start_install});
++    registry.actions.emplace("addDone", xstate::assign_action{.assignment = add_done});
++    registry.actions.emplace("setReason", xstate::assign_action{.assignment = set_reason});
++    registry.actions.emplace("offerReload", xstate::assign_action{.assignment = offer_reload});
+     registry.guards.emplace("isSpeed", is_speed);
++    registry.guards.emplace("wasDeclined", was_declined);
+     return registry;
+ }
+ 
+diff --git a/app/site_app.hpp b/app/site_app.hpp
+index 5f659c9..333970f 100644
+--- a/app/site_app.hpp
++++ b/app/site_app.hpp
+@@ -30,6 +30,12 @@ namespace webcpp_site {
+  | `countPlayed` | assign | `played` + 1 |
+  | `setSpeed` | assign | `speed` = the event's `speed` |
+  | `isSpeed` | guard | the event's `speed` is 0.5, 1 or 2 |
++ | `setMissing` | assign | `missing` = the event's `bytes`, `version` = its `version` |
++ | `startInstall` | assign | `done` = 0, `reason` = "" |
++ | `addDone` | assign | `done` + the event's `bytes` |
++ | `setReason` | assign | `reason` = the event's `reason` |
++ | `offerReload` | assign | `reload` = true |
++ | `wasDeclined` | guard | the event's `declined` is its `version` |
+ */
+ webcpp::xstate::implementations site_implementations();
+ 
+diff --git a/app/test/install_test.cpp b/app/test/install_test.cpp
+new file mode 100644
+index 0000000..75c1deb
+--- /dev/null
++++ b/app/test/install_test.cpp
+@@ -0,0 +1,237 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++/**
++ Tests machine_host on the install flow's machine, machines/install.json,
++ whose path is the program's one argument: every transition of the flow, its
++ context through them, and a version the reader declined, which is not asked
++ again.
++*/
++
++#include "site_app.hpp"
++
++#include <boost/core/lightweight_test.hpp>
++#include <boost/json.hpp>
++#include <boost/system/result.hpp>
++
++#include <array>
++#include <cstddef>
++#include <cstdio>
++#include <initializer_list>
++#include <span>
++#include <string>
++#include <string_view>
++
++namespace {
++
++/**
++ The text of the file at path, read into buffer, or "" when it cannot be read or does not fit.
++ Tip: a buffer, since a std::string grown here is a throw clang-tidy finds reaching main.
++*/
++std::string_view read_file(const char* path, std::span<char> buffer) {
++    std::FILE* file = std::fopen(path, "rb");
++    if (file == nullptr) {
++        return {};
++    }
++    const std::size_t count = std::fread(buffer.data(), 1, buffer.size(), file);
++    const bool whole = std::feof(file) != 0 && std::ferror(file) == 0;
++    const bool closed = std::fclose(file) == 0;
++    return whole && closed ? std::string_view(buffer.data(), count) : std::string_view();
++}
++
++/** A snapshot's JSON, as machine_host writes it, read back; null when it is not JSON. */
++boost::json::value parsed(std::string_view json) {
++    boost::system::error_code failed;
++    const boost::json::value value = boost::json::parse(json, failed);
++    BOOST_TEST(!failed);
++    return failed ? boost::json::value() : value;
++}
++
++/** The member key of the snapshot's context, or null when it has none. */
++boost::json::value context_member(const boost::json::value& snapshot, std::string_view key) {
++    const boost::json::value* context = snapshot.as_object().if_contains("context");
++    if (context == nullptr || !context->is_object()) {
++        return nullptr;
++    }
++    const boost::json::value* member = context->as_object().if_contains(key);
++    return member == nullptr ? boost::json::value() : *member;
++}
++
++/**
++ The machine of config after each event in turn: its last snapshot, or null when the config or
++ an event is refused.
++*/
++boost::json::value after(std::string_view config, std::initializer_list<std::string_view> events) {
++    boost::system::result<webcpp_site::machine_host> host =
++        webcpp_site::machine_host::create(config);
++    if (!BOOST_TEST(host.has_value())) {
++        return nullptr;
++    }
++    webcpp_site::machine_host& flow = host.unsafe_value();
++    boost::json::value last = parsed(flow.snapshot());
++    for (const std::string_view event : events) {
++        const boost::system::result<std::string> sent = flow.send(event);
++        if (!BOOST_TEST(sent.has_value())) {
++            return nullptr;
++        }
++        last = parsed(sent.unsafe_value());
++    }
++    BOOST_TEST_EQ(last.at("status"), boost::json::value("active"));
++    return last;
++}
++
++/** Whether snapshot is an object whose value is state; a failed test otherwise. */
++bool is_in(const boost::json::value& snapshot, std::string_view state) {
++    return BOOST_TEST(snapshot.is_object()) &&
++           BOOST_TEST_EQ(snapshot.at("value"), boost::json::value(state));
++}
++
++constexpr std::string_view missing =
++    R"({"type": "MISSING", "bytes": 1234, "version": "v2", "declined": null})";
++
++void starts_checking(std::string_view config) {
++    const boost::json::value checking = after(config, {});
++    if (!is_in(checking, "checking")) {
++        return;
++    }
++    BOOST_TEST_EQ(context_member(checking, "missing"), boost::json::value(0));
++    BOOST_TEST_EQ(context_member(checking, "done"), boost::json::value(0));
++    BOOST_TEST_EQ(context_member(checking, "version"), boost::json::value(""));
++    BOOST_TEST_EQ(context_member(checking, "reason"), boost::json::value(""));
++    BOOST_TEST_EQ(context_member(checking, "reload"), boost::json::value(false));
++}
++
++void complete_is_ready(std::string_view config) {
++    const boost::json::value ready = after(config, {R"({"type": "COMPLETE"})"});
++    if (is_in(ready, "ready")) {
++        BOOST_TEST_EQ(context_member(ready, "reload"), boost::json::value(false));
++    }
++}
++
++void missing_asks_with_the_size(std::string_view config) {
++    const boost::json::value asking = after(config, {missing});
++    if (!is_in(asking, "asking")) {
++        return;
++    }
++    BOOST_TEST_EQ(context_member(asking, "missing"), boost::json::value(1234));
++    BOOST_TEST_EQ(context_member(asking, "version"), boost::json::value("v2"));
++}
++
++void a_declined_version_is_not_asked_again(std::string_view config) {
++    const boost::json::value declined =
++        after(config, {R"({"type": "MISSING", "bytes": 1234, "version": "v2", "declined": "v2"})"});
++    if (is_in(declined, "declined")) {
++        BOOST_TEST_EQ(context_member(declined, "version"), boost::json::value("v2"));
++    }
++    const boost::json::value other =
++        after(config, {R"({"type": "MISSING", "bytes": 1234, "version": "v2", "declined": "v1"})"});
++    is_in(other, "asking");
++    const boost::json::value never =
++        after(config, {R"({"type": "MISSING", "bytes": 1234, "version": "v2"})"});
++    is_in(never, "asking");
++}
++
++void decline_is_declined(std::string_view config) {
++    const boost::json::value declined = after(config, {missing, R"({"type": "DECLINE"})"});
++    if (is_in(declined, "declined")) {
++        BOOST_TEST_EQ(context_member(declined, "version"), boost::json::value("v2"));
++    }
++}
++
++void installs_counting_the_bytes(std::string_view config) {
++    const boost::json::value installing =
++        after(config, {
++                          missing,
++                          R"({"type": "ACCEPT"})",
++                          R"({"type": "PROGRESS", "bytes": 1000})",
++                          R"({"type": "PROGRESS", "bytes": 234})",
++                      });
++    if (is_in(installing, "installing")) {
++        BOOST_TEST_EQ(context_member(installing, "done"), boost::json::value(1234));
++    }
++    const boost::json::value ready = after(config, {
++                                                       missing,
++                                                       R"({"type": "ACCEPT"})",
++                                                       R"({"type": "PROGRESS", "bytes": 1234})",
++                                                       R"({"type": "INSTALLED"})",
++                                                   });
++    if (is_in(ready, "ready")) {
++        BOOST_TEST_EQ(context_member(ready, "reload"), boost::json::value(false));
++    }
++}
++
++void a_failure_asks_again_with_its_reason(std::string_view config) {
++    const boost::json::value asking =
++        after(config, {
++                          missing,
++                          R"({"type": "ACCEPT"})",
++                          R"({"type": "PROGRESS", "bytes": 1000})",
++                          R"({"type": "FAILED", "reason": "the network failed"})",
++                      });
++    if (!is_in(asking, "asking")) {
++        return;
++    }
++    BOOST_TEST_EQ(context_member(asking, "reason"), boost::json::value("the network failed"));
++    const boost::json::value again =
++        after(config, {
++                          missing,
++                          R"({"type": "ACCEPT"})",
++                          R"({"type": "PROGRESS", "bytes": 1000})",
++                          R"({"type": "FAILED", "reason": "the network failed"})",
++                          R"({"type": "ACCEPT"})",
++                      });
++    if (is_in(again, "installing")) {
++        BOOST_TEST_EQ(context_member(again, "done"), boost::json::value(0));
++        BOOST_TEST_EQ(context_member(again, "reason"), boost::json::value(""));
++    }
++}
++
++void a_new_version_updates_then_offers_a_reload(std::string_view config) {
++    const boost::json::value updating =
++        after(config, {R"({"type": "COMPLETE"})", R"({"type": "NEW_VERSION"})"});
++    is_in(updating, "updating");
++    const boost::json::value ready =
++        after(config,
++              {R"({"type": "COMPLETE"})", R"({"type": "NEW_VERSION"})", R"({"type": "UPDATED"})"});
++    if (is_in(ready, "ready")) {
++        BOOST_TEST_EQ(context_member(ready, "reload"), boost::json::value(true));
++    }
++}
++
++void an_event_no_state_takes_moves_nothing(std::string_view config) {
++    is_in(after(config,
++                {
++                    R"({"type": "ACCEPT"})",
++                    R"({"type": "INSTALLED"})",
++                }),
++          "checking");
++    is_in(after(config, {R"({"type": "COMPLETE"})", R"({"type": "MISSING", "bytes": 1})"}),
++          "ready");
++    is_in(after(config, {missing, R"({"type": "DECLINE"})", R"({"type": "ACCEPT"})"}), "declined");
++}
++
++}  // namespace
++
++int main(int argc, char* argv[]) {
++    if (!BOOST_TEST_EQ(argc, 2)) {
++        return boost::report_errors();
++    }
++    std::array<char, 65536> buffer{};
++    const std::string_view config = read_file(argv[1], buffer);
++    if (!BOOST_TEST(!config.empty())) {
++        return boost::report_errors();
++    }
++    starts_checking(config);
++    complete_is_ready(config);
++    missing_asks_with_the_size(config);
++    a_declined_version_is_not_asked_again(config);
++    decline_is_declined(config);
++    installs_counting_the_bytes(config);
++    a_failure_asks_again_with_its_reason(config);
++    a_new_version_updates_then_offers_a_reload(config);
++    an_event_no_state_takes_moves_nothing(config);
++    return boost::report_errors();
++}
+diff --git a/assets/manifest.webmanifest b/assets/manifest.webmanifest
+new file mode 100644
+index 0000000..996bbdf
+--- /dev/null
++++ b/assets/manifest.webmanifest
+@@ -0,0 +1,9 @@
++{
++    "id": "./",
++    "name": "webcpp",
++    "short_name": "webcpp",
++    "lang": "en",
++    "start_url": "./",
++    "scope": "./",
++    "display": "standalone"
++}
+diff --git a/assets/site.css b/assets/site.css
+index f26016b..fa4ea88 100644
+--- a/assets/site.css
++++ b/assets/site.css
+@@ -452,6 +452,199 @@ main li code {
+     outline-offset: 2px;
+ }
+ 
++/*
++ * The offer to install the site (InstallPrompt), in the header. The question, the progress and a
++ * new version's reload are a row of their own under the logo's line, at every width; the offer to
++ * install the app itself, once the site is, is a small button at the right: on the logo's line,
++ * before the Menu, on a phone.
++ */
++
++header.site > .menu {
++    order: 2;
++}
++
++header.site > nav {
++    order: 3;
++}
++
++header.site > .install {
++    display: flex;
++    flex-wrap: wrap;
++    align-items: center;
++    gap: 10px 16px;
++    order: 4;
++    flex-basis: 100%;
++    margin: 10px 0 2px;
++    padding: 14px 16px;
++    border-radius: 14px;
++    background: var(--surface);
++    font-size: 15px;
++    line-height: 1.45;
++}
++
++header.site > .install p {
++    margin: 0;
++}
++
++header.site > .install > p:first-child {
++    flex: 1 1 240px;
++}
++
++header.site > .install .install-note {
++    flex-basis: 100%;
++    order: 1;
++    color: var(--muted);
++    font-size: 14px;
++}
++
++.install-actions {
++    display: flex;
++    flex-wrap: wrap;
++    align-items: center;
++    gap: 8px;
++}
++
++header.site > .install progress {
++    flex-basis: 100%;
++    height: 6px;
++    border: 0;
++    border-radius: 3px;
++    background: var(--rule);
++    overflow: hidden;
++    appearance: none;
++}
++
++header.site > .install progress::-webkit-progress-bar {
++    background: var(--rule);
++}
++
++header.site > .install progress::-webkit-progress-value {
++    border-radius: 3px;
++    background: var(--accent-fill);
++}
++
++header.site > .install progress::-moz-progress-bar {
++    border-radius: 3px;
++    background: var(--accent-fill);
++}
++
++/* Small enough, with a narrower gap, that the logo, the offer and the Menu share a 360 px line. */
++header.site:has(> .install-offer) {
++    column-gap: 12px;
++}
++
++header.site > .install-offer {
++    order: 1;
++    margin-left: auto;
++}
++
++header.site > .install-offer button,
++header.site > .install-offer summary {
++    padding: 4px 12px;
++    font-size: 14px;
++}
++
++.install button,
++.install-offer button,
++.install-ios summary {
++    display: block;
++    padding: 7px 16px;
++    border: 0;
++    border-radius: 980px;
++    background: var(--accent-fill);
++    color: #ffffff;
++    font: inherit;
++    font-size: 15px;
++    font-weight: 500;
++    line-height: 1.4;
++    white-space: nowrap;
++    cursor: pointer;
++}
++
++.install button.quiet,
++.install-offer button,
++.install-ios summary {
++    background: none;
++    box-shadow: inset 0 0 0 1px var(--accent);
++    color: var(--accent);
++}
++
++.install button:hover,
++.install-offer button:hover,
++.install-ios summary:hover {
++    filter: brightness(1.1);
++}
++
++.install button:focus-visible,
++.install-offer button:focus-visible,
++.install-ios summary:focus-visible {
++    outline: 2px solid var(--accent);
++    outline-offset: 2px;
++}
++
++.install-ios {
++    position: relative;
++}
++
++.install-ios summary {
++    list-style: none;
++}
++
++.install-ios summary::-webkit-details-marker {
++    display: none;
++}
++
++.install-ios p {
++    position: absolute;
++    top: calc(100% + 8px);
++    right: 0;
++    z-index: 1;
++    width: 220px;
++    margin: 0;
++    padding: 12px 14px;
++    border: 1px solid var(--rule);
++    border-radius: 12px;
++    background: var(--background);
++    color: var(--text);
++    font-size: 14px;
++    line-height: 1.45;
++}
++
++/*
++ * From 768px the navigation has the logo's line to itself until 1280px, where the offer joins it,
++ * at the right, beside the navigation; in between, the offer is a line of its own, at the right.
++ */
++@media (min-width: 768px) {
++    header.site:has(> .install),
++    header.site:has(> .install-offer) {
++        flex-wrap: wrap;
++    }
++
++    header.site > .install-offer {
++        display: flex;
++        justify-content: flex-end;
++        order: 4;
++        flex-basis: 100%;
++        margin: 6px 0 0;
++    }
++}
++
++@media (min-width: 1280px) {
++    header.site:has(> .install-offer) {
++        flex-wrap: nowrap;
++        column-gap: 24px;
++    }
++
++    header.site:has(> .install-offer) > nav {
++        margin-left: auto;
++    }
++
++    header.site > .install-offer {
++        flex-basis: auto;
++        margin: 0;
++    }
++}
++
+ /*
+  * The libraries' table: on a phone each row is a block, its cells stacked under the library's
+  * name, each labelled; from 768 px a table, which scrolls inside its box rather than widen the page.
+diff --git a/machines/install.json b/machines/install.json
+new file mode 100644
+index 0000000..ca5d5b8
+--- /dev/null
++++ b/machines/install.json
+@@ -0,0 +1,40 @@
++{
++    "id": "install",
++    "initial": "checking",
++    "context": {"version": "", "missing": 0, "done": 0, "reason": "", "reload": false},
++    "states": {
++        "checking": {
++            "on": {
++                "COMPLETE": {"target": "ready"},
++                "MISSING": [
++                    {"target": "declined", "guard": "wasDeclined", "actions": "setMissing"},
++                    {"target": "asking", "actions": "setMissing"}
++                ]
++            }
++        },
++        "asking": {
++            "on": {
++                "ACCEPT": {"target": "installing", "actions": "startInstall"},
++                "DECLINE": {"target": "declined"}
++            }
++        },
++        "installing": {
++            "on": {
++                "PROGRESS": {"actions": "addDone"},
++                "INSTALLED": {"target": "ready"},
++                "FAILED": {"target": "asking", "actions": "setReason"}
++            }
++        },
++        "ready": {
++            "on": {
++                "NEW_VERSION": {"target": "updating"}
++            }
++        },
++        "updating": {
++            "on": {
++                "UPDATED": {"target": "ready", "actions": "offerReload"}
++            }
++        },
++        "declined": {}
++    }
++}
+diff --git a/src/assets.d.ts b/src/assets.d.ts
+index a55df30..b12e4c1 100644
+--- a/src/assets.d.ts
++++ b/src/assets.d.ts
+@@ -9,3 +9,9 @@ declare module '*.svg' {
+     const text: string
+     export default text
+ }
++
++/** A stylesheet imported by the server: its text, which the server bundle inlines (tools/build.mjs). */
++declare module '*.css' {
++    const text: string
++    export default text
++}
+diff --git a/src/components/header.tsx b/src/components/header.tsx
+index 12c1b7d..1cdc5c9 100644
+--- a/src/components/header.tsx
++++ b/src/components/header.tsx
+@@ -7,6 +7,7 @@
+ import {defineComponent} from '@openuidev/react-lang'
+ import * as z from 'zod'
+ import {useShared} from '../context.js'
++import {InstallPrompt} from '../install.js'
+ 
+ /** The site's pages the header links to, by their path from the root. */
+ const sections = [
+@@ -24,7 +25,8 @@ const sections = [
+  * The site's header, the logo and the navigation, which every page's Page and every library's
+  * page (renderFragment's `docs-header`) show. On a phone the navigation folds under a Menu, which
+  * opens and closes with no script: the `<details>` before it holds only its summary, and the
+- * stylesheet hides the navigation while the details are closed.
++ * stylesheet hides the navigation while the details are closed. Last, the offer to install the
++ * site, which shows only once the page runs (InstallPrompt).
+  */
+ export const Header = defineComponent({
+     name: 'Header',
+@@ -54,6 +56,7 @@ export const Header = defineComponent({
+                             aria-current={section.path === site.path ? 'page' : undefined}>{section.name}</a>
+                     ))}
+                 </nav>
++                <InstallPrompt.component props={{}} renderNode={() => null} />
+             </header>
+         )
+     },
+diff --git a/src/install.tsx b/src/install.tsx
+new file mode 100644
+index 0000000..f74c583
+--- /dev/null
++++ b/src/install.tsx
+@@ -0,0 +1,188 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++import {defineComponent} from '@openuidev/react-lang'
++import {useEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react'
++import * as z from 'zod'
++import install from '../machines/install.json' with {type: 'json'}
++import {useShared} from './context.js'
++import {declinedMemory, formatBytes, type InstallOffers, type InstallRun, installView, runInstall} from './install_flow.js'
++import {type MachineState, siteApp} from './machine.js'
++
++/** Chrome's, Edge's and Android's event, which lets a page show the browser's install prompt later. */
++type InstallPromptEvent = Event & {prompt(): Promise<unknown>}
++
++/**
++ * The browser's install prompt, kept from its beforeinstallprompt, which may come before React
++ * hydrates the page, so it is listened for as the bundle loads; and who wants to know of a change.
++ */
++let deferred: InstallPromptEvent | null = null
++const watchers = new Set<() => void>()
++
++function promptChanged(next: InstallPromptEvent | null) {
++    deferred = next
++    for (const watcher of watchers) {
++        watcher()
++    }
++}
++
++if (typeof window !== 'undefined') {
++    window.addEventListener('beforeinstallprompt', event => {
++        // The prompt's own button shows it, in place of the browser's banner.
++        event.preventDefault()
++        promptChanged(event as InstallPromptEvent)
++    })
++    window.addEventListener('appinstalled', () => promptChanged(null))
++}
++
++/** The declined version, for this page; localStorage is read only inside the memory's try. */
++const declined = declinedMemory(() => window.localStorage)
++
++/** Whether this is iOS outside the installed app: no install prompt there, but Add to Home Screen. */
++function onIos(): boolean {
++    const browser = navigator as Navigator & {standalone?: boolean}
++    const apple = /iPad|iPhone|iPod/.test(browser.userAgent) || (browser.platform === 'MacIntel' && browser.maxTouchPoints > 1)
++    return apple && browser.standalone !== true && !window.matchMedia('(display-mode: standalone)').matches
++}
++
++/** What the browser offers once the site is ready, and how to show its prompt; nothing on the server. */
++function useOffers(): InstallOffers & {showPrompt(): void} {
++    const prompt = useSyncExternalStore(watch => {
++        watchers.add(watch)
++        return () => {
++            watchers.delete(watch)
++        }
++    }, () => deferred, () => null)
++    const [ios, setIos] = useState(false)
++    useEffect(() => setIos(onIos()), [])
++    return {
++        prompt: prompt !== null,
++        ios,
++        showPrompt() {
++            if (deferred !== null) {
++                // The event's prompt shows once: the browser then fires another when it may again.
++                const shown = deferred
++                promptChanged(null)
++                shown.prompt().catch(() => {})
++            }
++        },
++    }
++}
++
++/**
++ * Runs the install flow (install_flow.ts) on the site's wasm while the component is mounted: the
++ * machine's state, and what the prompt's buttons do.
++ */
++export function useInstall(): [MachineState, Pick<InstallRun, 'accept' | 'decline' | 'reload'>] {
++    const {site} = useShared()
++    const [state, setState] = useState<MachineState>(null)
++    const run = useRef<InstallRun | null>(null)
++    useEffect(() => {
++        const started = runInstall({
++            app: siteApp(),
++            config: JSON.stringify(install),
++            scope: new URL(site.root || './', window.location.href).href,
++            fetch: (url, init) => window.fetch(url, init),
++            // Both are missing where the page is not a secure context.
++            caches: 'caches' in window ? window.caches : undefined,
++            serviceWorker: 'serviceWorker' in navigator ? navigator.serviceWorker : undefined,
++            declined,
++            persist: async () => navigator.storage?.persist?.(),
++            reload: () => window.location.reload(),
++        }, setState)
++        run.current = started
++        return () => {
++            started.stop()
++            if (run.current === started) {
++                run.current = null
++            }
++        }
++    }, [site.root])
++    const actions = useMemo(() => ({
++        accept: () => run.current?.accept(),
++        decline: () => run.current?.decline(),
++        reload: () => run.current?.reload(),
++    }), [])
++    return [state, actions]
++}
++
++/**
++ * The offer to install the app itself: the browser's prompt, or, on iOS, which has none, how to add
++ * the site to the Home Screen, under the same words.
++ */
++function AppOffer({app, showPrompt}: {app: 'prompt' | 'ios'; showPrompt(): void}) {
++    if (app === 'prompt') {
++        return <button type="button" className="install-app" onClick={showPrompt}>Install the app</button>
++    }
++    return (
++        <details className="install-ios">
++            <summary>Install the app</summary>
++            <p>In Safari, tap Share, then Add to Home Screen.</p>
++        </details>
++    )
++}
++
++/**
++ * The site's offer to install itself for instant and offline use, which the Header holds: the
++ * question, with the size to download; the progress; the reload a new version offers; and, once the
++ * site is installed, the browser's way to install the app. It shows nothing until the flow has
++ * something to say, so the page the build renders, and the one the browser hydrates, hold none.
++ */
++export const InstallPrompt = defineComponent({
++    name: 'InstallPrompt',
++    description: 'The offer to install the site for instant and offline use. The Header places it; a page never names it.',
++    props: z.object({}),
++    component: function InstallOffer() {
++        const [state, flow] = useInstall()
++        const offers = useOffers()
++        const [closed, setClosed] = useState(false)
++        const view = installView(state, offers)
++        if (view === null || (closed && view.kind === 'installed')) {
++            return null
++        }
++        switch (view.kind) {
++            case 'asking':
++                return (
++                    <section className="install" aria-label="Install the site">
++                        <p>{`Install this site for instant and offline use? It downloads ${formatBytes(view.bytes)}, once.`}</p>
++                        {view.reason ? <p className="install-note">{`The last try stopped: ${view.reason}`}</p> : null}
++                        <p className="install-actions">
++                            <button type="button" onClick={flow.accept}>Install</button>
++                            <button type="button" className="quiet" onClick={flow.decline}>Not now</button>
++                        </p>
++                    </section>
++                )
++            case 'installing':
++                return (
++                    <section className="install" aria-label="Install the site">
++                        <p role="status">{`Installing: ${formatBytes(view.done)} of ${formatBytes(view.bytes)}`}</p>
++                        <progress max={view.bytes} value={view.done} />
++                    </section>
++                )
++            case 'reload':
++                return (
++                    <section className="install" aria-label="A new version">
++                        <p>A new version of this site is ready.</p>
++                        <p className="install-actions">
++                            <button type="button" onClick={flow.reload}>Reload</button>
++                        </p>
++                    </section>
++                )
++            case 'installed':
++                return (
++                    <section className="install" aria-label="Installed">
++                        <p role="status">Installed: this site now opens at once, even offline.</p>
++                        <p className="install-actions">
++                            {view.app ? <AppOffer app={view.app} showPrompt={offers.showPrompt} /> : null}
++                            <button type="button" className="quiet" onClick={() => setClosed(true)}>Close</button>
++                        </p>
++                    </section>
++                )
++            case 'app':
++                return <div className="install-offer"><AppOffer app={view.app} showPrompt={offers.showPrompt} /></div>
++        }
++    },
++})
+diff --git a/src/install_flow.ts b/src/install_flow.ts
+new file mode 100644
+index 0000000..8c4278e
+--- /dev/null
++++ b/src/install_flow.ts
+@@ -0,0 +1,340 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The install flow as the page runs it: machines/install.json on the site's wasm (runMachine), fed
++// by what the page finds and what the service worker (sw.ts) says, and the effects of its
++// transitions. InstallPrompt's hook (install.tsx) runs it with the browser's environment; node
++// tests it with a fake one.
++//
++//   checking    reads precache.json, registers the worker of its version, and compares the caches
++//               with it (precache.ts): COMPLETE when this version is installed and serves the page;
++//               COMPLETE then NEW_VERSION when an earlier version is installed, and UPDATED once
++//               the new worker has cached the changes; MISSING, with the bytes to download and the
++//               version the reader declined, otherwise;
++//   asking      Install sends ACCEPT and asks the worker of this version to INSTALL; Not now
++//               sends DECLINE and remembers the version;
++//   installing  the worker's PROGRESS, INSTALLED and FAILED, as events; INSTALLED then asks the
++//               browser to keep the cache (navigator.storage.persist);
++//   ready       with a reload offered, Reload has the waiting worker take over, then reloads.
++//
++// A browser without a service worker or the Cache API, one that refuses to register the worker,
++// and a site without precache.json (npm run dev's) leave the machine in checking, which shows
++// nothing: the site still works from the network.
++
++import {type MachineEvent, type MachineState, type SiteApp, runMachine} from './machine.ts'
++import {
++    type CacheStorageLike, type Precache, cacheName, installedList, listUrl, otherInstalls, readList,
++    versionOf, workerUrl,
++} from './precache.ts'
++
++/** The install machine's context (machines/install.json). */
++export type InstallContext = {version: string; missing: number; done: number; reason: string; reload: boolean}
++
++/** Where the version the reader declined is kept. */
++export type DeclinedMemory = {get(): string | null; set(version: string): void}
++
++/** The part of the Web Storage API the memory uses. */
++type StorageLike = {getItem(key: string): string | null; setItem(key: string, value: string): void}
++
++/** The parts of a ServiceWorker, its registration and navigator.serviceWorker the flow uses. */
++type WorkerLike = EventTarget & {scriptURL: string; state: string; postMessage(message: unknown): void}
++type RegistrationLike = EventTarget & {active: WorkerLike | null; waiting: WorkerLike | null; installing: WorkerLike | null}
++type ContainerLike = EventTarget & {
++    controller: {scriptURL: string} | null
++    register(url: string, options: {scope: string}): Promise<RegistrationLike>
++    startMessages(): void
++}
++
++/** What the flow runs in: the browser's, or a test's fake. */
++export type InstallEnvironment = {
++    app: Promise<SiteApp>
++    /** machines/install.json, as text. */
++    config: string
++    /** The site's root, absolute, with its final slash: the worker's scope. */
++    scope: string
++    fetch(url: string, init?: RequestInit): Promise<Response>
++    caches?: CacheStorageLike
++    serviceWorker?: ContainerLike
++    declined: DeclinedMemory
++    /** Asks the browser to keep the site's storage. */
++    persist(): Promise<unknown>
++    reload(): void
++}
++
++/** The flow, run: what the prompt's buttons do, and its end. */
++export type InstallRun = {
++    accept(): void
++    decline(): void
++    reload(): void
++    stop(): void
++}
++
++/** What the prompt offers once the site is ready: the browser's install prompt, or iOS's way. */
++export type InstallOffers = {prompt: boolean; ios: boolean}
++
++/** What the prompt shows, or null for nothing. */
++export type InstallView =
++    | {kind: 'asking'; bytes: number; reason: string}
++    | {kind: 'installing'; done: number; bytes: number}
++    | {kind: 'reload'}
++    | {kind: 'installed'; app: 'prompt' | 'ios' | null}
++    | {kind: 'app'; app: 'prompt' | 'ios'}
++    | null
++
++const declinedKey = 'webcpp.install.declined'
++
++function messageOf(error: unknown): string {
++    return error instanceof Error ? error.message : String(error)
++}
++
++/**
++ * The declined version, kept in storage, which may throw (a private window's, or one the reader
++ * blocked): it is then kept for this page alone, and the next load asks again.
++ */
++export function declinedMemory(storage: () => StorageLike): DeclinedMemory {
++    let session: string | null = null
++    return {
++        get() {
++            try {
++                return storage().getItem(declinedKey) ?? session
++            } catch {
++                return session
++            }
++        },
++        set(version) {
++            session = version
++            try {
++                storage().setItem(declinedKey, version)
++            } catch {
++                // Kept for this page alone, above.
++            }
++        },
++    }
++}
++
++/**
++ * The worker of version in registration once its state is one ready accepts; a failure if it
++ * becomes redundant first. A worker the registration does not hold yet is awaited.
++ */
++function workerOf(registration: RegistrationLike, version: string, ready: (state: string) => boolean): Promise<WorkerLike> {
++    const matches = (worker: WorkerLike | null): worker is WorkerLike => worker !== null && versionOf(worker.scriptURL) === version
++    return new Promise((resolve, reject) => {
++        const watch = (worker: WorkerLike) => {
++            const step = () => {
++                if (ready(worker.state)) {
++                    worker.removeEventListener('statechange', step)
++                    resolve(worker)
++                } else if (worker.state === 'redundant') {
++                    worker.removeEventListener('statechange', step)
++                    reject(new Error('the service worker of this version stopped before it could install the site'))
++                }
++            }
++            worker.addEventListener('statechange', step)
++            step()
++        }
++        const found = [registration.active, registration.waiting, registration.installing].find(matches)
++        if (found) {
++            watch(found)
++            return
++        }
++        const update = () => {
++            if (matches(registration.installing)) {
++                registration.removeEventListener('updatefound', update)
++                watch(registration.installing)
++            }
++        }
++        registration.addEventListener('updatefound', update)
++    })
++}
++
++/** The bytes of list the version's cache lacks: every file, unless an earlier try cached some. */
++async function missingBytes(caches: CacheStorageLike, scope: string, list: Precache): Promise<number> {
++    const name = cacheName(scope, list.version)
++    if (!(await caches.has(name))) {
++        return list.total
++    }
++    const cache = await caches.open(name)
++    const absent = await Promise.all(list.files.map(async file => (await cache.match(scope + file.path)) === undefined))
++    return list.files.reduce((sum, file, i) => sum + (absent[i] ? file.size : 0), 0)
++}
++
++/** Runs the install flow, handing on to changed each state of its machine (runMachine's). */
++export function runInstall(env: InstallEnvironment, changed: (state: MachineState) => void): InstallRun {
++    let state: MachineState = null
++    let stopped = false
++    let list: Precache | null = null
++    let registration: RegistrationLike | null = null
++    let started: () => void = () => {}
++    const running = new Promise<void>(resolve => {
++        started = resolve
++    })
++    const machine = runMachine(env.app, env.config, next => {
++        state = next
++        changed(next)
++        if (next !== null && 'value' in next) {
++            started()
++        }
++    })
++    const send = (event: MachineEvent) => {
++        if (!stopped) {
++            machine.send(event)
++        }
++    }
++    const value = () => (state !== null && 'value' in state ? state.value : null)
++
++    const heard = (event: Event) => {
++        const data = (event as MessageEvent).data as {type?: unknown; version?: unknown; bytes?: unknown; reason?: unknown} | null
++        if (list === null || typeof data !== 'object' || data === null || data.version !== list.version) {
++            return
++        }
++        if (data.type === 'PROGRESS' && typeof data.bytes === 'number') {
++            send({type: 'PROGRESS', bytes: data.bytes})
++        } else if (data.type === 'INSTALLED') {
++            send({type: 'INSTALLED'})
++            if (value() === 'ready') {
++                env.persist().catch(() => {})
++            }
++        } else if (data.type === 'FAILED' && typeof data.reason === 'string') {
++            send({type: 'FAILED', reason: data.reason})
++        }
++    }
++
++    async function check() {
++        const {serviceWorker: container, caches} = env
++        if (!container || !caches) {
++            return
++        }
++        let fetched: Precache | null
++        try {
++            fetched = await readList(await env.fetch(listUrl(env.scope), {cache: 'no-store'}))
++        } catch {
++            return
++        }
++        if (fetched === null || stopped) {
++            return
++        }
++        const version = fetched.version
++        let registered: RegistrationLike
++        try {
++            registered = await container.register(workerUrl(env.scope, version), {scope: env.scope})
++        } catch {
++            return
++        }
++        if (stopped) {
++            return
++        }
++        list = fetched
++        registration = registered
++        container.addEventListener('message', heard)
++        container.startMessages()
++        const own = cacheName(env.scope, version)
++        const complete = (await caches.has(own)) && (await installedList(await caches.open(own), env.scope)) !== null
++        const earlier = await otherInstalls(caches, env.scope, version)
++        const serving = container.controller ? versionOf(container.controller.scriptURL) : null
++        const bytes = complete || earlier.length > 0 ? 0 : await missingBytes(caches, env.scope, fetched)
++        await running
++        if (stopped) {
++            return
++        }
++        if (complete && (serving === null || serving === version)) {
++            send({type: 'COMPLETE'})
++        } else if (complete || earlier.length > 0) {
++            send({type: 'COMPLETE'})
++            send({type: 'NEW_VERSION'})
++            const updated = (worker: string) => worker === 'installed' || worker === 'activating' || worker === 'activated'
++            workerOf(registered, version, updated).then(() => send({type: 'UPDATED'}), () => {
++                // The update failed: the installed version keeps serving, and the next page tries again.
++            })
++        } else {
++            send({type: 'MISSING', bytes, version, declined: env.declined.get()})
++        }
++    }
++
++    check().catch((error: unknown) => {
++        // What fails here leaves the flow in checking, which shows nothing; the site works from the network.
++        if (!stopped) {
++            console.warn('webcpp: the install flow stopped:', messageOf(error))
++        }
++    })
++
++    return {
++        accept() {
++            const at = list
++            const registered = registration
++            if (stopped || at === null || registered === null) {
++                return
++            }
++            send({type: 'ACCEPT'})
++            if (value() !== 'installing') {
++                return
++            }
++            workerOf(registered, at.version, worker => worker === 'activated').then(worker => {
++                if (!stopped) {
++                    worker.postMessage({type: 'INSTALL'})
++                }
++            }, (error: unknown) => send({type: 'FAILED', reason: messageOf(error)}))
++        },
++        decline() {
++            if (stopped || list === null) {
++                return
++            }
++            send({type: 'DECLINE'})
++            if (value() === 'declined') {
++                env.declined.set(list.version)
++            }
++        },
++        reload() {
++            const waiting = registration?.waiting
++            if (list !== null && env.serviceWorker && waiting && versionOf(waiting.scriptURL) === list.version) {
++                env.serviceWorker.addEventListener('controllerchange', () => env.reload(), {once: true})
++                waiting.postMessage({type: 'SKIP_WAITING'})
++                return
++            }
++            env.reload()
++        },
++        stop() {
++            stopped = true
++            machine.stop()
++            env.serviceWorker?.removeEventListener('message', heard)
++        },
++    }
++}
++
++/** What the prompt shows for state, the machine's, with the offers the browser makes. */
++export function installView(state: MachineState, offers: InstallOffers): InstallView {
++    if (state === null || !('value' in state)) {
++        return null
++    }
++    const context = state.context as InstallContext
++    const app = offers.prompt ? 'prompt' : offers.ios ? 'ios' : null
++    switch (state.value) {
++        case 'asking':
++            return {kind: 'asking', bytes: context.missing, reason: context.reason}
++        case 'installing':
++            return {kind: 'installing', done: context.done, bytes: context.missing}
++        case 'ready':
++            if (context.reload) {
++                return {kind: 'reload'}
++            }
++            if (context.done > 0) {
++                return {kind: 'installed', app}
++            }
++            return app === null ? null : {kind: 'app', app}
++        default:
++            return null
++    }
++}
++
++/** A size as a reader reads it: 512 bytes, 41 kB, 6.2 MB. */
++export function formatBytes(bytes: number): string {
++    if (bytes < 1000) {
++        return `${bytes} bytes`
++    }
++    if (bytes < 1_000_000) {
++        return `${Math.round(bytes / 1000)} kB`
++    }
++    return `${(bytes / 1_000_000).toFixed(1)} MB`
++}
+diff --git a/src/library.ts b/src/library.ts
+index 3622839..952f83f 100644
+--- a/src/library.ts
++++ b/src/library.ts
+@@ -20,12 +20,13 @@ import {SearchForm} from './components/search_form.js'
+ import {Section} from './components/section.js'
+ import {Targets} from './components/targets.js'
+ import {Text} from './components/text.js'
++import {InstallPrompt} from './install.js'
+ 
+ /**
+  * Every component of the site; a page's root is a Page. Header, Band and Footer are the Page's own,
+- * which no block of a page may hold.
++ * and InstallPrompt the Header's, which no block of a page may hold.
+  */
+ export const library = createLibrary({
+-    components: [Page, Header, Band, Footer, Hero, Section, Text, Code, Link, Doors, Targets, LibraryTable, LibraryList, Roadmap, SearchForm],
++    components: [Page, Header, Band, Footer, InstallPrompt, Hero, Section, Text, Code, Link, Doors, Targets, LibraryTable, LibraryList, Roadmap, SearchForm],
+     root: 'Page',
+ })
+diff --git a/src/machine.ts b/src/machine.ts
+index 4b37a32..faba016 100644
+--- a/src/machine.ts
++++ b/src/machine.ts
+@@ -128,7 +128,7 @@ let loading: Promise<SiteApp> | undefined
+  * b2 site lays out at `assets/app/`: a URL relative to the bundle, so that it holds on every page
+  * and under any prefix the site is served at.
+  */
+-function siteApp(): Promise<SiteApp> {
++export function siteApp(): Promise<SiteApp> {
+     loading ??= loadSiteApp(new URL('app/site-app.mjs', import.meta.url).href)
+     return loading
+ }
+diff --git a/src/precache.ts b/src/precache.ts
+new file mode 100644
+index 0000000..d54795b
+--- /dev/null
++++ b/src/precache.ts
+@@ -0,0 +1,90 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// What the service worker (sw.ts) and the page's install flow (install_flow.ts) agree on: the
++// list the build writes, precache.json (tools/precache.mjs), and the caches an install fills.
++//
++// Each version of the site is cached apart, in the cache `webcpp <scope> <version>`, which holds
++// every file of its list under the file's URL, each checked against its SHA-256 before it is put,
++// and, put last, the list itself under the list's URL: a cache holding its list is complete. The
++// scope in the name keeps apart two sites of one origin, a site and the one served under its
++// prefix. A worker serves its own version's cache alone, so that a page never mixes two builds.
++
++/** One file of the site: its path from the site's root, its SHA-256 in hex, its size in bytes. */
++export type PrecacheFile = {path: string; sha256: string; size: number}
++
++/** precache.json: the version, the SHA-256 of `files`; the sum of their sizes; the files, by path. */
++export type Precache = {version: string; total: number; files: PrecacheFile[]}
++
++/** The part of the Cache API the worker and the page use. */
++export type CacheLike = {
++    match(request: string): Promise<Response | undefined>
++    put(request: string, response: Response): Promise<void>
++}
++
++/** The part of CacheStorage the worker and the page use. */
++export type CacheStorageLike = {
++    open(name: string): Promise<CacheLike>
++    has(name: string): Promise<boolean>
++    delete(name: string): Promise<boolean>
++    keys(): Promise<string[]>
++}
++
++/** Every cache of the scope's site starts with this. */
++export function cachePrefix(scope: string): string {
++    return `webcpp ${scope} `
++}
++
++/** The cache of the version of the scope's site. */
++export function cacheName(scope: string, version: string): string {
++    return cachePrefix(scope) + version
++}
++
++/** The URL of the list, `precache.json` at the scope, the site's root. */
++export function listUrl(scope: string): string {
++    return `${scope}precache.json`
++}
++
++/** The script of the worker of a version, which the page registers: `sw.js?version=<version>`. */
++export function workerUrl(scope: string, version: string): string {
++    return `${scope}sw.js?version=${encodeURIComponent(version)}`
++}
++
++/** The version a worker's script URL names, or null for a script that names none. */
++export function versionOf(script: string): string | null {
++    return new URL(script).searchParams.get('version')
++}
++
++/** The list a response holds, or null when it is not one: the page and the worker trust no other shape. */
++export async function readList(response: Response | undefined): Promise<Precache | null> {
++    if (!response?.ok) {
++        return null
++    }
++    try {
++        const list = await response.json() as Precache
++        const valid = typeof list.version === 'string' && typeof list.total === 'number' && Array.isArray(list.files) &&
++            list.files.every(file => typeof file.path === 'string' && typeof file.sha256 === 'string' && typeof file.size === 'number')
++        return valid ? list : null
++    } catch {
++        return null
++    }
++}
++
++/** The list a cache holds once complete, or null while an install has not finished it. */
++export async function installedList(cache: CacheLike, scope: string): Promise<Precache | null> {
++    return readList(await cache.match(listUrl(scope)))
++}
++
++/**
++ * The names of the scope's caches that are complete, but the version's own: the site as an earlier
++ * version installed it, whose files a new version copies rather than fetch when unchanged.
++ */
++export async function otherInstalls(caches: CacheStorageLike, scope: string, version: string): Promise<string[]> {
++    const prefix = cachePrefix(scope)
++    const others = (await caches.keys()).filter(name => name.startsWith(prefix) && name !== cacheName(scope, version))
++    const complete = await Promise.all(others.map(async name => (await installedList(await caches.open(name), scope)) !== null))
++    return others.filter((_, i) => complete[i])
++}
+diff --git a/src/server.tsx b/src/server.tsx
+index b7d5c00..1e2e8ec 100644
+--- a/src/server.tsx
++++ b/src/server.tsx
+@@ -11,12 +11,14 @@ import {Header} from './components/header.js'
+ import {type GraphNode, SharedContext, type SiteContext} from './context.js'
+ import {attribute, describe, writeHead} from './head.js'
+ import {encodeSource, scriptJson} from './source.js'
++import {themeColours} from './theme.js'
+ import {PageTree} from './tree.js'
+ 
+ export {PageError}
+ /** The inline mark, for a test that renders two copies of it on one page. */
+ export {Mark} from './components/mark.js'
+ export {cardPath} from './head.js'
++export {themeColours} from './theme.js'
+ export type {Library, SiteContext} from './context.js'
+ 
+ /**
+@@ -36,6 +38,7 @@ export function renderPage(file: string, source: string, context: SiteContext):
+     const body = markup(renderToString(<PageTree source={source} shared={{site: context, addToGraph: node => graph.push(node)}} />))
+     const {title, description} = root.props as {title: string; description: string}
+     const head = describe(context, title, description, graph)
++    const colours = themeColours()
+     return [
+         '<!doctype html>',
+         '<html lang="en">',
+@@ -48,6 +51,11 @@ export function renderPage(file: string, source: string, context: SiteContext):
+         `<link rel="icon" href="${attribute(context.root)}favicon.ico" sizes="32x32">`,
+         `<link rel="icon" href="${attribute(context.root)}assets/logo.svg" type="image/svg+xml">`,
+         `<link rel="apple-touch-icon" href="${attribute(context.root)}assets/icons/apple-touch-icon.png">`,
++        // The PWA's manifest, at the site's root, whose scope it is (tools/build.mjs writes it), and
++        // the browser's colour around the page, the background of each theme.
++        `<link rel="manifest" href="${attribute(context.root)}manifest.webmanifest">`,
++        `<meta name="theme-color" content="${attribute(colours.light)}" media="(prefers-color-scheme: light)">`,
++        `<meta name="theme-color" content="${attribute(colours.dark)}" media="(prefers-color-scheme: dark)">`,
+         `<link rel="stylesheet" href="${attribute(context.root)}assets/chrome.css">`,
+         `<link rel="stylesheet" href="${attribute(context.root)}assets/site.css">`,
+         `<script type="module" src="${attribute(context.root)}assets/site.js"></script>`,
+diff --git a/src/sw.ts b/src/sw.ts
+new file mode 100644
+index 0000000..5cfbebf
+--- /dev/null
++++ b/src/sw.ts
+@@ -0,0 +1,323 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The site's service worker, bundled to sw.js at the site's root (tools/build.mjs). The page
++// registers it as sw.js?version=<v>, the version of the precache.json it read (install_flow.ts),
++// so that each build of the site has a worker of its own, which serves that build's cache alone
++// (precache.ts says how the caches are laid out):
++//
++//   install    with no install of the site yet, nothing: the reader has not been asked; the worker
++//              takes over at once. With an earlier version installed, the new version's files,
++//              those unchanged copied from the earlier cache and only those whose SHA-256 differs
++//              fetched, each checked, PROGRESS posted to the pages; the worker then waits for the
++//              reader's reload (SKIP_WAITING), the old one still serving the pages open;
++//   activate   removes the caches of every other version of the scope's site;
++//   fetch      a file of the installed list from the cache, without the network; any other
++//              same-origin GET from the network, precache.json first among them, and from the
++//              cache when the network fails, a navigation to its page there; another origin's
++//              request is never answered, so never cached;
++//   message    INSTALL, from the page whose reader accepted, caches what is missing, replying
++//              PROGRESS for each file, then INSTALLED or FAILED with the reason.
++//
++// The handlers are serviceWorker()'s, over the environment it is given, which node tests with a
++// fake one; the last lines give them the worker's own, when the bundle runs as one.
++
++import {
++    type CacheLike, type CacheStorageLike, type Precache, type PrecacheFile, cacheName, cachePrefix,
++    installedList, listUrl, otherInstalls, readList, versionOf,
++} from './precache.ts'
++
++export {cacheName}
++
++/** What the worker posts to a page; each names the version it is of. */
++export type WorkerMessage =
++    | {type: 'PROGRESS'; version: string; bytes: number}
++    | {type: 'INSTALLED'; version: string}
++    | {type: 'FAILED'; version: string; reason: string}
++
++/** The part of a Request the worker reads. */
++export type WorkerRequest = {url: string; method: string; mode: string}
++
++/** What the worker runs in: a ServiceWorkerGlobalScope's, or a test's fake. */
++export type WorkerEnvironment = {
++    /** The worker's script URL, `<scope>sw.js?version=<v>`. */
++    script: string
++    /** The registration's scope, the site's root, absolute, with its final slash. */
++    scope: string
++    caches: CacheStorageLike
++    fetch(request: string | WorkerRequest, init?: RequestInit): Promise<Response>
++    clients: {
++        matchAll(options: {type: 'window'; includeUncontrolled: boolean}): Promise<readonly {postMessage(message: WorkerMessage): void}[]>
++        claim(): Promise<void>
++    }
++    skipWaiting(): Promise<void>
++}
++
++/** The worker's handlers, each the work of one event, for the event to wait for. */
++export type ServiceWorkerHandlers = {
++    install(): Promise<void>
++    activate(): Promise<void>
++    /** The answer to a request, or null for one the worker leaves to the browser. */
++    respond(request: WorkerRequest): Promise<Response> | null
++    /** The work of a message from a page, replying through reply, or null for one not the worker's. */
++    message(data: unknown, reply: (message: WorkerMessage) => void): Promise<void> | null
++}
++
++/** How many files an install fetches at once. */
++const width = 4
++
++function messageOf(error: unknown): string {
++    return error instanceof Error ? error.message : String(error)
++}
++
++async function sha256(data: ArrayBuffer): Promise<string> {
++    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data))
++    return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
++}
++
++/**
++ * Runs task on every item, width at a time, and throws the first failure once all have run.
++ * Tip: every file that can be cached is, so that a second try fetches only what failed.
++ */
++async function each<T>(items: readonly T[], task: (item: T) => Promise<void>): Promise<void> {
++    let next = 0
++    const failures: unknown[] = []
++    const lane = async () => {
++        while (next < items.length) {
++            const item = items[next]
++            next += 1
++            try {
++                await task(item)
++            } catch (error) {
++                failures.push(error)
++            }
++        }
++    }
++    await Promise.all(Array.from({length: Math.min(width, items.length)}, lane))
++    if (failures.length > 0) {
++        throw failures[0]
++    }
++}
++
++export function serviceWorker(env: WorkerEnvironment): ServiceWorkerHandlers {
++    const version = versionOf(env.script) ?? ''
++    const own = cacheName(env.scope, version)
++    const origin = new URL(env.scope).origin
++    const list = listUrl(env.scope)
++    /** The URLs the own cache serves once complete, null before; read once, again after a change. */
++    let served: Promise<Set<string> | null> | null = null
++
++    function installed(): Promise<Set<string> | null> {
++        served ??= (async () => {
++            // has() first: open() would create the cache a reader never asked for.
++            if (!(await env.caches.has(own))) {
++                return null
++            }
++            const files = await installedList(await env.caches.open(own), env.scope)
++            return files && new Set(files.files.map(file => env.scope + file.path))
++        })()
++        return served
++    }
++
++    async function cached(url: string): Promise<Response | undefined> {
++        return (await env.caches.has(own)) ? (await env.caches.open(own)).match(url) : undefined
++    }
++
++    /** The list of this worker's version, from the network, never from a cache. */
++    async function fetchList(): Promise<Precache> {
++        const fetched = await readList(await env.fetch(list, {cache: 'no-store'}))
++        if (!fetched) {
++            throw new Error('precache.json could not be read')
++        }
++        if (fetched.version !== version) {
++            throw new Error(`precache.json is version ${fetched.version}, and this worker's ${version}: the site changed during the installation`)
++        }
++        return fetched
++    }
++
++    /** The file from the network, checked against the list, as the response the cache keeps. */
++    async function fetchFile(file: PrecacheFile): Promise<Response> {
++        const response = await env.fetch(env.scope + file.path, {cache: 'no-cache'})
++        if (!response.ok) {
++            throw new Error(`${file.path}: the server answered ${response.status}`)
++        }
++        const body = await response.arrayBuffer()
++        if (body.byteLength !== file.size || (await sha256(body)) !== file.sha256) {
++            throw new Error(`${file.path} is not what precache.json says: the site changed during the installation`)
++        }
++        // A response of its own, which no redirect marks, so that it may answer a navigation.
++        return new Response(body, {headers: {'content-type': response.headers.get('content-type') ?? 'application/octet-stream'}})
++    }
++
++    /**
++     * Caches every file of the list the own cache lacks, copying a file an earlier version
++     * cached with the same SHA-256 and fetching the others, each reported to progress; then the
++     * list, which makes the cache complete.
++     */
++    async function fill(files: Precache, progress: (bytes: number) => void): Promise<void> {
++        const cache = await env.caches.open(own)
++        const earlier: {cache: CacheLike; list: Precache | null}[] = await Promise.all(
++            (await otherInstalls(env.caches, env.scope, version)).map(async name => {
++                const other = await env.caches.open(name)
++                return {cache: other, list: await installedList(other, env.scope)}
++            }))
++        const missing: PrecacheFile[] = []
++        for (const file of files.files) {
++            const url = env.scope + file.path
++            if (await cache.match(url)) {
++                continue
++            }
++            const same = earlier.find(other => other.list?.files.some(entry => entry.path === file.path && entry.sha256 === file.sha256))
++            const copy = same && await same.cache.match(url)
++            if (copy) {
++                await cache.put(url, copy)
++            } else {
++                missing.push(file)
++            }
++        }
++        await each(missing, async file => {
++            await cache.put(env.scope + file.path, await fetchFile(file))
++            progress(file.size)
++        })
++        await cache.put(list, new Response(JSON.stringify(files), {headers: {'content-type': 'application/json'}}))
++        served = null
++    }
++
++    /** A request the worker answers: from the installed cache first, else the network, else the cache. */
++    async function answer(request: WorkerRequest, address: string): Promise<Response> {
++        if (address === list) {
++            try {
++                return await env.fetch(request)
++            } catch (error) {
++                const kept = await cached(list)
++                if (kept) {
++                    return kept
++                }
++                throw error
++            }
++        }
++        const urls = await installed()
++        const key = address.endsWith('/') ? `${address}index.html` : address
++        if (urls?.has(key)) {
++            const hit = await cached(key)
++            if (hit) {
++                return hit
++            }
++        }
++        try {
++            return await env.fetch(request)
++        } catch (error) {
++            // A page named without its final slash, which the server would have redirected.
++            const page = urls && request.mode === 'navigate' && urls.has(`${address}/index.html`)
++                ? await cached(`${address}/index.html`) : undefined
++            if (page) {
++                return page
++            }
++            throw error
++        }
++    }
++
++    return {
++        async install() {
++            if ((await installed()) !== null) {
++                return
++            }
++            if ((await otherInstalls(env.caches, env.scope, version)).length === 0) {
++                await env.skipWaiting()
++                return
++            }
++            const files = await fetchList()
++            const pages = await env.clients.matchAll({type: 'window', includeUncontrolled: true})
++            await fill(files, bytes => {
++                for (const page of pages) {
++                    page.postMessage({type: 'PROGRESS', version, bytes})
++                }
++            })
++        },
++        async activate() {
++            const prefix = cachePrefix(env.scope)
++            for (const name of await env.caches.keys()) {
++                if (name.startsWith(prefix) && name !== own) {
++                    await env.caches.delete(name)
++                }
++            }
++            served = null
++            await env.clients.claim()
++        },
++        respond(request) {
++            if (request.method !== 'GET') {
++                return null
++            }
++            const url = new URL(request.url)
++            if (url.origin !== origin || !request.url.startsWith(env.scope)) {
++                return null
++            }
++            return answer(request, url.origin + url.pathname)
++        },
++        message(data, reply) {
++            const type = typeof data === 'object' && data !== null ? (data as {type?: unknown}).type : undefined
++            if (type === 'SKIP_WAITING') {
++                return env.skipWaiting()
++            }
++            if (type !== 'INSTALL') {
++                return null
++            }
++            return (async () => {
++                try {
++                    await fill(await fetchList(), bytes => reply({type: 'PROGRESS', version, bytes}))
++                    reply({type: 'INSTALLED', version})
++                } catch (error) {
++                    reply({type: 'FAILED', version, reason: messageOf(error)})
++                }
++            })()
++        },
++    }
++}
++
++/** The events of a ServiceWorkerGlobalScope, as far as the handlers need them. */
++type WorkerEvent = {waitUntil(work: Promise<unknown>): void}
++type WorkerScope = {
++    location: {href: string}
++    registration: {scope: string}
++    caches: CacheStorageLike
++    clients: WorkerEnvironment['clients']
++    fetch(request: unknown, init?: RequestInit): Promise<Response>
++    skipWaiting(): Promise<void>
++    addEventListener(type: 'install' | 'activate', listener: (event: WorkerEvent) => void): void
++    addEventListener(type: 'fetch', listener: (event: WorkerEvent & {request: WorkerRequest; respondWith(response: Promise<Response>): void}) => void): void
++    addEventListener(type: 'message', listener: (event: WorkerEvent & {data: unknown; source: {postMessage(message: WorkerMessage): void} | null}) => void): void
++}
++
++declare const ServiceWorkerGlobalScope: (abstract new () => unknown) | undefined
++
++function listen(scope: WorkerScope): void {
++    const handlers = serviceWorker({
++        script: scope.location.href,
++        scope: scope.registration.scope,
++        caches: scope.caches,
++        fetch: (request, init) => scope.fetch(request, init),
++        clients: scope.clients,
++        skipWaiting: () => scope.skipWaiting(),
++    })
++    scope.addEventListener('install', event => event.waitUntil(handlers.install()))
++    scope.addEventListener('activate', event => event.waitUntil(handlers.activate()))
++    scope.addEventListener('fetch', event => {
++        const response = handlers.respond(event.request)
++        if (response) {
++            event.respondWith(response)
++        }
++    })
++    scope.addEventListener('message', event => {
++        const work = handlers.message(event.data, message => event.source?.postMessage(message))
++        if (work) {
++            event.waitUntil(work)
++        }
++    })
++}
++
++if (typeof ServiceWorkerGlobalScope === 'function' && globalThis instanceof ServiceWorkerGlobalScope) {
++    listen(globalThis as unknown as WorkerScope)
++}
+diff --git a/src/theme.ts b/src/theme.ts
+new file mode 100644
+index 0000000..5180a98
+--- /dev/null
++++ b/src/theme.ts
+@@ -0,0 +1,34 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++import chrome from '../assets/chrome.css'
++import theme from '../assets/site.css'
++
++/** The page's background in each theme: the browser's colour around the page, and the app's. */
++export type ThemeColours = {light: string; dark: string}
++
++/** The value of the custom property name in the first `:root` block of css after opening. */
++function token(css: string, opening: string, name: string): string {
++    const text = css.replace(/\/\*[\s\S]*?\*\//g, '')
++    const at = text.indexOf(opening)
++    const block = at < 0 ? undefined : text.slice(at).match(/:root[^{]*\{([^{}]*)\}/)?.[1]
++    const value = block?.match(new RegExp(`${name}\\s*:\\s*([^;]+);`))?.[1]
++    if (value === undefined) {
++        throw new Error(`the theme's ${name} is not in the stylesheet's ${opening} block`)
++    }
++    return value.trim()
++}
++
++/**
++ * The background tokens of the stylesheets, which the server bundles as text (tools/build.mjs):
++ * chrome.css's, light, and site.css's dark theme's, so that no colour is typed twice.
++ */
++export function themeColours(): ThemeColours {
++    return {
++        light: token(chrome, ':root {', '--background'),
++        dark: token(theme, '@media (prefers-color-scheme: dark)', '--background'),
++    }
++}
+diff --git a/test/install_test.mjs b/test/install_test.mjs
+new file mode 100644
+index 0000000..d2abf73
+--- /dev/null
++++ b/test/install_test.mjs
+@@ -0,0 +1,308 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The install flow as the page runs it (src/install_flow.ts, what InstallPrompt's hook runs):
++// machines/install.json on a SiteApp that runs it on XState, as the wasm does (test/oracle.mjs;
++// test/wasm/install.mjs runs the machine on the wasm itself), with the Cache API, the network and
++// the service worker's container in memory. A first visit asks; Install has the worker cache the
++// site; Not now is remembered for the version, and, with a localStorage that throws, for the
++// page alone; an installed site is ready; a new version updates, then offers a reload.
++
++import assert from 'node:assert/strict'
++import {readFileSync} from 'node:fs'
++import {join} from 'node:path'
++import test from 'node:test'
++import {declinedMemory, formatBytes, installView, runInstall} from '../src/install_flow.ts'
++import {xstateApp} from './oracle.mjs'
++import {FakeCaches, installed, listOf, network, scope} from './pwa.mjs'
++import {site} from './site.mjs'
++
++const config = readFileSync(join(site, 'machines/install.json'), 'utf8')
++
++/** Lets every promise the fakes hold settle: each answers at once, so no timer is involved. */
++async function settled() {
++    for (let i = 0; i < 20; i += 1) {
++        await new Promise(setImmediate)
++    }
++}
++
++/** A ServiceWorker: its script, its state, what it was posted. */
++class FakeWorker extends EventTarget {
++    posted = []
++    constructor(scriptURL, state) {
++        super()
++        this.scriptURL = scriptURL
++        this.state = state
++    }
++    postMessage(message) {
++        this.posted.push(message)
++    }
++    become(state) {
++        this.state = state
++        this.dispatchEvent(new Event('statechange'))
++    }
++}
++
++/** navigator.serviceWorker: one registration, whose workers the test sets, and the messages it emits. */
++class FakeContainer extends EventTarget {
++    controller = null
++    registered = []
++    registration = Object.assign(new EventTarget(), {active: null, waiting: null, installing: null})
++    failing = false
++    async register(url, options) {
++        this.registered.push({url, options})
++        if (this.failing) {
++            throw new DOMException('The operation is insecure.', 'SecurityError')
++        }
++        return this.registration
++    }
++    startMessages() {}
++    /** A message from the service worker to the page. */
++    emit(data) {
++        this.dispatchEvent(new MessageEvent('message', {data}))
++    }
++}
++
++/** A localStorage of the Web Storage API, in memory, or one whose every access throws, as a private window's may. */
++function storage({throws = false} = {}) {
++    const items = new Map()
++    return () => {
++        if (throws) {
++            throw new DOMException('The operation is insecure.', 'SecurityError')
++        }
++        return {getItem: key => items.get(key) ?? null, setItem: (key, value) => items.set(key, String(value))}
++    }
++}
++
++const files = {'index.html': '<h1>webcpp</h1>', 'assets/site.js': 'one()', 'assets/app/site-app.wasm': 'wasm'}
++const list = listOf(files)
++const script = version => `${scope}sw.js?version=${version}`
++
++/** The flow on a page of the site, with what it is given and what it does. */
++function page({caches = new FakeCaches(), net = network(files), container = new FakeContainer(), memory = declinedMemory(storage())} = {}) {
++    const states = []
++    const effects = {persisted: 0, reloaded: 0}
++    const env = {
++        app: Promise.resolve(xstateApp()),
++        config,
++        scope,
++        fetch: net.fetch,
++        caches,
++        serviceWorker: container,
++        declined: memory,
++        async persist() {
++            effects.persisted += 1
++            return true
++        },
++        reload() {
++            effects.reloaded += 1
++        },
++    }
++    const run = runInstall(env, state => states.push(state))
++    return {run, states, effects, container, caches, net, last: () => states.at(-1)}
++}
++
++test('a first visit registers the worker of the list\'s version, then asks, with the size to download', async () => {
++    const visit = page()
++    await settled()
++    assert.deepEqual(visit.container.registered, [{url: script(list.version), options: {scope}}])
++    assert.equal(visit.last().value, 'asking')
++    assert.equal(visit.last().context.missing, list.total)
++    assert.equal(visit.last().context.version, list.version)
++    assert.deepEqual(visit.states.map(state => state.value), ['checking', 'asking'])
++})
++
++test('Install asks the worker of this version to cache the site, counts its progress, and is ready once it has', async () => {
++    const visit = page()
++    const worker = new FakeWorker(script(list.version), 'activated')
++    visit.container.registration.active = worker
++    await settled()
++    visit.run.accept()
++    await settled()
++    assert.equal(visit.last().value, 'installing')
++    assert.deepEqual(worker.posted, [{type: 'INSTALL'}])
++    visit.container.emit({type: 'PROGRESS', version: list.version, bytes: 10})
++    visit.container.emit({type: 'PROGRESS', version: 'another version', bytes: 1000})
++    assert.equal(visit.last().context.done, 10, 'a message of another version is not this page\'s')
++    assert.equal(visit.effects.persisted, 0)
++    visit.container.emit({type: 'INSTALLED', version: list.version})
++    await settled()
++    assert.equal(visit.last().value, 'ready')
++    assert.equal(visit.effects.persisted, 1, 'the browser is asked to keep the cache')
++})
++
++test('Install waits for the worker of this version to take over before asking it', async () => {
++    const visit = page()
++    const old = new FakeWorker(script('an older version'), 'activated')
++    const worker = new FakeWorker(script(list.version), 'installing')
++    Object.assign(visit.container.registration, {active: old, installing: worker})
++    await settled()
++    visit.run.accept()
++    await settled()
++    assert.deepEqual([old.posted, worker.posted], [[], []])
++    worker.become('activated')
++    await settled()
++    assert.deepEqual(worker.posted, [{type: 'INSTALL'}])
++})
++
++test('a failed install asks again with its reason, and a worker that never takes over is a failure too', async () => {
++    const visit = page()
++    const worker = new FakeWorker(script(list.version), 'installing')
++    visit.container.registration.installing = worker
++    await settled()
++    visit.run.accept()
++    worker.become('redundant')
++    await settled()
++    assert.equal(visit.last().value, 'asking')
++    assert.match(visit.last().context.reason, /service worker/)
++    visit.container.registration.active = new FakeWorker(script(list.version), 'activated')
++    visit.run.accept()
++    await settled()
++    visit.container.emit({type: 'FAILED', version: list.version, reason: 'assets/site.js is not what the list says'})
++    assert.equal(visit.last().value, 'asking')
++    assert.equal(visit.last().context.reason, 'assets/site.js is not what the list says')
++})
++
++test('Not now is remembered for this version: the next page does not ask, and a new version does', async () => {
++    const memory = storage()
++    const first = page({memory: declinedMemory(memory)})
++    await settled()
++    first.run.decline()
++    assert.equal(first.last().value, 'declined')
++    first.run.stop()
++
++    const next = page({memory: declinedMemory(memory)})
++    await settled()
++    assert.equal(next.last().value, 'declined')
++
++    const changed = {...files, 'assets/site.js': 'two()'}
++    const later = page({memory: declinedMemory(memory), net: network(changed)})
++    await settled()
++    assert.equal(later.last().value, 'asking')
++})
++
++test('with a localStorage that throws, Not now holds for the page, never throws, and the next load asks again', async () => {
++    const memory = storage({throws: true})
++    const thisLoad = declinedMemory(memory)
++    const first = page({memory: thisLoad})
++    await settled()
++    first.run.decline()
++    assert.equal(first.last().value, 'declined')
++    first.run.stop()
++
++    const again = page({memory: thisLoad})
++    await settled()
++    assert.equal(again.last().value, 'declined', 'the same load remembers it')
++
++    const nextLoad = page({memory: declinedMemory(memory)})
++    await settled()
++    assert.equal(nextLoad.last().value, 'asking')
++})
++
++test('a site installed at the list\'s version is ready, and asks nothing', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, files)
++    const container = new FakeContainer()
++    container.controller = new FakeWorker(script(list.version), 'activated')
++    const visit = page({caches, container})
++    await settled()
++    assert.deepEqual(visit.states.map(state => state.value), ['checking', 'ready'])
++    assert.equal(visit.last().context.reload, false)
++})
++
++test('a new version updates in the background, then offers a reload, which the waiting worker takes over for', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, files)
++    const changed = {...files, 'assets/site.js': 'two()'}
++    const next = listOf(changed)
++    const container = new FakeContainer()
++    container.controller = new FakeWorker(script(list.version), 'activated')
++    container.registration.active = container.controller
++    const worker = new FakeWorker(script(next.version), 'installing')
++    container.registration.installing = worker
++    const visit = page({caches, container, net: network(changed)})
++    await settled()
++    assert.deepEqual(visit.states.map(state => state.value), ['checking', 'ready', 'updating'])
++    worker.become('installed')
++    container.registration.installing = null
++    container.registration.waiting = worker
++    await settled()
++    assert.equal(visit.last().value, 'ready')
++    assert.equal(visit.last().context.reload, true)
++    visit.run.reload()
++    assert.deepEqual(worker.posted, [{type: 'SKIP_WAITING'}])
++    assert.equal(visit.effects.reloaded, 0, 'not before the new worker controls the page')
++    container.dispatchEvent(new Event('controllerchange'))
++    assert.equal(visit.effects.reloaded, 1)
++})
++
++test('a page served by the old version while the new one already waits offers the reload at once', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, files)
++    const changed = {...files, 'assets/site.js': 'two()'}
++    const next = listOf(changed)
++    await installed(caches, changed)
++    const container = new FakeContainer()
++    container.controller = new FakeWorker(script(list.version), 'activated')
++    container.registration.waiting = new FakeWorker(script(next.version), 'installed')
++    const visit = page({caches, container, net: network(changed)})
++    await settled()
++    assert.deepEqual(visit.states.map(state => state.value), ['checking', 'ready', 'updating', 'ready'])
++    assert.equal(visit.last().context.reload, true)
++})
++
++test('a browser without a service worker or the Cache API, one that refuses the worker, or a site without precache.json never asks', async () => {
++    const refusing = new FakeContainer()
++    refusing.failing = true
++    const pages = [
++        page({container: refusing}),
++        page({net: {fetch: async () => new Response('Not found', {status: 404})}}),
++        page({net: {fetch: async () => { throw new TypeError('Failed to fetch') }}}),
++    ]
++    const without = runInstall({app: Promise.resolve(xstateApp()), config, scope, fetch: network(files).fetch,
++        declined: declinedMemory(storage()), persist: async () => true, reload() {}}, () => {})
++    await settled()
++    for (const visit of pages) {
++        assert.deepEqual(visit.states.map(state => state.value), ['checking'])
++    }
++    without.accept()
++    without.stop()
++})
++
++test('stop deletes the machine and leaves the page\'s messages alone', async () => {
++    const visit = page()
++    await settled()
++    visit.run.stop()
++    const count = visit.states.length
++    visit.container.emit({type: 'PROGRESS', version: list.version, bytes: 1})
++    visit.run.accept()
++    assert.equal(visit.states.length, count)
++})
++
++test('installView: what the prompt shows for each state, and the offers once the site is ready', () => {
++    const snapshot = (value, context = {}) => ({value, context: {version: 'v', missing: 6_200_000, done: 0, reason: '', reload: false, ...context}, status: 'active'})
++    const none = {prompt: false, ios: false}
++    assert.equal(installView(null, none), null)
++    assert.equal(installView({error: 'no wasm'}, none), null)
++    assert.equal(installView(snapshot('checking'), none), null)
++    assert.equal(installView(snapshot('declined'), none), null)
++    assert.equal(installView(snapshot('updating'), none), null)
++    assert.deepEqual(installView(snapshot('asking', {reason: 'offline'}), none), {kind: 'asking', bytes: 6_200_000, reason: 'offline'})
++    assert.deepEqual(installView(snapshot('installing', {done: 1_000_000}), none), {kind: 'installing', done: 1_000_000, bytes: 6_200_000})
++    assert.deepEqual(installView(snapshot('ready', {reload: true}), {prompt: true, ios: false}), {kind: 'reload'})
++    assert.deepEqual(installView(snapshot('ready', {done: 6_200_000}), none), {kind: 'installed', app: null})
++    assert.deepEqual(installView(snapshot('ready', {done: 6_200_000}), {prompt: true, ios: false}), {kind: 'installed', app: 'prompt'})
++    assert.equal(installView(snapshot('ready'), none), null)
++    assert.deepEqual(installView(snapshot('ready'), {prompt: true, ios: false}), {kind: 'app', app: 'prompt'})
++    assert.deepEqual(installView(snapshot('ready'), {prompt: false, ios: true}), {kind: 'app', app: 'ios'})
++})
++
++test('formatBytes writes a size as a reader reads it', () => {
++    assert.equal(formatBytes(512), '512 bytes')
++    assert.equal(formatBytes(41_234), '41 kB')
++    assert.equal(formatBytes(6_212_345), '6.2 MB')
++    assert.equal(formatBytes(12_500_000), '12.5 MB')
++})
+diff --git a/test/manifest_test.mjs b/test/manifest_test.mjs
+new file mode 100644
+index 0000000..22885df
+--- /dev/null
++++ b/test/manifest_test.mjs
+@@ -0,0 +1,81 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The PWA's files the build's --render step lays out at the site's root: manifest.webmanifest,
++// valid, its icons there at the sizes it says and its colours the theme's tokens; sw.js, the
++// service worker, a classic script; and every page's link to the manifest and its theme colours.
++
++import assert from 'node:assert/strict'
++import {existsSync, readFileSync} from 'node:fs'
++import {join} from 'node:path'
++import test from 'node:test'
++import {appSizes} from '../tools/icons.mjs'
++import {pageAt, pages, renderSite, site} from './site.mjs'
++
++const out = renderSite()
++
++/** The custom properties `css` sets on `:root` in the block that `opening` starts. */
++function tokens(css, opening) {
++    const text = css.replace(/\/\*[\s\S]*?\*\//g, '')
++    const block = text.slice(text.indexOf(opening)).match(/:root[^{]*\{([^{}]*)\}/)[1]
++    return Object.fromEntries([...block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim()]))
++}
++
++const light = tokens(readFileSync(join(site, 'assets/chrome.css'), 'utf8'), ':root {')
++const dark = tokens(readFileSync(join(site, 'assets/site.css'), 'utf8'), '@media (prefers-color-scheme: dark)')
++
++/** A PNG's width and height, from its IHDR chunk. */
++function size(file) {
++    const png = readFileSync(file)
++    assert.equal(png.toString('latin1', 1, 4), 'PNG', file)
++    return [png.readUInt32BE(16), png.readUInt32BE(20)]
++}
++
++test('manifest.webmanifest is at the site\'s root, a standalone app whose start and scope are the root', () => {
++    const manifest = JSON.parse(readFileSync(join(out, 'manifest.webmanifest'), 'utf8'))
++    assert.equal(manifest.name, 'webcpp')
++    assert.equal(manifest.short_name, 'webcpp')
++    assert.equal(manifest.id, './')
++    assert.equal(manifest.start_url, './')
++    assert.equal(manifest.scope, './')
++    assert.equal(manifest.display, 'standalone')
++    assert.equal(manifest.lang, 'en')
++    assert.ok(!existsSync(join(out, 'assets/manifest.webmanifest')), 'only the root\'s, whose ./ is the site')
++})
++
++test("the manifest's colours are the theme's tokens, light, as a manifest has one of each", () => {
++    const manifest = JSON.parse(readFileSync(join(out, 'manifest.webmanifest'), 'utf8'))
++    assert.equal(manifest.theme_color, light['--background'])
++    assert.equal(manifest.background_color, light['--background'])
++})
++
++test('the manifest names each app icon for any use and as maskable, each there at the size it says', () => {
++    const manifest = JSON.parse(readFileSync(join(out, 'manifest.webmanifest'), 'utf8'))
++    assert.deepEqual(manifest.icons.map(icon => `${icon.sizes} ${icon.purpose}`).sort(),
++        appSizes.flatMap(side => [`${side}x${side} any`, `${side}x${side} maskable`]).sort())
++    for (const icon of manifest.icons) {
++        assert.equal(icon.type, 'image/png')
++        const [width, height] = icon.sizes.split('x').map(Number)
++        assert.deepEqual(size(join(out, icon.src)), [width, height], icon.src)
++    }
++})
++
++test('sw.js is at the site\'s root, a classic script that imports nothing', () => {
++    const worker = readFileSync(join(out, 'sw.js'), 'utf8')
++    assert.doesNotMatch(worker, /^\s*(import|export)\b/m)
++    assert.match(worker, /addEventListener\("fetch"/)
++    assert.doesNotMatch(worker, /https?:\/\//, 'it names no host: the site it serves is its own scope')
++})
++
++test('every page links the manifest from its root and gives the theme colour of each scheme', () => {
++    for (const {path} of pages) {
++        const html = pageAt(out, path)
++        const root = '../'.repeat(path.split('/').filter(Boolean).length)
++        assert.ok(html.includes(`<link rel="manifest" href="${root}manifest.webmanifest">`), path || 'the home')
++        assert.ok(html.includes(`<meta name="theme-color" content="${light['--background']}" media="(prefers-color-scheme: light)">`), path)
++        assert.ok(html.includes(`<meta name="theme-color" content="${dark['--background']}" media="(prefers-color-scheme: dark)">`), path)
++    }
++})
+diff --git a/test/oracle.mjs b/test/oracle.mjs
+new file mode 100644
+index 0000000..89fad92
+--- /dev/null
++++ b/test/oracle.mjs
+@@ -0,0 +1,77 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// XState 5.33.2 as the oracle of the site's machines: the implementations app/site_app.cpp gives
++// each name a machine of machines/ uses, written for XState, and a SiteApp whose MachineHost runs
++// a machine on XState's actor and answers as app/bindings.cpp does, so that a test of what runs a
++// machine needs no wasm.
++
++import {assign, createActor, createMachine} from 'xstate'
++
++/** app/site_app.cpp's site_implementations(), for XState. */
++export const implementations = {
++    actions: {
++        resetPlayed: assign({played: 0}),
++        countPlayed: assign({played: ({context}) => context.played + 1}),
++        setSpeed: assign({speed: ({event}) => event.speed}),
++        setMissing: assign({missing: ({event}) => event.bytes, version: ({event}) => event.version}),
++        startInstall: assign({done: 0, reason: ''}),
++        addDone: assign({done: ({context, event}) => context.done + event.bytes}),
++        setReason: assign({reason: ({event}) => event.reason}),
++        offerReload: assign({reload: true}),
++    },
++    guards: {
++        isSpeed: ({event}) => [0.5, 1, 2].includes(event.speed),
++        wasDeclined: ({event}) => typeof event.declined === 'string' && event.declined === event.version,
++    },
++}
++
++/** XState's actor on the machine of the JSON config, started. */
++export function oracle(config) {
++    return createActor(createMachine(JSON.parse(config), implementations)).start()
++}
++
++/** An actor's snapshot as machine_host writes it. */
++export function snapshotOf(actor) {
++    const {value, context, status} = actor.getSnapshot()
++    return {value, context, status}
++}
++
++/**
++ * A SiteApp whose MachineHost runs XState's actor: create throws an Error for a config that is not
++ * JSON, and send answers an event without a string type with {"error": why}, as the wasm does.
++ */
++export function xstateApp() {
++    return {
++        MachineHost: {
++            create(config) {
++                let actor
++                try {
++                    actor = oracle(config)
++                } catch (error) {
++                    throw new Error(`MachineHost.create refused the config: ${error.message}`)
++                }
++                let deleted = false
++                return {
++                    send(event) {
++                        const read = JSON.parse(event)
++                        if (typeof read.type !== 'string') {
++                            return JSON.stringify({error: 'MachineHost.send refused the event: invalid_event'})
++                        }
++                        actor.send(read)
++                        return JSON.stringify(snapshotOf(actor))
++                    },
++                    snapshot: () => JSON.stringify(snapshotOf(actor)),
++                    delete() {
++                        actor.stop()
++                        deleted = true
++                    },
++                    isDeleted: () => deleted,
++                }
++            },
++        },
++    }
++}
+diff --git a/test/precache_test.mjs b/test/precache_test.mjs
+new file mode 100644
+index 0000000..53a714c
+--- /dev/null
++++ b/test/precache_test.mjs
+@@ -0,0 +1,97 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The list the PWA precaches, precache.json (tools/precache.mjs), over a site of a few files: every
++// file with its SHA-256 and size, sorted by path, but the list itself and the service worker; the
++// total; and a version that a change of one byte changes, with that file's entry alone. The
++// build's --pwa step writes it last, into a site laid out whole.
++
++import assert from 'node:assert/strict'
++import {execFileSync} from 'node:child_process'
++import {createHash} from 'node:crypto'
++import {mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync} from 'node:fs'
++import {tmpdir} from 'node:os'
++import {dirname, join} from 'node:path'
++import test from 'node:test'
++import {precache, writePrecache} from '../tools/precache.mjs'
++import {site} from './site.mjs'
++
++const sha256 = text => createHash('sha256').update(text).digest('hex')
++
++/** A site of the given files, `{path: content}`, in a new directory. */
++function fixture(files) {
++    const out = mkdtempSync(join(tmpdir(), 'webcpp-precache-'))
++    for (const [path, content] of Object.entries(files)) {
++        mkdirSync(dirname(join(out, path)), {recursive: true})
++        writeFileSync(join(out, path), content)
++    }
++    return out
++}
++
++const files = {
++    'index.html': '<!doctype html><title>webcpp</title>\n',
++    'libraries/index.html': '<!doctype html><title>Libraries</title>\n',
++    'assets/site.js': 'console.log(1)\n',
++    'assets/app/site-app.wasm': Buffer.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]),
++    'favicon.ico': Buffer.from([0, 0, 1, 0]),
++    'sw.js': 'self.addEventListener("fetch", () => {})\n',
++    'precache.json': '{"version": "an older list"}\n',
++}
++
++test('every file is listed with its SHA-256 and size, sorted by path, but the list and the service worker', async () => {
++    const list = await precache(fixture(files))
++    const listed = Object.keys(files).filter(path => path !== 'sw.js' && path !== 'precache.json').sort()
++    assert.deepEqual(list.files.map(file => file.path), listed)
++    for (const file of list.files) {
++        const content = Buffer.from(files[file.path])
++        assert.deepEqual(file, {path: file.path, sha256: sha256(content), size: content.length}, file.path)
++    }
++})
++
++test('total is the sum of the sizes, and version is the SHA-256 of the list', async () => {
++    const list = await precache(fixture(files))
++    assert.equal(list.total, list.files.reduce((sum, file) => sum + file.size, 0))
++    assert.equal(list.version, sha256(JSON.stringify(list.files)))
++    assert.deepEqual(Object.keys(list), ['version', 'total', 'files'])
++})
++
++test('one byte changed in one file changes the version, and that file\'s entry alone', async () => {
++    const before = await precache(fixture(files))
++    const after = await precache(fixture({...files, 'assets/site.js': 'console.log(2)\n'}))
++    assert.notEqual(after.version, before.version)
++    const changed = after.files.filter((file, i) => JSON.stringify(file) !== JSON.stringify(before.files[i]))
++    assert.deepEqual(changed.map(file => file.path), ['assets/site.js'])
++    assert.equal(after.total, before.total)
++})
++
++test('a nested sw.js or precache.json is a file like any other: only the root\'s are the PWA\'s own', async () => {
++    const list = await precache(fixture({...files, 'docs/sw.js': 'x', 'docs/precache.json': '{}'}))
++    assert.ok(list.files.some(file => file.path === 'docs/sw.js'))
++    assert.ok(list.files.some(file => file.path === 'docs/precache.json'))
++})
++
++test('a site reached through a link, as bin/site is, is listed as the directory it names', async () => {
++    const out = fixture(files)
++    const link = join(mkdtempSync(join(tmpdir(), 'webcpp-precache-link-')), 'site')
++    symlinkSync(out, link)
++    assert.deepEqual(await precache(link), await precache(out))
++})
++
++test('writePrecache writes precache.json, laid out for its reader, and listing nothing it wrote', async () => {
++    const out = fixture(files)
++    const written = await writePrecache(out)
++    const text = readFileSync(join(out, 'precache.json'), 'utf8')
++    assert.deepEqual(JSON.parse(text), written)
++    assert.match(text, /^\{\n {4}"version": "[0-9a-f]{64}",\n {4}"total": \d+,\n {4}"files": \[\n {8}\{"path": "assets\/app\/site-app\.wasm", /)
++    assert.deepEqual(await writePrecache(out), written, 'writing it again lists the same files')
++})
++
++test('build.mjs --pwa <site> writes precache.json into a site laid out whole', () => {
++    const out = fixture(files)
++    execFileSync(process.execPath, [join(site, 'tools/build.mjs'), '--pwa', out], {stdio: 'pipe'})
++    const list = JSON.parse(readFileSync(join(out, 'precache.json'), 'utf8'))
++    assert.equal(list.files.length, 5)
++})
+diff --git a/test/pwa.mjs b/test/pwa.mjs
+new file mode 100644
+index 0000000..4101d51
+--- /dev/null
++++ b/test/pwa.mjs
+@@ -0,0 +1,97 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// What the tests of the PWA share: the Cache API and the network, in memory, and a site's list as
++// precache.json gives it.
++
++import {createHash} from 'node:crypto'
++import {cacheName} from '../src/precache.ts'
++
++export const scope = 'https://webcpporg.github.io/'
++export const sha256 = text => createHash('sha256').update(text).digest('hex')
++
++/** The list precache.json holds for the files `{path: content}`. */
++export function listOf(files) {
++    const entries = Object.entries(files).sort(([a], [b]) => (a < b ? -1 : 1))
++        .map(([path, content]) => ({path, sha256: sha256(content), size: Buffer.byteLength(content)}))
++    return {version: sha256(JSON.stringify(entries)), total: entries.reduce((sum, file) => sum + file.size, 0), files: entries}
++}
++
++/** A Cache of the Cache API, in memory: each response kept as its body and type. */
++export class FakeCache {
++    entries = new Map()
++    async match(request) {
++        const entry = this.entries.get(typeof request === 'string' ? request : request.url)
++        return entry && new Response(entry.body, {headers: {'content-type': entry.type}})
++    }
++    async put(request, response) {
++        const url = typeof request === 'string' ? request : request.url
++        this.entries.set(url, {body: Buffer.from(await response.arrayBuffer()), type: response.headers.get('content-type')})
++    }
++    async delete(request) {
++        return this.entries.delete(typeof request === 'string' ? request : request.url)
++    }
++    async keys() {
++        return [...this.entries.keys()].map(url => ({url}))
++    }
++}
++
++/** The CacheStorage of the Cache API, in memory. */
++export class FakeCaches {
++    named = new Map()
++    async open(name) {
++        if (!this.named.has(name)) {
++            this.named.set(name, new FakeCache())
++        }
++        return this.named.get(name)
++    }
++    async has(name) {
++        return this.named.has(name)
++    }
++    async delete(name) {
++        return this.named.delete(name)
++    }
++    async keys() {
++        return [...this.named.keys()]
++    }
++}
++
++/**
++ * The network: the files `{path: content}` under the scope, and `precache.json` for their list,
++ * every request recorded; offline, every fetch fails as a browser's does.
++ */
++export function network(files, list = listOf(files)) {
++    const served = new Map(Object.entries(files).map(([path, content]) => [scope + path, content]))
++    served.set(`${scope}precache.json`, JSON.stringify(list))
++    const net = {
++        offline: false,
++        requested: [],
++        async fetch(input) {
++            const url = typeof input === 'string' ? input : input.url
++            net.requested.push(url)
++            if (net.offline) {
++                throw new TypeError('Failed to fetch')
++            }
++            if (!served.has(url)) {
++                return new Response('Not found', {status: 404})
++            }
++            const type = url.endsWith('.json') ? 'application/json' : url.endsWith('.html') || url.endsWith('/') ? 'text/html' : 'text/javascript'
++            return new Response(served.get(url), {headers: {'content-type': type}})
++        },
++    }
++    return net
++}
++
++/** A cache of the scope holding `files` of `list`, complete with the list, as an install leaves it. */
++export async function installed(caches, files, list = listOf(files)) {
++    const cache = await caches.open(cacheName(scope, list.version))
++    for (const [path, content] of Object.entries(files)) {
++        await cache.put(scope + path, new Response(content, {headers: {'content-type': 'text/html'}}))
++    }
++    await cache.put(`${scope}precache.json`, new Response(JSON.stringify(list)))
++    return cache
++}
++
+diff --git a/test/sw_test.mjs b/test/sw_test.mjs
+new file mode 100644
+index 0000000..860c5f1
+--- /dev/null
++++ b/test/sw_test.mjs
+@@ -0,0 +1,216 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The service worker's handlers (src/sw.ts) against a fake CacheStorage and a fake network: a
++// precached file served from the cache, a navigation offline, the install of a new version that
++// fetches only what changed, the install the page asks for, what activate removes, and a request
++// to another origin, which is never cached.
++
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import {cacheName, serviceWorker} from '../src/sw.ts'
++import {FakeCaches, installed, listOf, network, scope} from './pwa.mjs'
++
++/** The worker of version `version`, with the caches and the network given, and what it posts and calls. */
++function worker(version, caches, net) {
++    const posted = []
++    const calls = []
++    const env = {
++        script: `${scope}sw.js?version=${version}`,
++        scope,
++        caches,
++        fetch: net.fetch,
++        clients: {
++            async matchAll() {
++                return [{postMessage: message => posted.push(message)}]
++            },
++            async claim() {
++                calls.push('claim')
++            },
++        },
++        async skipWaiting() {
++            calls.push('skipWaiting')
++        },
++    }
++    return {sw: serviceWorker(env), posted, calls}
++}
++
++const get = (url, mode = 'no-cors') => ({url, method: 'GET', mode})
++const text = async response => (await response).text()
++
++const v1 = {
++    'index.html': '<h1>webcpp</h1>',
++    'libraries/index.html': '<h1>Libraries</h1>',
++    'assets/site.js': 'one()',
++    'assets/old.js': 'gone()',
++}
++
++test('a precached file is served from the cache, without a fetch', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const net = network({...v1, 'assets/site.js': 'newer()'})
++    const {sw} = worker(listOf(v1).version, caches, net)
++    assert.equal(await text(sw.respond(get(`${scope}assets/site.js`))), 'one()')
++    assert.equal(await text(sw.respond(get(scope, 'navigate'))), '<h1>webcpp</h1>', 'the home is its index.html')
++    assert.equal(await text(sw.respond(get(`${scope}libraries/?q=x`, 'navigate'))), '<h1>Libraries</h1>', 'whatever its query')
++    assert.deepEqual(net.requested, [])
++})
++
++test('a navigation with the network failing gets the cached page; one the cache does not hold fails as the network did', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const net = network(v1)
++    net.offline = true
++    const {sw} = worker(listOf(v1).version, caches, net)
++    assert.equal(await text(sw.respond(get(`${scope}libraries/`, 'navigate'))), '<h1>Libraries</h1>')
++    assert.equal(await text(sw.respond(get(`${scope}libraries`, 'navigate'))), '<h1>Libraries</h1>',
++        'a page named without its final slash, which the server would redirect')
++    await assert.rejects(sw.respond(get(`${scope}nowhere/`, 'navigate')), TypeError)
++})
++
++test('a same-origin GET the list does not name goes to the network, and is never cached', async () => {
++    const caches = new FakeCaches()
++    const cache = await installed(caches, v1)
++    const net = network({...v1, 'report/data.json': '{}'})
++    const {sw} = worker(listOf(v1).version, caches, net)
++    const keys = (await cache.keys()).length
++    assert.equal(await text(sw.respond(get(`${scope}report/data.json`))), '{}')
++    assert.deepEqual(net.requested, [`${scope}report/data.json`])
++    assert.equal((await cache.keys()).length, keys)
++    assert.deepEqual(await caches.keys(), [cacheName(scope, listOf(v1).version)])
++})
++
++test('precache.json comes from the network first, and from the installed list when the network fails', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const v2 = {...v1, 'assets/site.js': 'two()'}
++    const net = network(v2)
++    const {sw} = worker(listOf(v1).version, caches, net)
++    assert.equal(JSON.parse(await text(sw.respond(get(`${scope}precache.json`)))).version, listOf(v2).version)
++    net.offline = true
++    assert.equal(JSON.parse(await text(sw.respond(get(`${scope}precache.json`)))).version, listOf(v1).version)
++})
++
++test('before the site is installed, every request goes to the network', async () => {
++    const caches = new FakeCaches()
++    const net = network(v1)
++    const {sw} = worker(listOf(v1).version, caches, net)
++    assert.equal(await text(sw.respond(get(`${scope}assets/site.js`))), 'one()')
++    assert.equal(await text(sw.respond(get(scope, 'navigate'))), 'Not found', 'the network\'s answer, whatever it is')
++    assert.deepEqual(net.requested, [`${scope}assets/site.js`, scope])
++    assert.deepEqual(await caches.keys(), [], 'answering opens no cache')
++})
++
++test('a request to another origin, or not a GET, is never answered, so never cached', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const net = network(v1)
++    const {sw} = worker(listOf(v1).version, caches, net)
++    assert.equal(sw.respond(get('https://www.google.com/cse.js')), null)
++    assert.equal(sw.respond(get('https://webcpporg.github.io.evil.example/assets/site.js')), null)
++    assert.equal(sw.respond({url: `${scope}assets/site.js`, method: 'POST', mode: 'cors'}), null)
++    assert.deepEqual(net.requested, [])
++})
++
++test('install for a new version fetches only the files whose sha256 differs from the cached list, then waits', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const v2 = {'index.html': '<h1>webcpp</h1>', 'libraries/index.html': '<h1>Libraries, more</h1>',
++        'assets/site.js': 'one()', 'assets/new.js': 'added()'}
++    const net = network(v2)
++    const {sw, posted, calls} = worker(listOf(v2).version, caches, net)
++    await sw.install()
++    assert.deepEqual(net.requested.sort(), [`${scope}assets/new.js`, `${scope}libraries/index.html`, `${scope}precache.json`])
++    const cache = await caches.open(cacheName(scope, listOf(v2).version))
++    for (const [path, content] of Object.entries(v2)) {
++        assert.equal(await text(cache.match(scope + path)), content, path)
++    }
++    assert.deepEqual(JSON.parse(await text(cache.match(`${scope}precache.json`))), listOf(v2))
++    assert.deepEqual(posted.filter(message => message.type === 'PROGRESS').map(message => message.bytes).sort(),
++        [Buffer.byteLength('added()'), Buffer.byteLength('<h1>Libraries, more</h1>')].sort())
++    assert.ok(posted.every(message => message.version === listOf(v2).version))
++    assert.deepEqual(calls, [], 'the new version waits for the reader\'s reload, the old one serving the open pages')
++})
++
++test('activate removes the caches of the versions no longer listed, keeps another scope\'s, and claims the pages', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const v2 = {...v1, 'assets/site.js': 'two()'}
++    await installed(caches, v2)
++    await caches.open('webcpp https://webcpporg.github.io/webcpp/ 0123')
++    await caches.open('another site\'s cache')
++    const {sw, calls} = worker(listOf(v2).version, caches, network(v2))
++    await sw.activate()
++    assert.deepEqual((await caches.keys()).sort(), [
++        'another site\'s cache', 'webcpp https://webcpporg.github.io/webcpp/ 0123', cacheName(scope, listOf(v2).version),
++    ].sort())
++    assert.deepEqual(calls, ['claim'])
++})
++
++test('install with nothing installed caches nothing, fetches nothing, and takes over at once', async () => {
++    const caches = new FakeCaches()
++    const net = network(v1)
++    const {sw, calls} = worker(listOf(v1).version, caches, net)
++    await sw.install()
++    assert.deepEqual(net.requested, [])
++    assert.deepEqual(await caches.keys(), [])
++    assert.deepEqual(calls, ['skipWaiting'])
++})
++
++test('a list of another version than the worker\'s fails the install of an update, naming both', async () => {
++    const caches = new FakeCaches()
++    await installed(caches, v1)
++    const net = network({...v1, 'assets/site.js': 'three()'})
++    const {sw} = worker('0'.repeat(64), caches, net)
++    await assert.rejects(sw.install(), error => error.message.includes('0'.repeat(64)))
++})
++
++test('INSTALL from the page caches every missing file, replying PROGRESS for each, then INSTALLED', async () => {
++    const caches = new FakeCaches()
++    const net = network(v1)
++    const version = listOf(v1).version
++    const {sw} = worker(version, caches, net)
++    const replies = []
++    await sw.message({type: 'INSTALL'}, reply => replies.push(reply))
++    assert.deepEqual(replies.at(-1), {type: 'INSTALLED', version})
++    const progress = replies.filter(reply => reply.type === 'PROGRESS')
++    assert.equal(progress.reduce((sum, reply) => sum + reply.bytes, 0), listOf(v1).total)
++    assert.equal(await text(sw.respond(get(`${scope}assets/old.js`))), 'gone()', 'served from the cache now')
++    assert.equal(net.requested.filter(url => url.endsWith('old.js')).length, 1)
++})
++
++test('INSTALL keeps what an earlier try cached, and fails with the reason when a file is not what the list says', async () => {
++    const caches = new FakeCaches()
++    const list = listOf(v1)
++    const net = network({...v1, 'assets/old.js': 'tampered()'}, list)
++    const {sw} = worker(list.version, caches, net)
++    const replies = []
++    await sw.message({type: 'INSTALL'}, reply => replies.push(reply))
++    const failed = replies.at(-1)
++    assert.equal(failed.type, 'FAILED')
++    assert.match(failed.reason, /assets\/old\.js/)
++    const cache = await caches.open(cacheName(scope, list.version))
++    assert.equal(await cache.match(`${scope}precache.json`), undefined, 'the list is stored last, once every file is')
++    assert.equal(await cache.match(`${scope}assets/old.js`), undefined)
++    await sw.respond(get(`${scope}index.html`))
++    assert.equal(net.requested.at(-1), `${scope}index.html`, 'an install not finished serves nothing from its cache')
++
++    const fixed = network(v1, list)
++    const again = worker(list.version, caches, fixed)
++    const second = []
++    await again.sw.message({type: 'INSTALL'}, reply => second.push(reply))
++    assert.deepEqual(second.at(-1), {type: 'INSTALLED', version: list.version})
++    assert.deepEqual(fixed.requested.sort(), [`${scope}assets/old.js`, `${scope}precache.json`],
++        'only the file the first try could not cache')
++})
++
++test('SKIP_WAITING from the page makes the waiting version take over; any other message is not the worker\'s', async () => {
++    const {sw, calls} = worker(listOf(v1).version, new FakeCaches(), network(v1))
++    await sw.message({type: 'SKIP_WAITING'}, () => {})
++    assert.deepEqual(calls, ['skipWaiting'])
++    assert.equal(sw.message({type: 'HELLO'}, () => {}), null)
++    assert.equal(sw.message('INSTALL', () => {}), null)
++})
+diff --git a/test/wasm/install.mjs b/test/wasm/install.mjs
+new file mode 100644
+index 0000000..8c3e099
+--- /dev/null
++++ b/test/wasm/install.mjs
+@@ -0,0 +1,86 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The install flow's machine, machines/install.json, in the site's wasm (build/app/site-app.mjs)
++// and on XState 5.33.2 as its oracle (test/oracle.mjs): every transition of the flow, the two
++// agreeing on the value, the context and the status at each step.
++
++import assert from 'node:assert/strict'
++import {existsSync, readFileSync} from 'node:fs'
++import {join} from 'node:path'
++import test from 'node:test'
++import {pathToFileURL} from 'node:url'
++import {loadSiteApp} from '../../src/machine.ts'
++import {oracle, snapshotOf} from '../oracle.mjs'
++import {site} from '../site.mjs'
++
++const module = join(site, 'build/app/site-app.mjs')
++const config = readFileSync(join(site, 'machines/install.json'), 'utf8')
++
++/** The site's wasm, or a failure that says how to build it. */
++async function siteApp() {
++    assert.ok(existsSync(module), `${module} is missing: build it at the superproject's root with ` +
++        'b2 /webcpp/site/app//wasm (b2 /webcpp/site//test and b2 site build it first)')
++    return loadSiteApp(pathToFileURL(module).href)
++}
++
++/** Plays the events on the wasm and on XState, asserting that they agree at each step; returns the wasm's values. */
++function play(app, events) {
++    const host = app.MachineHost.create(config)
++    const actor = oracle(config)
++    try {
++        const agree = (snapshot, step) => assert.deepEqual(snapshot, snapshotOf(actor), `after ${step}`)
++        const first = JSON.parse(host.snapshot())
++        agree(first, 'the start')
++        const snapshots = [first]
++        for (const event of events) {
++            const snapshot = JSON.parse(host.send(JSON.stringify(event)))
++            actor.send(event)
++            agree(snapshot, JSON.stringify(event))
++            snapshots.push(snapshot)
++        }
++        return snapshots
++    } finally {
++        host.delete()
++        actor.stop()
++    }
++}
++
++const missing = {type: 'MISSING', bytes: 6_200_000, version: 'v2', declined: null}
++
++test('the install flow runs in the wasm as it runs in XState: asked, installed, updated', async () => {
++    const app = await siteApp()
++    const values = play(app, [
++        missing, {type: 'ACCEPT'}, {type: 'PROGRESS', bytes: 4_000_000}, {type: 'PROGRESS', bytes: 2_200_000},
++        {type: 'INSTALLED'}, {type: 'NEW_VERSION'}, {type: 'UPDATED'},
++    ])
++    assert.deepEqual(values.map(snapshot => snapshot.value),
++        ['checking', 'asking', 'installing', 'installing', 'installing', 'ready', 'updating', 'ready'])
++    assert.deepEqual(values.at(-1).context, {version: 'v2', missing: 6_200_000, done: 6_200_000, reason: '', reload: true})
++})
++
++test('every other transition of the flow agrees with XState, and an event no state takes moves nothing', async () => {
++    const app = await siteApp()
++    assert.deepEqual(play(app, [
++        {type: 'ACCEPT'}, {type: 'COMPLETE'}, {type: 'MISSING', bytes: 1}, {type: 'UPDATED'},
++    ]).map(snapshot => snapshot.value), ['checking', 'checking', 'ready', 'ready', 'ready'])
++    const failed = play(app, [
++        missing, {type: 'ACCEPT'}, {type: 'PROGRESS', bytes: 10}, {type: 'FAILED', reason: 'offline'},
++        {type: 'ACCEPT'}, {type: 'FAILED', reason: 'offline again'}, {type: 'DECLINE'}, {type: 'ACCEPT'},
++    ])
++    assert.deepEqual(failed.map(snapshot => snapshot.value),
++        ['checking', 'asking', 'installing', 'installing', 'asking', 'installing', 'asking', 'declined', 'declined'])
++    assert.equal(failed[4].context.reason, 'offline')
++    assert.deepEqual([failed[5].context.done, failed[5].context.reason], [0, ''])
++})
++
++test('MISSING for a version the reader declined goes to declined, in the wasm as in XState', async () => {
++    const app = await siteApp()
++    const [, declined] = play(app, [{...missing, declined: 'v2'}])
++    assert.equal(declined.value, 'declined')
++    const [, other] = play(app, [{...missing, declined: 'v1'}])
++    assert.equal(other.value, 'asking')
++})
+diff --git a/test/wasm/machine.mjs b/test/wasm/machine.mjs
+index e63a3ca..66685ab 100644
+--- a/test/wasm/machine.mjs
++++ b/test/wasm/machine.mjs
+@@ -6,9 +6,10 @@
+ 
+ // The site's wasm, build/app/site-app.mjs, which b2 /webcpp/site/app//wasm builds with emscripten
+ // and copies there, loaded by src/machine.ts's loadSiteApp, running the player's machine,
+-// machines/player.json, with XState 5.33.2's actor on the same config as its oracle: the two agree
+-// on the value and the context at every step. A refused config is a JavaScript Error, a refused
+-// event a value, and runMachine runs the wasm as it runs test/machine_test.mjs's fake.
++// machines/player.json, with XState 5.33.2's actor on the same config as its oracle
++// (test/oracle.mjs): the two agree on the value and the context at every step. A refused config is
++// a JavaScript Error, a refused event a value, and runMachine runs the wasm as it runs
++// test/machine_test.mjs's fake.
+ //
+ // The npm script test:wasm runs it, never npm test, which needs no C++ build: b2
+ // /webcpp/site//test runs both, once it has built the wasm.
+@@ -18,8 +19,8 @@ import {existsSync, readFileSync} from 'node:fs'
+ import {join} from 'node:path'
+ import test from 'node:test'
+ import {pathToFileURL} from 'node:url'
+-import {assign, createActor, createMachine} from 'xstate'
+ import {loadSiteApp, runMachine} from '../../src/machine.ts'
++import {oracle} from '../oracle.mjs'
+ import {site} from '../site.mjs'
+ 
+ const module = join(site, 'build/app/site-app.mjs')
+@@ -32,28 +33,13 @@ async function siteApp() {
+     return loadSiteApp(pathToFileURL(module).href)
+ }
+ 
+-/** XState's actor on the player's machine, with the implementations the wasm gives the names. */
+-function oracle() {
+-    const machine = createMachine(JSON.parse(config), {
+-        actions: {
+-            resetPlayed: assign({played: 0}),
+-            countPlayed: assign({played: ({context}) => context.played + 1}),
+-            setSpeed: assign({speed: ({event}) => event.speed}),
+-        },
+-        guards: {
+-            isSpeed: ({event}) => [0.5, 1, 2].includes(event.speed),
+-        },
+-    })
+-    return createActor(machine).start()
+-}
+-
+ /**
+  * Plays the events on the wasm's host and on XState's actor, asserting at each step that the two
+  * agree, and returns the wasm's snapshots, the initial one first.
+  */
+ function play(app, events) {
+     const host = app.MachineHost.create(config)
+-    const actor = oracle()
++    const actor = oracle(config)
+     try {
+         const snapshots = [JSON.parse(host.snapshot())]
+         const agree = (snapshot, step) => {
+diff --git a/tools/build.mjs b/tools/build.mjs
+index 6635737..ee57c16 100644
+--- a/tools/build.mjs
++++ b/tools/build.mjs
+@@ -8,17 +8,21 @@
+ //
+ //   build.mjs --bundle
+ //       bundles src/server.tsx into build/server.mjs, which renders the pages and which the
+-//       tests import, and src/client.tsx into build/client/site.js, which the browser runs;
++//       tests import, src/client.tsx into build/client/site.js, which the browser runs, and
++//       src/sw.ts into build/client/sw.js, the service worker, a classic script;
+ //   build.mjs --render --pages <dir> --out <dir> --context <file.json> [--chrome <file>]
+ //             [--site-chrome <file>] [--app <dir>]
+ //       renders every <dir>/**/*.oui into <out>/<path>/index.html with the context the file
+ //       holds, and its social card into <out>/cards/ (tools/cards.mjs), with a card for the page
+ //       of each library of the context's catalogue, which b2 site takes from the libraries'
+ //       docs, the icons and the favicon (tools/icons.mjs), and copies assets/ and the client
+-//       bundle into <out>/assets/. With --chrome, it also writes into <file> the header the
+-//       libraries' light pages show (renderFragment's `docs-header`), and with --site-chrome the
+-//       header of a page of the site's own style it does not render (`site-header`), each with
+-//       its links from the site's root, which tools/ci/assemble.py rebases for each page it heads.
++//       bundle into <out>/assets/. At <out>'s root, the PWA's: sw.js, and manifest.webmanifest,
++//       assets/manifest.webmanifest with the app icons icons.mjs renders and the theme's
++//       colours (src/theme.ts), so that neither is typed twice. With --chrome, it also writes
++//       into <file> the header the libraries' light pages show (renderFragment's
++//       `docs-header`), and with --site-chrome the header of a page of the site's own style it
++//       does not render (`site-header`), each with its links from the site's root, which
++//       tools/ci/assemble.py rebases for each page it heads.
+ //       With --app, it also copies the site's wasm, <dir>'s site-app.mjs and site-app.wasm, which b2
+ //       builds with emscripten (app/Jamfile), into <out>/assets/app/, beside the client bundle that
+ //       loads it (src/machine.ts);
+@@ -26,12 +30,15 @@
+ //             [--superproject <dir>]
+ //       writes the files that index a site laid out whole, robots.txt, llms.txt, libraries.json
+ //       and, on release, sitemap.xml (tools/indexing.mjs, which takes the same options, --index
+-//       as --site).
++//       as --site);
++//   build.mjs --pwa <site>
++//       writes precache.json, the list of every file of a site laid out whole that the service
++//       worker caches (tools/precache.mjs): the last step, once no other writes a file.
+ //
+ // The steps may be given at once, and run in that order. A fault of a page prints
+ // `<file>:<line>: <message>` and exits 1; a usage error exits 2.
+ //
+-// Both bundles define process.env.NODE_ENV as "production": OpenUI's web entry mounts a
++// The bundles define process.env.NODE_ENV as "production": OpenUI's web entry mounts a
+ // devtools widget, fetched from a CDN, in development, and only the define drops it. OpenUI and
+ // zod are bundled into the server too, so that its test reads the code the browser runs.
+ //
+@@ -46,7 +53,8 @@ import {fileURLToPath, pathToFileURL} from 'node:url'
+ import {parseArgs} from 'node:util'
+ import {writeCards} from './cards.mjs'
+ import {drawing} from './drawing.mjs'
+-import {writeIcons} from './icons.mjs'
++import {appSizes, writeIcons} from './icons.mjs'
++import {writePrecache} from './precache.mjs'
+ 
+ const site = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+ 
+@@ -110,6 +118,8 @@ async function bundle() {
+         bundle: true,
+         jsx: 'automatic',
+         define: {'process.env.NODE_ENV': '"production"'},
++        // The theme's stylesheets as text, which src/theme.ts reads the colours of.
++        loader: {'.css': 'text'},
+         logLevel: 'warning',
+         absWorkingDir: site,
+         plugins: [withoutTelemetry, markDrawing],
+@@ -131,6 +141,30 @@ async function bundle() {
+         format: 'esm',
+         minify: true,
+     }))
++    // A classic script, which every browser that has service workers registers.
++    await writeWhole(await esbuild.build({
++        ...common,
++        entryPoints: ['src/sw.ts'],
++        outfile: 'build/client/sw.js',
++        platform: 'browser',
++        format: 'iife',
++        minify: true,
++    }))
++}
++
++/**
++ * The web manifest at the site's root: assets/manifest.webmanifest, its scope and start the root,
++ * with each app icon for any use and as maskable (it is full-bleed, its mark in the safe zone), and
++ * the light theme's background as its colours: a manifest has one of each, and the pages give the
++ * dark one with their theme-color.
++ */
++async function writeManifest(out, colours) {
++    const manifest = JSON.parse(await readFile(join(site, 'assets/manifest.webmanifest'), 'utf8'))
++    const icons = ['any', 'maskable'].flatMap(purpose => appSizes.map(side => ({
++        src: `assets/icons/icon-accent-${side}.png`, sizes: `${side}x${side}`, type: 'image/png', purpose,
++    })))
++    const written = {...manifest, theme_color: colours.light, background_color: colours.light, icons}
++    await writeFile(join(out, 'manifest.webmanifest'), `${JSON.stringify(written, null, 4)}\n`)
+ }
+ 
+ /** Every `.oui` file under `directory`, as paths relative to it, sorted. */
+@@ -165,7 +199,7 @@ async function copyApp(app, out) {
+ }
+ 
+ async function render({pages, out, context: contextFile, chrome, 'site-chrome': siteChrome, app}) {
+-    const {renderPage, renderFragment, pageTitle, cardPath, PageError} = await import(pathToFileURL(join(site, 'build/server.mjs')).href)
++    const {renderPage, renderFragment, pageTitle, cardPath, themeColours, PageError} = await import(pathToFileURL(join(site, 'build/server.mjs')).href)
+     const context = JSON.parse(await readFile(contextFile, 'utf8'))
+     const cards = []
+     for (const page of await pagesUnder(pages)) {
+@@ -192,8 +226,13 @@ async function render({pages, out, context: contextFile, chrome, 'site-chrome':
+     }
+     await writeCards(out, cards)
+     await writeIcons(out)
+-    await cp(join(site, 'assets'), join(out, 'assets'), {recursive: true})
++    await cp(join(site, 'assets'), join(out, 'assets'), {
++        recursive: true,
++        filter: source => source !== join(site, 'assets/manifest.webmanifest'),
++    })
+     await cp(join(site, 'build/client/site.js'), join(out, 'assets/site.js'))
++    await cp(join(site, 'build/client/sw.js'), join(out, 'sw.js'))
++    await writeManifest(out, themeColours())
+     if (app) {
+         await copyApp(app, out)
+     }
+@@ -229,11 +268,13 @@ const {values} = parseArgs({
+         catalogue: {type: 'string'},
+         channel: {type: 'string'},
+         superproject: {type: 'string'},
++        pwa: {type: 'string'},
+     },
+ })
+-if (!values.bundle && !values.render && !values.index) {
++if (!values.bundle && !values.render && !values.index && !values.pwa) {
+     console.error('usage: build.mjs [--bundle] [--render --pages <dir> --out <dir> --context <file.json> [--chrome <file>] [--site-chrome <file>] [--app <dir>]]\n' +
+-        '                 [--index <site> --base <url> --catalogue <libraries.json> --channel <preview|release> [--superproject <dir>]]')
++        '                 [--index <site> --base <url> --catalogue <libraries.json> --channel <preview|release> [--superproject <dir>]]\n' +
++        '                 [--pwa <site>]')
+     process.exit(2)
+ }
+ if (values.render && !(values.pages && values.out && values.context)) {
+@@ -258,3 +299,6 @@ if (values.index) {
+         process.exit(error.status ?? 1)
+     }
+ }
++if (values.pwa) {
++    await writePrecache(values.pwa)
++}
+diff --git a/tools/precache.mjs b/tools/precache.mjs
+new file mode 100644
+index 0000000..a09429c
+--- /dev/null
++++ b/tools/precache.mjs
+@@ -0,0 +1,67 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// precache.json, the list the PWA precaches (src/precache.ts reads it), which the build's --pwa
++// step writes into a site laid out whole, last, so that it lists the final files:
++//
++//   {"version": <the SHA-256 of files, as JSON>, "total": <the sum of their sizes>,
++//    "files": [{"path": <from the site's root>, "sha256": <hex>, "size": <bytes>}, ...]}
++//
++// Every file of the site is listed, sorted by path, but the root's precache.json and sw.js: the
++// list cannot hold its own hash, and the service worker is the browser's to update, by its URL,
++// which names the version. A change of one byte changes that file's entry and the version alone.
++
++import {createHash} from 'node:crypto'
++import {readdir, readFile, realpath, rename, writeFile} from 'node:fs/promises'
++import {join, relative} from 'node:path'
++
++/** The PWA's own files at the site's root, which the list leaves out. */
++const own = new Set(['precache.json', 'sw.js'])
++
++/** The list of the site in directory, a link to one followed. */
++export async function precache(directory) {
++    const root = await realpath(directory)
++    const entries = await readdir(root, {recursive: true, withFileTypes: true})
++    const paths = entries
++        .filter(entry => entry.isFile())
++        .map(entry => relative(root, join(entry.parentPath, entry.name)).split('\\').join('/'))
++        .filter(path => !own.has(path))
++        .sort()
++    const files = []
++    for (const path of paths) {
++        const content = await readFile(join(root, path))
++        files.push({path, sha256: createHash('sha256').update(content).digest('hex'), size: content.length})
++    }
++    return {
++        version: createHash('sha256').update(JSON.stringify(files)).digest('hex'),
++        total: files.reduce((sum, file) => sum + file.size, 0),
++        files,
++    }
++}
++
++/** The list as JSON for its reader: one file per line. */
++function laidOut(list) {
++    return [
++        '{',
++        `    "version": ${JSON.stringify(list.version)},`,
++        `    "total": ${list.total},`,
++        '    "files": [',
++        list.files.map(file => `        {"path": ${JSON.stringify(file.path)}, "sha256": "${file.sha256}", "size": ${file.size}}`).join(',\n'),
++        '    ]',
++        '}',
++        '',
++    ].join('\n')
++}
++
++/** Writes precache.json at directory's root, by one rename, and returns the list. */
++export async function writePrecache(directory) {
++    const list = await precache(directory)
++    const root = await realpath(directory)
++    const next = join(root, `.precache.json.${process.pid}.next`)
++    await writeFile(next, laidOut(list))
++    await rename(next, join(root, 'precache.json'))
++    return list
++}
+diff --git a/tsconfig.json b/tsconfig.json
+index 8cf82d8..fb3347e 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -11,7 +11,8 @@
+         "skipLibCheck": true,
+         "resolveJsonModule": true,
+         "forceConsistentCasingInFileNames": true,
+-        "allowJs": true
++        "allowJs": true,
++        "allowImportingTsExtensions": true
+     },
+     "include": ["**/*.ts", "**/*.tsx", "**/*.mjs"],
+     "exclude": ["node_modules", ".node-modules", "build"]
+-- 
+2.55.0
+

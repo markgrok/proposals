@@ -1,0 +1,1224 @@
+From df15129785a936a45c58636550fa20aef7403334 Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 13:37:49 -0400
+Subject: [PATCH 1/7] The site's wasm: its machines on webcpp::xstate, the
+ player's machine, XState as the test's oracle
+
+---
+ Jamfile                    |  23 +++--
+ README.md                  |  17 +++-
+ app/Jamfile                |  91 +++++++++++++++++
+ app/bindings.cpp           |  59 +++++++++++
+ app/site_app.cpp           | 131 ++++++++++++++++++++++++
+ app/site_app.hpp           |  67 +++++++++++++
+ app/test/site_app_test.cpp | 198 +++++++++++++++++++++++++++++++++++++
+ machines/player.json       |  40 ++++++++
+ src/machine.ts             | 133 +++++++++++++++++++++++++
+ test/build_test.mjs        |  32 ++++++
+ test/machine_test.mjs      | 187 +++++++++++++++++++++++++++++++++++
+ test/readme_test.mjs       |   3 +-
+ tools/build.mjs            |  33 ++++++-
+ 13 files changed, 995 insertions(+), 19 deletions(-)
+ create mode 100644 app/Jamfile
+ create mode 100644 app/bindings.cpp
+ create mode 100644 app/site_app.cpp
+ create mode 100644 app/site_app.hpp
+ create mode 100644 app/test/site_app_test.cpp
+ create mode 100644 machines/player.json
+ create mode 100644 src/machine.ts
+ create mode 100644 test/machine_test.mjs
+
+diff --git a/Jamfile b/Jamfile
+index 7754c03..c2ff4b5 100644
+--- a/Jamfile
++++ b/Jamfile
+@@ -42,13 +42,14 @@ make context.json : /webcpp//libraries.json : @site%write-context : <webcpp-boos
+ always context.json ;
+ 
+ # The pages, rendered by the npm script build into pages/ beside the stamp,
+-# with their cards, assets and the client bundle, and the two headers b2 site
+-# lays out: docs-header.html, of the libraries' light pages, and
+-# site-header.html, of a page of the site's own style it does not render (the
+-# report's). All are removed first, so that a page deleted from pages/ is gone
+-# from what b2 site reads.
++# with their cards, assets, the client bundle and the site's wasm (app/, built
++# with emscripten whatever toolset b2 runs with, and copied into build/app/
++# first), and the two headers b2 site lays out: docs-header.html, of the
++# libraries' light pages, and site-header.html, of a page of the site's own
++# style it does not render (the report's). All are removed first, so that a
++# page deleted from pages/ is gone from what b2 site reads.
+ make pages.stamp : context.json : @pages
+-  : <dependency>node-modules <webcpp-boost-check>off ;
++  : <dependency>node-modules <dependency>app//wasm <webcpp-boost-check>off ;
+ always pages.stamp ;
+ alias pages : pages.stamp : <webcpp-boost-check>off ;
+ 
+@@ -57,7 +58,7 @@ rule pages ( targets * : sources * : properties * )
+     BUNDLE on $(targets) = [ site.npm build : --bundle ] ;
+     RENDER on $(targets) = [ site.npm build : --render --pages pages --out $out/pages
+         --context $context --chrome $out/docs-header.html
+-        --site-chrome $out/site-header.html ] ;
++        --site-chrome $out/site-header.html --app [ path.native $(.here)/build/app ] ] ;
+ }
+ 
+ actions pages
+@@ -75,8 +76,12 @@ actions pages
+ 
+ # The site's own tests: its npm test, which bundles first (package.json's
+ # pretest, so npm alone never reads a stale build/server.mjs) and runs every
+-# test/**/*_test.mjs, and its typecheck. b2 /webcpp/site//test.
+-notfile test : @test : : <dependency>node-modules <webcpp-boost-check>off ;
++# test/**/*_test.mjs, the site's wasm among them (test/machine_test.mjs, which
++# reads it from build/app/), and its typecheck; and machine_host's native
++# test (app/). b2 /webcpp/site//test.
++notfile test : @test
++  : : <dependency>node-modules <dependency>app//wasm <dependency>app//site_app_test
++    <webcpp-boost-check>off ;
+ 
+ rule test ( targets * : sources * : properties * )
+ {
+diff --git a/README.md b/README.md
+index b4bc0e7..d8f920b 100644
+--- a/README.md
++++ b/README.md
+@@ -25,6 +25,11 @@ repository:
+ the install to its analytics, as the superproject's build does for every
+ install it makes.
+ 
++One of the tests, `test/machine_test.mjs`, runs the site's wasm, which only
++the C++ build makes: it reads `build/app/site-app.mjs`, which Path 2's
++`b2 site` and `b2 /webcpp/site//test` build and copy there. Without it, that
++test fails and names the command that builds it.
++
+ `npm run dev` builds the pages with the catalogue of `test/fixtures/`, serves
+ them at http://127.0.0.1:8765/, and builds them again whenever a file under
+ `pages/`, `src/` or `assets/` changes. It needs no C++ toolchain: the
+@@ -90,12 +95,14 @@ b2 alone, at the superproject's root:
+ | `b2 site` | builds the whole site into `bin/site/`: this repository's pages, every library's page and the report, every link checked; the preview channel, the development version served at https://webcpporg.github.io/, whose every page carries `noindex` and which writes no sitemap |
+ | `b2 site -sWEBCPP_SITE=release -sWEBCPP_SITE_VERSION=<version>` | the same, for the release channel, served at https://webcpp.org/: indexed, with its sitemap |
+ | `b2 site-serve` | builds the site and serves it at http://127.0.0.1:8765/ |
+-| `b2 /webcpp/site//test` | the site's own tests |
++| `b2 /webcpp/site//test` | the site's own tests: the native test of `app/`, then, with the site's wasm built, its JavaScript tests and their type check |
++| `b2 /webcpp/site/app//wasm` | the site's wasm alone, built with Emscripten in release and copied into `build/app/` |
+ 
+ The site's C++ is a project like any user's of webcpp: its wasm's own code
+-will be in `app/`, its trace points in `include/webcpp_site/`, and each
++is in `app/`, which runs the site's machines (`machines/`) on
++webcpp::xstate; its trace points will be in `include/webcpp_site/`, and each
+ example in a directory of its own under `examples/`, all built for
+-Emscripten by `b2 site`.
++Emscripten by `b2 site`, whatever toolset b2 runs with.
+ 
+ The prerequisites are the superproject's, Emscripten among them (its
+ `README.md`), and node, which b2 runs to render the pages the way it runs
+@@ -108,7 +115,9 @@ Python for the report: one more tool on `PATH`, at version 26.7.0.
+ | `Jamfile` | the site's targets; `b2 site`, at the superproject, runs them |
+ | `package.json`, `package-lock.json` | the site's own node dependencies, pinned, and its scripts: `build`, `test`, `typecheck`, `dev` and `serve` |
+ | `pages/` | the site's pages, in OpenUI Lang: `index.oui` is the home, `<name>.oui` the page `<name>/` |
+-| `src/` | the components pages are written with, and the renderer: `server.tsx` prerenders a page, `client.tsx` hydrates it in the browser |
++| `src/` | the components pages are written with, and the renderer: `server.tsx` prerenders a page, `client.tsx` hydrates it in the browser; `machine.ts` loads the site's wasm and gives a component a machine of it (`useMachine`) |
++| `app/` | the site's wasm, `site-app.mjs` and `site-app.wasm`, laid out at the site's `assets/app/`: C++ on webcpp::xstate's machine layer that runs the site's machines, its embind bindings, and its native test |
++| `machines/` | the site's state machines, as XState's JSON configs: `player.json`, the visualizer's player |
+ | `assets/` | the styles, the logo and `card.svg`, the social cards' template, copied to the site's `assets/` |
+ | `seo/queries.json` | the searches the site answers, each with the page that answers it, which a test checks |
+ | `tools/build.mjs` | the `build` script: the bundles, the pages rendered to HTML with their social cards (`tools/cards.mjs`), the header of the libraries' pages, and the indexing files (`--index`) |
+diff --git a/app/Jamfile b/app/Jamfile
+new file mode 100644
+index 0000000..03db629
+--- /dev/null
++++ b/app/Jamfile
+@@ -0,0 +1,91 @@
++# Copyright (c) 2026 WebCpp.org
++#
++# Distributed under the Boost Software License, Version 1.0. (See
++# accompanying file LICENSE_1_0.txt or copy at
++# https://www.boost.org/LICENSE_1_0.txt)
++#
++# The site's own wasm, the module SiteApp: machine_host, which runs the site's
++# machines (machines/*.json) on webcpp::xstate's machine layer, and its
++# embind bindings; and machine_host's native test.
++#
++#   site_app_test  machine_host on the player's machine, natively;
++#   site-app       the wasm, on emscripten alone: site-app.js and, beside
++#                  it, site-app.wasm, which em++ writes and b2 does not know;
++#   wasm           site-app built with emscripten in release, whatever the
++#                  toolset b2 runs with, copied into the site's build/app/ as
++#                  site-app.mjs and site-app.wasm, where the site's build and
++#                  its node test read it.
++import modules ;
++import path ;
++import testing ;
++
++# This directory's parent, the site's, absolute: an action starts in the
++# directory b2 was started in, the superproject's root.
++.site = [ path.parent [ path.parent [ path.root [ path.make
++    [ modules.binding $(__name__) ] ] [ path.pwd ] ] ] ] ;
++
++project : requirements <library>/webcpp/xstate//xstate <include>. ;
++
++# <build>no unless the toolset is emscripten's, and the reverse: the wasm
++# needs Emscripten's headers, and the test reads its argument from the host's
++# files, which node gives a program only with -sNODERAWFS.
++rule emscripten-only ( properties * )
++{
++    if ! <toolset>emscripten in $(properties)
++    {
++        return <build>no ;
++    }
++}
++
++rule native-only ( properties * )
++{
++    if <toolset>emscripten in $(properties)
++    {
++        return <build>no ;
++    }
++}
++
++run test/site_app_test.cpp site_app.cpp : : ../machines/player.json
++  : <conditional>@native-only : site_app_test ;
++
++exe site-app : site_app.cpp bindings.cpp
++  : <conditional>@emscripten-only
++    <linkflags>-lembind
++    <linkflags>-sMODULARIZE
++    <linkflags>-sEXPORT_ES6
++    <linkflags>-sEXPORT_NAME=SiteApp
++    <linkflags>-sENVIRONMENT=web,node
++    <linkflags>-sALLOW_MEMORY_GROWTH
++    # em++ optimizes the wasm and minifies its JavaScript when it links, at
++    # the level the objects were compiled at, which b2 gives the compiler
++    # alone.
++    <optimization>speed:<linkflags>-O3
++    <optimization>space:<linkflags>-Os
++  ;
++
++make site-app.stamp : site-app/<toolset>emscripten/<variant>release : @copy-app
++  : <webcpp-boost-check>off ;
++alias wasm : site-app.stamp : <webcpp-boost-check>off ;
++
++rule copy-app ( targets * : sources * : properties * )
++{
++    OUT on $(targets) = [ path.native $(.site)/build/app ] ;
++}
++
++# Each file is copied beside its place and renamed onto it, the wasm before
++# the module that loads it, so that a reader, such as a test run at the same
++# time, never reads a file half-written.
++actions copy-app
++{
++    set -e
++    mkdir -p "$(OUT)"
++    next=`mktemp -d "$(OUT)/.next-XXXXXX"`
++    cp "$(>)" "$next/site-app.mjs"
++    cp "`dirname "$(>)"`/site-app.wasm" "$next/site-app.wasm"
++    mv -f "$next/site-app.wasm" "$(OUT)/site-app.wasm"
++    mv -f "$next/site-app.mjs" "$(OUT)/site-app.mjs"
++    rmdir "$next"
++    echo copied > "$(<)"
++}
++
++explicit site-app site-app.stamp wasm ;
+diff --git a/app/bindings.cpp b/app/bindings.cpp
+new file mode 100644
+index 0000000..c57e5bc
+--- /dev/null
++++ b/app/bindings.cpp
+@@ -0,0 +1,59 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++/**
++ The site's wasm as JavaScript sees it, the module SiteApp: the class
++ MachineHost, machine_host through embind, whose refusals are JavaScript
++ Errors.
++*/
++
++#include "site_app.hpp"
++
++#include <boost/system/error_code.hpp>
++#include <boost/system/result.hpp>
++
++#include <emscripten/bind.h>
++#include <emscripten/val.h>
++
++#include <string>
++#include <string_view>
++#include <utility>
++
++namespace {
++
++/** Throws, in JavaScript, the Error that says what was refused and why. */
++[[noreturn]] void throw_error(std::string_view refused, const boost::system::error_code& why) {
++    std::string message(refused);
++    message += ": ";
++    message += why.message();
++    emscripten::val::global("Error").new_(message).throw_();
++}
++
++webcpp_site::machine_host create(const std::string& config) {
++    boost::system::result<webcpp_site::machine_host> created =
++        webcpp_site::machine_host::create(config);
++    if (!created.has_value()) {
++        throw_error("MachineHost.create refused the config", created.error());
++    }
++    return std::move(*created);
++}
++
++std::string send(webcpp_site::machine_host& host, const std::string& event) {
++    boost::system::result<std::string> sent = host.send(event);
++    if (!sent.has_value()) {
++        throw_error("MachineHost.send refused the event", sent.error());
++    }
++    return std::move(*sent);
++}
++
++}  // namespace
++
++EMSCRIPTEN_BINDINGS(site_app) {
++    const emscripten::class_<webcpp_site::machine_host> host("MachineHost");
++    host.class_function("create", &create);
++    host.function("send", &send);
++    host.function("snapshot", &webcpp_site::machine_host::snapshot);
++}
+diff --git a/app/site_app.cpp b/app/site_app.cpp
+new file mode 100644
+index 0000000..b12d4c7
+--- /dev/null
++++ b/app/site_app.cpp
+@@ -0,0 +1,131 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++#include "site_app.hpp"
++
++#include <webcpp/xstate.hpp>
++
++#include <boost/json.hpp>
++#include <boost/system/error_code.hpp>
++#include <boost/system/result.hpp>
++
++#include <cstdint>
++#include <string>
++#include <string_view>
++#include <utility>
++
++namespace webcpp_site {
++
++namespace {
++
++namespace xstate = webcpp::xstate;
++
++/** The member key of the context, an int64, or nullptr when there is none. */
++const std::int64_t* context_int64(const xstate::action_args& args, std::string_view key) {
++    const boost::json::object* context = args.context.if_object();
++    const boost::json::value* member = context == nullptr ? nullptr : context->if_contains(key);
++    return member == nullptr ? nullptr : member->if_int64();
++}
++
++xstate::result<boost::json::object> reset_played(const xstate::action_args& /*args*/) {
++    return boost::json::object{{"played", 0}};
++}
++
++xstate::result<boost::json::object> count_played(const xstate::action_args& args) {
++    const std::int64_t* played = context_int64(args, "played");
++    if (played == nullptr) {
++        return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
++    }
++    return boost::json::object{{"played", *played + 1}};
++}
++
++xstate::result<boost::json::object> set_speed(const xstate::action_args& args) {
++    const boost::json::value* speed = args.event.payload.if_contains("speed");
++    if (speed == nullptr) {
++        return xstate::failure<boost::json::object>(xstate::errc::implementation_failed);
++    }
++    return boost::json::object{{"speed", *speed}};
++}
++
++/**
++ Whether the event's `speed` is one the player offers.
++ Tip: JSON gives 1 and 2 as integers and 0.5 as a double, so each is read as a double.
++*/
++xstate::result<bool> is_speed(const xstate::action_args& args) {
++    const boost::json::value* speed = args.event.payload.if_contains("speed");
++    if (speed == nullptr || !speed->is_number()) {
++        return false;
++    }
++    boost::system::error_code inexact;
++    const auto value = speed->to_number<double>(inexact);
++    return !inexact && (value == 0.5 || value == 1.0 || value == 2.0);
++}
++
++std::string_view status_name(xstate::status of) {
++    switch (of) {
++        case xstate::status::active: return "active";
++        case xstate::status::done: return "done";
++        case xstate::status::error: return "error";
++    }
++    return "error";
++}
++
++}  // namespace
++
++webcpp::xstate::implementations site_implementations() {
++    xstate::implementations registry;
++    registry.actions.emplace("resetPlayed", xstate::assign_action{.assignment = reset_played});
++    registry.actions.emplace("countPlayed", xstate::assign_action{.assignment = count_played});
++    registry.actions.emplace("setSpeed", xstate::assign_action{.assignment = set_speed});
++    registry.guards.emplace("isSpeed", is_speed);
++    return registry;
++}
++
++boost::system::result<machine_host> machine_host::create(std::string_view config_json) {
++    boost::system::error_code failed;
++    const boost::json::value config = boost::json::parse(config_json, failed);
++    if (failed) {
++        return failed;
++    }
++    xstate::result<xstate::machine> created =
++        xstate::create_machine(config, site_implementations());
++    if (!created.has_value()) {
++        return created.error();
++    }
++    xstate::snapshot initial = xstate::get_initial_snapshot(*created);
++    return machine_host(std::move(*created), std::move(initial));
++}
++
++boost::system::result<std::string> machine_host::send(std::string_view event_json) {
++    boost::system::error_code failed;
++    const boost::json::value json = boost::json::parse(event_json, failed);
++    if (failed) {
++        return failed;
++    }
++    const xstate::result<xstate::event> event = xstate::event_from_json(json);
++    if (!event.has_value()) {
++        return event.error();
++    }
++    current_ = xstate::get_next_snapshot(machine_, current_, *event);
++    return snapshot();
++}
++
++std::string machine_host::snapshot() const {
++    boost::json::object json{
++        {"value", current_.value},
++        {"context", current_.context},
++        {"status", status_name(current_.status)},
++    };
++    if (current_.status == xstate::status::error) {
++        json.emplace("error", current_.error.message());
++    }
++    return boost::json::serialize(json);
++}
++
++machine_host::machine_host(webcpp::xstate::machine machine, webcpp::xstate::snapshot current)
++    : machine_(std::move(machine)), current_(std::move(current)) {}
++
++}  // namespace webcpp_site
+diff --git a/app/site_app.hpp b/app/site_app.hpp
+new file mode 100644
+index 0000000..5f659c9
+--- /dev/null
++++ b/app/site_app.hpp
+@@ -0,0 +1,67 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++/**
++ The site's machines, each an XState machine whose JSON config is one of
++ machines/, run by webcpp::xstate's machine layer: the code the site's wasm
++ exports to the pages (bindings.cpp), testable natively.
++*/
++#ifndef WEBCPP_SITE_APP_SITE_APP_HPP
++#define WEBCPP_SITE_APP_SITE_APP_HPP
++
++#include <webcpp/xstate.hpp>
++
++#include <boost/system/result.hpp>
++
++#include <string>
++#include <string_view>
++
++namespace webcpp_site {
++
++/**
++ The implementations the site's machines name, by name: the assigns and the
++ guards a JSON config cannot hold.
++
++ | Name | Kind | What it does |
++ | `resetPlayed` | assign | `played` = 0 |
++ | `countPlayed` | assign | `played` + 1 |
++ | `setSpeed` | assign | `speed` = the event's `speed` |
++ | `isSpeed` | guard | the event's `speed` is 0.5, 1 or 2 |
++*/
++webcpp::xstate::implementations site_implementations();
++
++/** One machine of the site, created from XState's JSON config, stepped by events. */
++class machine_host {
++public:
++    /** The machine of config, in its initial state, or the error that refuses the config. */
++    static boost::system::result<machine_host> create(std::string_view config_json);
++
++    /**
++     Sends event (XState's event JSON, {"type": ...}) and returns the snapshot's JSON.
++
++     An event that is not JSON, or has no string `type`, is refused with its
++     error, and the machine stays where it was.
++    */
++    boost::system::result<std::string> send(std::string_view event_json);
++
++    /**
++     The current snapshot as JSON: {"value": ..., "context": ..., "status": ...}.
++
++     `status` is `active`, `done` or `error`, as XState's; with `error`, the
++     member `error` names why.
++    */
++    [[nodiscard]] std::string snapshot() const;
++
++private:
++    machine_host(webcpp::xstate::machine machine, webcpp::xstate::snapshot current);
++
++    webcpp::xstate::machine machine_;
++    webcpp::xstate::snapshot current_;
++};
++
++}  // namespace webcpp_site
++
++#endif  // WEBCPP_SITE_APP_SITE_APP_HPP
+diff --git a/app/test/site_app_test.cpp b/app/test/site_app_test.cpp
+new file mode 100644
+index 0000000..7748762
+--- /dev/null
++++ b/app/test/site_app_test.cpp
+@@ -0,0 +1,198 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++/**
++ Tests machine_host on the player's machine, machines/player.json, whose path
++ is the program's one argument: its states and its context through a run, and
++ the config and the event it refuses.
++*/
++
++#include "site_app.hpp"
++
++#include <boost/core/lightweight_test.hpp>
++#include <boost/json.hpp>
++#include <boost/system/result.hpp>
++
++#include <array>
++#include <cstddef>
++#include <cstdio>
++#include <initializer_list>
++#include <span>
++#include <string>
++#include <string_view>
++
++namespace {
++
++/**
++ The text of the file at path, read into buffer, or "" when it cannot be read or does not fit.
++ Tip: a buffer, since a std::string grown here is a throw clang-tidy finds reaching main.
++*/
++std::string_view read_file(const char* path, std::span<char> buffer) {
++    std::FILE* file = std::fopen(path, "rb");
++    if (file == nullptr) {
++        return {};
++    }
++    const std::size_t count = std::fread(buffer.data(), 1, buffer.size(), file);
++    const bool whole = std::feof(file) != 0 && std::ferror(file) == 0;
++    const bool closed = std::fclose(file) == 0;
++    return whole && closed ? std::string_view(buffer.data(), count) : std::string_view();
++}
++
++/** A snapshot's JSON, as machine_host writes it, read back; null when it is not JSON. */
++boost::json::value parsed(std::string_view json) {
++    boost::system::error_code failed;
++    const boost::json::value value = boost::json::parse(json, failed);
++    BOOST_TEST(!failed);
++    return failed ? boost::json::value() : value;
++}
++
++/** The member key of the snapshot's context, or null when it has none. */
++boost::json::value context_member(const boost::json::value& snapshot, std::string_view key) {
++    const boost::json::value* context = snapshot.as_object().if_contains("context");
++    if (context == nullptr || !context->is_object()) {
++        return nullptr;
++    }
++    const boost::json::value* member = context->as_object().if_contains(key);
++    return member == nullptr ? boost::json::value() : *member;
++}
++
++/** Sends each event in turn and returns the last snapshot, or null when one is refused. */
++boost::json::value send_all(webcpp_site::machine_host& host,
++                            std::initializer_list<std::string_view> events) {
++    boost::json::value last;
++    for (const std::string_view event : events) {
++        const boost::system::result<std::string> sent = host.send(event);
++        if (!BOOST_TEST(sent.has_value())) {
++            return nullptr;
++        }
++        last = parsed(sent.unsafe_value());
++    }
++    return last;
++}
++
++void starts_idle(std::string_view config) {
++    const boost::system::result<webcpp_site::machine_host> host =
++        webcpp_site::machine_host::create(config);
++    if (!BOOST_TEST(host.has_value())) {
++        return;
++    }
++    const webcpp_site::machine_host& player = host.unsafe_value();
++    const boost::json::value snapshot = parsed(player.snapshot());
++    if (!BOOST_TEST(snapshot.is_object())) {
++        return;
++    }
++    BOOST_TEST_EQ(snapshot.at("value"), boost::json::value("idle"));
++    BOOST_TEST_EQ(snapshot.at("status"), boost::json::value("active"));
++    BOOST_TEST_EQ(context_member(snapshot, "speed"), boost::json::value(1));
++    BOOST_TEST_EQ(context_member(snapshot, "played"), boost::json::value(0));
++}
++
++void plays_and_pauses(std::string_view config) {
++    boost::system::result<webcpp_site::machine_host> host =
++        webcpp_site::machine_host::create(config);
++    if (!BOOST_TEST(host.has_value())) {
++        return;
++    }
++    webcpp_site::machine_host& player = host.unsafe_value();
++    const boost::json::value paused = send_all(player, {
++                                                           R"({"type": "PLAY"})",
++                                                           R"({"type": "TICK"})",
++                                                           R"({"type": "TICK"})",
++                                                           R"({"type": "PAUSE"})",
++                                                       });
++    if (!BOOST_TEST(paused.is_object())) {
++        return;
++    }
++    BOOST_TEST_EQ(paused.at("value"), boost::json::value("paused"));
++    BOOST_TEST_EQ(context_member(paused, "played"), boost::json::value(2));
++    BOOST_TEST_EQ(parsed(player.snapshot()), paused);
++
++    const boost::json::value faster = send_all(player, {R"({"type": "SPEED", "speed": 2})"});
++    if (!BOOST_TEST(faster.is_object())) {
++        return;
++    }
++    BOOST_TEST_EQ(faster.at("value"), boost::json::value("paused"));
++    BOOST_TEST_EQ(context_member(faster, "speed"), boost::json::value(2));
++    BOOST_TEST_EQ(context_member(faster, "played"), boost::json::value(2));
++}
++
++void ends_and_restarts(std::string_view config) {
++    boost::system::result<webcpp_site::machine_host> host =
++        webcpp_site::machine_host::create(config);
++    if (!BOOST_TEST(host.has_value())) {
++        return;
++    }
++    webcpp_site::machine_host& player = host.unsafe_value();
++    const boost::json::value done =
++        send_all(player, {R"({"type": "PLAY"})", R"({"type": "TICK"})", R"({"type": "END"})"});
++    if (!BOOST_TEST(done.is_object())) {
++        return;
++    }
++    BOOST_TEST_EQ(done.at("value"), boost::json::value("done"));
++    BOOST_TEST_EQ(context_member(done, "played"), boost::json::value(1));
++
++    const boost::json::value idle = send_all(player, {R"({"type": "RESTART"})"});
++    if (!BOOST_TEST(idle.is_object())) {
++        return;
++    }
++    BOOST_TEST_EQ(idle.at("value"), boost::json::value("idle"));
++    BOOST_TEST_EQ(context_member(idle, "played"), boost::json::value(0));
++}
++
++void refuses_a_speed_it_does_not_offer(std::string_view config) {
++    boost::system::result<webcpp_site::machine_host> host =
++        webcpp_site::machine_host::create(config);
++    if (!BOOST_TEST(host.has_value())) {
++        return;
++    }
++    webcpp_site::machine_host& player = host.unsafe_value();
++    const boost::json::value half = send_all(player, {R"({"type": "SPEED", "speed": 0.5})"});
++    const boost::json::value three = send_all(player, {R"({"type": "SPEED", "speed": 3})"});
++    if (!BOOST_TEST(half.is_object()) || !BOOST_TEST(three.is_object())) {
++        return;
++    }
++    BOOST_TEST_EQ(context_member(half, "speed"), boost::json::value(0.5));
++    BOOST_TEST_EQ(three, half);
++}
++
++void refuses_a_config_that_is_not_json() {
++    const boost::system::result<webcpp_site::machine_host> host =
++        webcpp_site::machine_host::create(R"({"initial": "idle", )");
++    BOOST_TEST(!host.has_value());
++}
++
++void refuses_an_event_that_is_not_json(std::string_view config) {
++    boost::system::result<webcpp_site::machine_host> host =
++        webcpp_site::machine_host::create(config);
++    if (!BOOST_TEST(host.has_value())) {
++        return;
++    }
++    webcpp_site::machine_host& player = host.unsafe_value();
++    const std::string before = player.snapshot();
++    BOOST_TEST(!player.send(R"({"type": "PLAY")").has_value());
++    BOOST_TEST(!player.send(R"({"speed": 2})").has_value());
++    BOOST_TEST_EQ(player.snapshot(), before);
++}
++
++}  // namespace
++
++int main(int argc, char* argv[]) {
++    if (!BOOST_TEST_EQ(argc, 2)) {
++        return boost::report_errors();
++    }
++    std::array<char, 65536> buffer{};
++    const std::string_view config = read_file(argv[1], buffer);
++    if (!BOOST_TEST(!config.empty())) {
++        return boost::report_errors();
++    }
++    starts_idle(config);
++    plays_and_pauses(config);
++    ends_and_restarts(config);
++    refuses_a_speed_it_does_not_offer(config);
++    refuses_a_config_that_is_not_json();
++    refuses_an_event_that_is_not_json(config);
++    return boost::report_errors();
++}
+diff --git a/machines/player.json b/machines/player.json
+new file mode 100644
+index 0000000..fd36def
+--- /dev/null
++++ b/machines/player.json
+@@ -0,0 +1,40 @@
++{
++    "id": "player",
++    "initial": "idle",
++    "context": {"speed": 1, "played": 0},
++    "on": {
++        "SPEED": {"guard": "isSpeed", "actions": "setSpeed"}
++    },
++    "states": {
++        "idle": {
++            "on": {
++                "PLAY": {"target": "running", "actions": "resetPlayed"},
++                "STEP": {"target": "stepping"}
++            }
++        },
++        "running": {
++            "on": {
++                "PAUSE": {"target": "paused"},
++                "TICK": {"actions": "countPlayed"},
++                "END": {"target": "done"}
++            }
++        },
++        "paused": {
++            "on": {
++                "PLAY": {"target": "running"},
++                "STEP": {"target": "stepping"}
++            }
++        },
++        "stepping": {
++            "on": {
++                "TICK": {"target": "paused", "actions": "countPlayed"},
++                "END": {"target": "done"}
++            }
++        },
++        "done": {
++            "on": {
++                "RESTART": {"target": "idle", "actions": "resetPlayed"}
++            }
++        }
++    }
++}
+diff --git a/src/machine.ts b/src/machine.ts
+new file mode 100644
+index 0000000..17ffe8a
+--- /dev/null
++++ b/src/machine.ts
+@@ -0,0 +1,133 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The site's wasm, the module SiteApp that app/ builds with emscripten, and the hook a component
++// runs one of the site's machines (machines/*.json) with, on webcpp::xstate in the wasm.
++
++import {useCallback, useEffect, useRef, useState} from 'react'
++
++/** One machine in the wasm (app/site_app.hpp's machine_host), whose memory `delete` frees. */
++export type MachineHost = {
++    /** Sends XState's event JSON and returns the snapshot's JSON; throws an Error it refuses. */
++    send(event: string): string
++    /** The snapshot's JSON. */
++    snapshot(): string
++    delete(): void
++    isDeleted(): boolean
++}
++
++/** The module app/bindings.cpp exports. */
++export type SiteApp = {
++    MachineHost: {
++        /** The machine of XState's JSON config, in its initial state; throws an Error it refuses. */
++        create(config: string): MachineHost
++    }
++}
++
++/** A machine's snapshot, as machine_host writes it. */
++export type MachineSnapshot = {
++    value: unknown
++    context: Record<string, unknown>
++    status: 'active' | 'done' | 'error'
++    /** With the status `error`, why. */
++    error?: string
++}
++
++/**
++ * What useMachine gives: null while the wasm loads, then the machine's snapshot, or, when the
++ * wasm could not load or refused the config, the error that says why, which the page shows as text.
++ */
++export type MachineState = MachineSnapshot | {error: string} | null
++
++/** XState's event: its type, and the members that travel with it. */
++export type MachineEvent = {type: string; [member: string]: unknown}
++
++/** A machine run by runMachine. */
++export type MachineRun = {
++    /** Sends the event once the machine runs, and does nothing before or once stopped. */
++    send(event: MachineEvent): void
++    /** Deletes the machine's host; the run hands on nothing after. */
++    stop(): void
++}
++
++function messageOf(error: unknown): string {
++    return error instanceof Error ? error.message : String(error)
++}
++
++/** The module SiteApp at url, instantiated: its wasm fetched and compiled. */
++export async function loadSiteApp(url: string): Promise<SiteApp> {
++    const module = (await import(url)) as {default: () => Promise<SiteApp>}
++    return module.default()
++}
++
++/**
++ * Runs the machine of the JSON config on the app once it loads, handing on to changed its first
++ * snapshot and the one each send leads to, or the error that stops it.
++ * Tip: useMachine's effect, apart from React, so that node tests it; a run stopped before the app
++ * loads never creates its host.
++ */
++export function runMachine(app: Promise<SiteApp>, config: string,
++                           changed: (state: MachineState) => void): MachineRun {
++    let host: MachineHost | null = null
++    let stopped = false
++    app.then(loaded => {
++        if (stopped) {
++            return
++        }
++        host = loaded.MachineHost.create(config)
++        changed(JSON.parse(host.snapshot()) as MachineSnapshot)
++    }).catch((error: unknown) => {
++        if (!stopped) {
++            changed({error: messageOf(error)})
++        }
++    })
++    return {
++        send(event) {
++            if (host !== null) {
++                changed(JSON.parse(host.send(JSON.stringify(event))) as MachineSnapshot)
++            }
++        },
++        stop() {
++            stopped = true
++            host?.delete()
++            host = null
++        },
++    }
++}
++
++let loading: Promise<SiteApp> | undefined
++
++/**
++ * The site's wasm, loaded once per page from `app/site-app.mjs` beside the client bundle, which
++ * b2 site lays out at `assets/app/`: a URL relative to the bundle, so that it holds on every page
++ * and under any prefix the site is served at.
++ */
++function siteApp(): Promise<SiteApp> {
++    loading ??= loadSiteApp(new URL('app/site-app.mjs', import.meta.url).href)
++    return loading
++}
++
++/**
++ * Runs the machine of config, XState's JSON config, in the site's wasm: its state, re-rendered on
++ * each send, and the send. The host is deleted when the component unmounts or config changes.
++ */
++export function useMachine(config: object): [MachineState, (event: MachineEvent) => void] {
++    const [state, setState] = useState<MachineState>(null)
++    const run = useRef<MachineRun | null>(null)
++    const source = JSON.stringify(config)
++    useEffect(() => {
++        const started = runMachine(siteApp(), source, setState)
++        run.current = started
++        return () => {
++            started.stop()
++            if (run.current === started) {
++                run.current = null
++            }
++        }
++    }, [source])
++    const send = useCallback((event: MachineEvent) => run.current?.send(event), [])
++    return [state, send]
++}
+diff --git a/test/build_test.mjs b/test/build_test.mjs
+index 6170984..bf32ea8 100644
+--- a/test/build_test.mjs
++++ b/test/build_test.mjs
+@@ -53,6 +53,38 @@ test('--render --chrome --site-chrome writes the docs header and the site header
+     assert.ok(existsSync(join(out, 'favicon.ico')))
+ })
+ 
++/** Renders the site's pages into a new directory with the extra options, and returns it. */
++function rendered(...options) {
++    const work = mkdtempSync(join(tmpdir(), 'webcpp-build-'))
++    const context = join(work, 'context.json')
++    writeFileSync(context, JSON.stringify({
++        channel: 'preview', commit: '0123456789abcdef0123456789abcdef01234567', date: '2026-10-10',
++        version: null, catalogue,
++    }))
++    const out = join(work, 'pages')
++    execFileSync(process.execPath, [build, '--render', '--pages', join(site, 'pages'), '--out', out,
++        '--context', context, ...options], {stdio: 'pipe'})
++    return out
++}
++
++test("--render --app lays the site's wasm out at assets/app/, beside the client bundle that loads it", () => {
++    const app = mkdtempSync(join(tmpdir(), 'webcpp-app-'))
++    writeFileSync(join(app, 'site-app.mjs'), 'export default async function SiteApp() {}\n')
++    writeFileSync(join(app, 'site-app.wasm'), Buffer.from([0, 0x61, 0x73, 0x6d]))
++    const out = rendered('--app', app)
++    assert.deepEqual(readdirSync(join(out, 'assets/app')).sort(), ['site-app.mjs', 'site-app.wasm'])
++    assert.equal(readFileSync(join(out, 'assets/app/site-app.mjs'), 'utf8'),
++        readFileSync(join(app, 'site-app.mjs'), 'utf8'))
++    assert.deepEqual(readFileSync(join(out, 'assets/app/site-app.wasm')), readFileSync(join(app, 'site-app.wasm')))
++})
++
++test('--render --app fails, naming the file, when the wasm is not there', () => {
++    const app = mkdtempSync(join(tmpdir(), 'webcpp-app-'))
++    writeFileSync(join(app, 'site-app.mjs'), 'export default async function SiteApp() {}\n')
++    assert.throws(() => rendered('--app', app), error =>
++        error.status === 1 && error.stderr.toString().includes(join(app, 'site-app.wasm')))
++})
++
+ test('--bundle replaces each bundle whole, by one rename, so a reader never sees one empty or half written', () => {
+     // The bug this proves fixed: esbuild wrote build/server.mjs in place, truncating it first, so
+     // render_test.mjs, importing it while dev_test.mjs's rebuild bundled again in the same npm
+diff --git a/test/machine_test.mjs b/test/machine_test.mjs
+new file mode 100644
+index 0000000..21a276a
+--- /dev/null
++++ b/test/machine_test.mjs
+@@ -0,0 +1,187 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++// The site's wasm, build/app/site-app.mjs, which b2 /webcpp/site/app//wasm builds with emscripten
++// and copies there, loaded by src/machine.ts's loadSiteApp, running the player's machine,
++// machines/player.json, with XState 5.33.2's actor on the same config as its oracle: the two agree
++// on the value and the context at every step. And runMachine, what useMachine runs: the snapshots
++// it hands on, the error it hands on in their place, and the host it deletes.
++
++import assert from 'node:assert/strict'
++import {existsSync, readFileSync} from 'node:fs'
++import {join} from 'node:path'
++import test from 'node:test'
++import {pathToFileURL} from 'node:url'
++import {assign, createActor, createMachine} from 'xstate'
++import {loadSiteApp, runMachine} from '../src/machine.ts'
++import {site} from './site.mjs'
++
++const module = join(site, 'build/app/site-app.mjs')
++const config = readFileSync(join(site, 'machines/player.json'), 'utf8')
++
++/** The site's wasm, or a failure that says how to build it. */
++async function siteApp() {
++    assert.ok(existsSync(module), `${module} is missing: build it at the superproject's root with ` +
++        'b2 /webcpp/site/app//wasm (b2 /webcpp/site//test and b2 site build it first)')
++    return loadSiteApp(pathToFileURL(module).href)
++}
++
++/** XState's actor on the player's machine, with the implementations the wasm gives the names. */
++function oracle() {
++    const machine = createMachine(JSON.parse(config), {
++        actions: {
++            resetPlayed: assign({played: 0}),
++            countPlayed: assign({played: ({context}) => context.played + 1}),
++            setSpeed: assign({speed: ({event}) => event.speed}),
++        },
++        guards: {
++            isSpeed: ({event}) => [0.5, 1, 2].includes(event.speed),
++        },
++    })
++    return createActor(machine).start()
++}
++
++/**
++ * Plays the events on the wasm's host and on XState's actor, asserting at each step that the two
++ * agree, and returns the wasm's snapshots, the initial one first.
++ */
++function play(app, events) {
++    const host = app.MachineHost.create(config)
++    const actor = oracle()
++    try {
++        const snapshots = [JSON.parse(host.snapshot())]
++        const agree = (snapshot, step) => {
++            const expected = actor.getSnapshot()
++            assert.deepEqual(snapshot.value, expected.value, `the value after ${step}`)
++            assert.deepEqual(snapshot.context, expected.context, `the context after ${step}`)
++            assert.equal(snapshot.status, expected.status, `the status after ${step}`)
++        }
++        agree(snapshots[0], 'the start')
++        for (const event of events) {
++            const snapshot = JSON.parse(host.send(JSON.stringify(event)))
++            actor.send(event)
++            agree(snapshot, JSON.stringify(event))
++            snapshots.push(snapshot)
++        }
++        return snapshots
++    } finally {
++        host.delete()
++        actor.stop()
++    }
++}
++
++test("the player's machine runs in the wasm as it runs in XState", async () => {
++    const app = await siteApp()
++    const [idle, , , , paused, faster] = play(app, [
++        {type: 'PLAY'}, {type: 'TICK'}, {type: 'TICK'}, {type: 'PAUSE'}, {type: 'SPEED', speed: 2},
++    ])
++    assert.deepEqual(idle, {value: 'idle', context: {speed: 1, played: 0}, status: 'active'})
++    assert.equal(paused.value, 'paused')
++    assert.equal(paused.context.played, 2)
++    assert.equal(faster.value, 'paused')
++    assert.equal(faster.context.speed, 2)
++
++    const [, , , done, restarted] = play(app, [
++        {type: 'PLAY'}, {type: 'TICK'}, {type: 'END'}, {type: 'RESTART'},
++    ])
++    assert.equal(done.value, 'done')
++    assert.equal(restarted.value, 'idle')
++    assert.equal(restarted.context.played, 0)
++})
++
++test('every transition of the player agrees with XState, and an event no state takes moves nothing', async () => {
++    const app = await siteApp()
++    const values = play(app, [
++        {type: 'STEP'}, {type: 'TICK'}, {type: 'PLAY'}, {type: 'TICK'}, {type: 'SPEED', speed: 0.5},
++        {type: 'PAUSE'}, {type: 'STEP'}, {type: 'END'}, {type: 'SPEED', speed: 3}, {type: 'TICK'},
++        {type: 'RESTART'}, {type: 'STEP'}, {type: 'END'}, {type: 'RESTART'}, {type: 'PAUSE'},
++    ]).map(snapshot => snapshot.value)
++    assert.deepEqual(values, [
++        'idle', 'stepping', 'paused', 'running', 'running', 'running',
++        'paused', 'stepping', 'done', 'done', 'done',
++        'idle', 'stepping', 'done', 'idle', 'idle',
++    ])
++})
++
++test('a config or an event that is not JSON is a JavaScript Error, and the machine stays', async () => {
++    const app = await siteApp()
++    assert.throws(() => app.MachineHost.create('{"initial": '), error =>
++        error instanceof Error && /^MachineHost\.create refused the config: /.test(error.message))
++    assert.throws(() => app.MachineHost.create('{"initial": "nowhere", "states": {}}'), Error)
++    const host = app.MachineHost.create(config)
++    try {
++        const before = host.snapshot()
++        assert.throws(() => host.send('{"type": "PLAY"'), error =>
++            error instanceof Error && /^MachineHost\.send refused the event: /.test(error.message))
++        assert.throws(() => host.send('{"speed": 2}'), Error)
++        assert.equal(host.snapshot(), before)
++    } finally {
++        host.delete()
++    }
++})
++
++test('loadSiteApp rejects with an Error when the module is not there', async () => {
++    await assert.rejects(loadSiteApp(pathToFileURL(join(site, 'build/app/none.mjs')).href), Error)
++})
++
++/** The app, with every host it creates recorded. */
++function recording(app) {
++    const hosts = []
++    return {
++        hosts,
++        app: {
++            MachineHost: {
++                create(text) {
++                    const host = app.MachineHost.create(text)
++                    hosts.push(host)
++                    return host
++                },
++            },
++        },
++    }
++}
++
++test('runMachine hands on each snapshot, and stop deletes its host', async () => {
++    const {hosts, app} = recording(await siteApp())
++    const states = []
++    const run = runMachine(Promise.resolve(app), config, state => states.push(state))
++    await new Promise(setImmediate)
++    run.send({type: 'PLAY'})
++    run.send({type: 'TICK'})
++    assert.deepEqual(states.map(state => [state.value, state.context.played]),
++        [['idle', 0], ['running', 0], ['running', 1]])
++    run.stop()
++    run.send({type: 'PAUSE'})
++    assert.equal(states.length, 3, 'a stopped run hands on nothing')
++    assert.equal(hosts.length, 1)
++    assert.ok(hosts[0].isDeleted())
++})
++
++test('runMachine hands on the error of a wasm that could not load, and of a refused config', async () => {
++    const failed = []
++    runMachine(Promise.reject(new Error('WebAssembly is disabled')), config, state => failed.push(state))
++    await new Promise(setImmediate)
++    assert.deepEqual(failed, [{error: 'WebAssembly is disabled'}])
++
++    const refused = []
++    const app = await siteApp()
++    runMachine(Promise.resolve(app), '{"initial": "nowhere", "states": {}}', state => refused.push(state))
++    await new Promise(setImmediate)
++    assert.equal(refused.length, 1)
++    assert.match(refused[0].error, /^MachineHost\.create refused the config: /)
++})
++
++test('runMachine stopped before the wasm loads creates no host and hands on nothing', async () => {
++    const {hosts, app} = recording(await siteApp())
++    const states = []
++    let loaded
++    const run = runMachine(new Promise(resolve => { loaded = resolve }), config, state => states.push(state))
++    run.stop()
++    loaded(app)
++    await new Promise(setImmediate)
++    assert.deepEqual(states, [])
++    assert.deepEqual(hosts, [])
++})
+diff --git a/test/readme_test.mjs b/test/readme_test.mjs
+index d5a086c..1b7616e 100644
+--- a/test/readme_test.mjs
++++ b/test/readme_test.mjs
+@@ -24,7 +24,8 @@ const scripts = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
+ /** The npm commands the README may show besides `npm run <script>` and `npm test`. */
+ const npmCommands = new Set(['ci', 'install', 'test', 'run'])
+ /** The b2 targets the build declares for the site. */
+-const b2Targets = new Set(['site', 'site-serve', '/webcpp/site//test', '/webcpp/site//browser-test'])
++const b2Targets = new Set(['site', 'site-serve', '/webcpp/site//test', '/webcpp/site//browser-test',
++    '/webcpp/site/app//wasm'])
+ 
+ /** The text of every code span and code block of `markdown`, one entry each. */
+ function code(markdown) {
+diff --git a/tools/build.mjs b/tools/build.mjs
+index 7a4a626..6635737 100644
+--- a/tools/build.mjs
++++ b/tools/build.mjs
+@@ -10,7 +10,7 @@
+ //       bundles src/server.tsx into build/server.mjs, which renders the pages and which the
+ //       tests import, and src/client.tsx into build/client/site.js, which the browser runs;
+ //   build.mjs --render --pages <dir> --out <dir> --context <file.json> [--chrome <file>]
+-//             [--site-chrome <file>]
++//             [--site-chrome <file>] [--app <dir>]
+ //       renders every <dir>/**/*.oui into <out>/<path>/index.html with the context the file
+ //       holds, and its social card into <out>/cards/ (tools/cards.mjs), with a card for the page
+ //       of each library of the context's catalogue, which b2 site takes from the libraries'
+@@ -18,7 +18,10 @@
+ //       bundle into <out>/assets/. With --chrome, it also writes into <file> the header the
+ //       libraries' light pages show (renderFragment's `docs-header`), and with --site-chrome the
+ //       header of a page of the site's own style it does not render (`site-header`), each with
+-//       its links from the site's root, which tools/ci/assemble.py rebases for each page it heads;
++//       its links from the site's root, which tools/ci/assemble.py rebases for each page it heads.
++//       With --app, it also copies the site's wasm, <dir>'s site-app.mjs and site-app.wasm, which b2
++//       builds with emscripten (app/Jamfile), into <out>/assets/app/, beside the client bundle that
++//       loads it (src/machine.ts);
+ //   build.mjs --index <site> --base <url> --catalogue <libraries.json> --channel <preview|release>
+ //             [--superproject <dir>]
+ //       writes the files that index a site laid out whole, robots.txt, llms.txt, libraries.json
+@@ -37,7 +40,7 @@
+ // key, so no reader's browser and no build can reach them.
+ 
+ import {execFileSync} from 'node:child_process'
+-import {cp, mkdir, readdir, readFile, rename, writeFile} from 'node:fs/promises'
++import {copyFile, cp, mkdir, readdir, readFile, rename, writeFile} from 'node:fs/promises'
+ import {dirname, join, relative, resolve} from 'node:path'
+ import {fileURLToPath, pathToFileURL} from 'node:url'
+ import {parseArgs} from 'node:util'
+@@ -145,7 +148,23 @@ function pathOf(page) {
+     return name === 'index' ? '' : name.replace(/\/index$/, '') + '/'
+ }
+ 
+-async function render({pages, out, context: contextFile, chrome, 'site-chrome': siteChrome}) {
++/** The site's wasm, which `--app` names, copied into `<out>/assets/app/`; a missing file stops the build. */
++async function copyApp(app, out) {
++    await mkdir(join(out, 'assets/app'), {recursive: true})
++    for (const file of ['site-app.mjs', 'site-app.wasm']) {
++        try {
++            await copyFile(join(app, file), join(out, 'assets/app', file))
++        } catch (error) {
++            if (error.code === 'ENOENT') {
++                console.error(`build.mjs: --app: ${join(app, file)} is not there: b2 /webcpp/site/app//wasm builds it`)
++                process.exit(1)
++            }
++            throw error
++        }
++    }
++}
++
++async function render({pages, out, context: contextFile, chrome, 'site-chrome': siteChrome, app}) {
+     const {renderPage, renderFragment, pageTitle, cardPath, PageError} = await import(pathToFileURL(join(site, 'build/server.mjs')).href)
+     const context = JSON.parse(await readFile(contextFile, 'utf8'))
+     const cards = []
+@@ -175,6 +194,9 @@ async function render({pages, out, context: contextFile, chrome, 'site-chrome':
+     await writeIcons(out)
+     await cp(join(site, 'assets'), join(out, 'assets'), {recursive: true})
+     await cp(join(site, 'build/client/site.js'), join(out, 'assets/site.js'))
++    if (app) {
++        await copyApp(app, out)
++    }
+     for (const [file, fragment] of [[chrome, 'docs-header'], [siteChrome, 'site-header']]) {
+         if (file) {
+             await mkdir(dirname(resolve(file)), {recursive: true})
+@@ -201,6 +223,7 @@ const {values} = parseArgs({
+         context: {type: 'string'},
+         chrome: {type: 'string'},
+         'site-chrome': {type: 'string'},
++        app: {type: 'string'},
+         index: {type: 'string'},
+         base: {type: 'string'},
+         catalogue: {type: 'string'},
+@@ -209,7 +232,7 @@ const {values} = parseArgs({
+     },
+ })
+ if (!values.bundle && !values.render && !values.index) {
+-    console.error('usage: build.mjs [--bundle] [--render --pages <dir> --out <dir> --context <file.json> [--chrome <file>] [--site-chrome <file>]]\n' +
++    console.error('usage: build.mjs [--bundle] [--render --pages <dir> --out <dir> --context <file.json> [--chrome <file>] [--site-chrome <file>] [--app <dir>]]\n' +
+         '                 [--index <site> --base <url> --catalogue <libraries.json> --channel <preview|release> [--superproject <dir>]]')
+     process.exit(2)
+ }
+-- 
+2.55.0
+

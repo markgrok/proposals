@@ -1,0 +1,714 @@
+From f3a05e65421caf8cc74ca175eac9ddc4f451d51e Mon Sep 17 00:00:00 2001
+From: R <github.overboard312@passmail.net>
+Date: Sun, 11 Oct 2026 18:46:42 -0400
+Subject: [PATCH 7/7] The trace is silent until the loader listens: an untraced
+ page pays one branch per scope
+
+---
+ Jamfile                         |   8 +-
+ app/Jamfile                     |   5 ++
+ app/test/trace_enabled_test.cpp | 126 ++++++++++++++++++++++++++++++++
+ app/trace.cpp                   |  16 +++-
+ include/webcpp_site/trace.hpp   |  44 +++++++++--
+ src/sound.ts                    |  47 +++++++++---
+ src/trace.ts                    |  47 ++++++++++--
+ test/sound_test.mjs             |  66 +++++++++++++++--
+ test/trace_test.mjs             |  54 +++++++++++++-
+ test/wasm/trace.mjs             |  34 ++++++++-
+ 10 files changed, 406 insertions(+), 41 deletions(-)
+ create mode 100644 app/test/trace_enabled_test.cpp
+
+diff --git a/Jamfile b/Jamfile
+index 8abd87a..83f2cb9 100644
+--- a/Jamfile
++++ b/Jamfile
+@@ -79,11 +79,13 @@ actions pages
+ # test/**/*_test.mjs, none of which needs the C++ build; its npm test:wasm,
+ # test/wasm/*.mjs, which runs the site's wasm, built and copied into build/app/
+ # first; its typecheck; and the native tests of app/: machine_host's, on the
+-# player's machine and on the install flow's, and the trace's, which proves its
+-# scope nothing outside the site's build. b2 /webcpp/site//test.
++# player's machine and on the install flow's, and the trace's two: its scope
++# nothing outside the site's build, and silent inside it while nothing
++# listens. b2 /webcpp/site//test.
+ notfile test : @test
+   : : <dependency>node-modules <dependency>app//wasm <dependency>app//site_app_test
+-    <dependency>app//install_test <dependency>app//trace_test <webcpp-boost-check>off ;
++    <dependency>app//install_test <dependency>app//trace_test
++    <dependency>app//trace_enabled_test <webcpp-boost-check>off ;
+ 
+ rule test ( targets * : sources * : properties * )
+ {
+diff --git a/app/Jamfile b/app/Jamfile
+index d249fe3..2ad4fe1 100644
+--- a/app/Jamfile
++++ b/app/Jamfile
+@@ -12,6 +12,9 @@
+ #   install_test   machine_host on the install flow's machine, natively;
+ #   trace_test     the trace's scope outside the site's build, natively: no
+ #                  token at all;
++#   trace_enabled_test  the trace's scope as the site's build compiles it,
++#                  natively, the import recording its calls: none while
++#                  nothing listens;
+ #   site-app       the wasm, on emscripten alone: site-app.js and, beside
+ #                  it, site-app.wasm, which em++ writes and b2 does not know;
+ #   wasm           site-app built with emscripten in release, whatever the
+@@ -53,6 +56,8 @@ run test/site_app_test.cpp site_app.cpp : : ../machines/player.json
+ run test/install_test.cpp site_app.cpp : : ../machines/install.json
+   : <conditional>@native-only : install_test ;
+ run test/trace_test.cpp : : : <conditional>@native-only : trace_test ;
++run test/trace_enabled_test.cpp : : : <conditional>@native-only <define>WEBCPP_SITE_TRACE
++  : trace_enabled_test ;
+ 
+ # Built with WEBCPP_SITE_TRACE, so that the scopes the C++ marks reach the
+ # trace (include/webcpp_site/trace.hpp), through the import trace.cpp defines.
+diff --git a/app/test/trace_enabled_test.cpp b/app/test/trace_enabled_test.cpp
+new file mode 100644
+index 0000000..59a9d1d
+--- /dev/null
++++ b/app/test/trace_enabled_test.cpp
+@@ -0,0 +1,126 @@
++// Copyright (c) 2026 WebCpp.org
++//
++// Distributed under the Boost Software License, Version 1.0. (See
++// accompanying file LICENSE_1_0.txt or copy at
++// https://www.boost.org/LICENSE_1_0.txt)
++
++/**
++ Tests WEBCPP_SITE_TRACE_SCOPE as the site's build compiles it, natively, with
++ the import webcpp_site_trace defined here to record its calls: while nothing
++ listens, a scope calls no import and builds no argument; once the loader
++ listens, it sends cpp_enter with its name, file, line and arguments, and
++ cpp_exit, even when the listening stops in between.
++*/
++
++#include <webcpp_site/trace.hpp>
++
++#include <boost/core/lightweight_test.hpp>
++#include <boost/json/value.hpp>
++#include <boost/json/value_from.hpp>
++
++#include <algorithm>
++#include <array>
++#include <cstddef>
++#include <string_view>
++
++#ifndef WEBCPP_SITE_TRACE
++#error "trace_enabled_test checks the trace as the site's build compiles it, with WEBCPP_SITE_TRACE"
++#endif
++
++namespace {
++
++/** One call of the import; args holds the first bytes of its args_json. */
++struct trace_call {
++    int kind{};
++    std::string_view name;
++    std::string_view file;
++    int line{};
++    std::array<char, 32> args{};
++    std::size_t args_size{};
++
++    [[nodiscard]] std::string_view args_json() const { return {args.data(), args_size}; }
++};
++
++/**
++ The import's calls: the first ones, and how many there were.
++ Tip: fixed buffers, since a container grown in the import is a throw clang-tidy finds reaching
++ main through the scope; and at namespace scope, since the import is a C function.
++*/
++struct recorder {
++    std::array<trace_call, 4> calls{};
++    std::size_t count{};
++};
++
++recorder recorded;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
++
++/** An argument that counts in builds each time the trace converts it to JSON. */
++struct counted {
++    int* builds;
++};
++
++void tag_invoke(boost::json::value_from_tag /*tag*/, boost::json::value& json,
++                const counted& value) {
++    ++*value.builds;
++    json = *value.builds;
++}
++
++/** A scope with one counted argument, at the line it returns. */
++int traced(int& builds) {
++    WEBCPP_SITE_TRACE_SCOPE("traced", counted{&builds}, "two");
++    return __LINE__ - 1;
++}
++
++}  // namespace
++
++extern "C" void webcpp_site_trace(int kind, const char* name, const char* file, int line,
++                                  const char* args_json) {
++    if (recorded.count < recorded.calls.size()) {
++        trace_call& call = recorded.calls[recorded.count];
++        const std::string_view args(args_json);
++        call.kind = kind;
++        call.name = name;
++        call.file = file;
++        call.line = line;
++        call.args_size = std::min(args.size(), call.args.size());
++        std::copy_n(args.begin(), call.args_size, call.args.begin());
++    }
++    ++recorded.count;
++}
++
++int main() {
++    int builds = 0;
++    traced(builds);
++    BOOST_TEST_EQ(recorded.count, 0U);
++    BOOST_TEST_EQ(builds, 0);
++
++    webcpp_site::detail::trace_listening = true;
++    const int line = traced(builds);
++    BOOST_TEST_EQ(builds, 1);
++    BOOST_TEST_EQ(recorded.count, 2U);
++    const trace_call& enter = recorded.calls[0];
++    BOOST_TEST_EQ(enter.kind, webcpp_site::detail::trace_enter);
++    BOOST_TEST_EQ(enter.name, "traced");
++    BOOST_TEST_EQ(enter.file, "trace_enabled_test.cpp");
++    BOOST_TEST_EQ(enter.line, line);
++    BOOST_TEST_EQ(enter.args_json(), R"([1,"two"])");
++    const trace_call& exit = recorded.calls[1];
++    BOOST_TEST_EQ(exit.kind, webcpp_site::detail::trace_exit);
++    BOOST_TEST_EQ(exit.name, "traced");
++
++    recorded = recorder{};
++    {
++        WEBCPP_SITE_TRACE_SCOPE("balanced");
++        webcpp_site::detail::trace_listening = false;
++    }
++    BOOST_TEST_EQ(recorded.count, 2U);
++    BOOST_TEST_EQ(recorded.calls[1].kind, webcpp_site::detail::trace_exit);
++
++    recorded = recorder{};
++    {
++        WEBCPP_SITE_TRACE_SCOPE("unheard");
++        webcpp_site::detail::trace_listening = true;
++    }
++    BOOST_TEST_EQ(recorded.count, 0U);
++    webcpp_site::detail::trace_listening = false;
++    return boost::report_errors();
++}
+diff --git a/app/trace.cpp b/app/trace.cpp
+index ff42084..b1e59b3 100644
+--- a/app/trace.cpp
++++ b/app/trace.cpp
+@@ -6,15 +6,17 @@
+ 
+ /**
+  The trace's import, webcpp_site_trace, which include/webcpp_site/trace.hpp
+- declares: one definition per wasm, in this file alone, since EM_JS defines a
+- symbol. It hands each event to the function webcpp_site_trace of the module's
+- option webcppSiteImports, which src/trace.ts's loadTraced installs, and does
+- nothing when the module was loaded without it.
++ declares, and the export that turns the trace on: one definition per wasm, in
++ this file alone, since EM_JS defines a symbol. The import hands each event to
++ the function webcpp_site_trace of the module's option webcppSiteImports,
++ which src/trace.ts's loadTraced installs; it is called only once the loader
++ has called webcpp_site_trace_listen.
+ */
+ 
+ #include <webcpp_site/trace.hpp>
+ 
+ #include <emscripten/em_js.h>
++#include <emscripten/em_macros.h>
+ 
+ // clang-format off
+ EM_JS(void, webcpp_site_trace,
+@@ -25,4 +27,10 @@ EM_JS(void, webcpp_site_trace,
+         trace(kind, UTF8ToString(name), UTF8ToString(file), line, UTF8ToString(args_json));
+     }
+ });
++EM_JS_DEPS(webcpp_site_trace_deps, "$UTF8ToString");
+ // clang-format on
++
++/** Turns the trace on (on != 0) or off; Module._webcpp_site_trace_listen in JavaScript. */
++extern "C" EMSCRIPTEN_KEEPALIVE void webcpp_site_trace_listen(int on) {
++    webcpp_site::detail::trace_listening = on != 0;
++}
+diff --git a/include/webcpp_site/trace.hpp b/include/webcpp_site/trace.hpp
+index 598e5db..7fea79b 100644
+--- a/include/webcpp_site/trace.hpp
++++ b/include/webcpp_site/trace.hpp
+@@ -9,8 +9,10 @@
+  site's visualizer shows. Inside the site's build, which defines
+  WEBCPP_SITE_TRACE, the scope sends cpp_enter with its name, file, line and
+  arguments as JSON when it starts, and cpp_exit when it ends, through the one
+- JavaScript import webcpp_site_trace (app/trace.cpp); elsewhere the macro
+- expands to no token at all, and its arguments are never evaluated.
++ JavaScript import webcpp_site_trace (app/trace.cpp), but only while the
++ loader listens: until then a scope costs one branch, no JSON and no import
++ call. Elsewhere the macro expands to no token at all, and its arguments are
++ never evaluated.
+ */
+ #ifndef WEBCPP_SITE_TRACE_HPP
+ #define WEBCPP_SITE_TRACE_HPP
+@@ -21,10 +23,17 @@
+ #include <boost/json/serialize.hpp>
+ #include <boost/json/value_from.hpp>
+ 
+-#include <emscripten/em_macros.h>
+-
+ #include <string>
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten/em_macros.h>
++#define WEBCPP_SITE_TRACE_IMPORT EM_IMPORT(webcpp_site_trace)
++#else
++// A native program built with WEBCPP_SITE_TRACE, such as the trace's own test,
++// defines the import itself.
++#define WEBCPP_SITE_TRACE_IMPORT
++#endif
++
+ /**
+  The trace's import: kind 0 is cpp_enter and 1 cpp_exit; args_json is a JSON
+  array, "" for cpp_exit.
+@@ -32,13 +41,21 @@
+  name and file are literals.
+ */
+ extern "C" void webcpp_site_trace(int kind, const char* name, const char* file, int line,
+-                                  const char* args_json) EM_IMPORT(webcpp_site_trace);
++                                  const char* args_json) WEBCPP_SITE_TRACE_IMPORT;
+ 
+ namespace webcpp_site::detail {
+ 
+ inline constexpr int trace_enter = 0;
+ inline constexpr int trace_exit = 1;
+ 
++/**
++ Whether the loader listens to the trace, which src/trace.ts's loadTraced
++ turns on through the export webcpp_site_trace_listen (app/trace.cpp).
++ Tip: one flag per wasm, read by every scope before it builds anything, so
++ that a page loaded without the trace pays one branch per scope.
++*/
++inline bool trace_listening = false;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
++
+ /** The arguments as a JSON array, each converted by Boost.JSON's value_from. */
+ template <class... Args>
+ std::string trace_arguments(const Args&... args) {
+@@ -48,12 +65,18 @@ std::string trace_arguments(const Args&... args) {
+     return boost::json::serialize(array);
+ }
+ 
+-/** Sends cpp_enter when constructed and cpp_exit when destroyed. */
++/**
++ Sends cpp_enter when constructed and cpp_exit when destroyed, both or neither:
++ whether the loader listens is read once, when the scope starts.
++*/
+ class scope {
+ public:
+     template <class... Args>
+     scope(const char* name, const char* file, int line, const Args&... args)
+-        : name_(name), file_(file), line_(line) {
++        : name_(name), file_(file), line_(line), sent_(trace_listening) {
++        if (!sent_) {
++            return;
++        }
+         const std::string json = trace_arguments(args...);
+         webcpp_site_trace(trace_enter, name_, file_, line_, json.c_str());
+     }
+@@ -63,12 +86,17 @@ public:
+     scope& operator=(const scope&) = delete;
+     scope& operator=(scope&&) = delete;
+ 
+-    ~scope() { webcpp_site_trace(trace_exit, name_, file_, line_, ""); }
++    ~scope() {
++        if (sent_) {
++            webcpp_site_trace(trace_exit, name_, file_, line_, "");
++        }
++    }
+ 
+ private:
+     const char* name_;
+     const char* file_;
+     int line_;
++    bool sent_;
+ };
+ 
+ }  // namespace webcpp_site::detail
+diff --git a/src/sound.ts b/src/sound.ts
+index f865ddc..b4494f5 100644
+--- a/src/sound.ts
++++ b/src/sound.ts
+@@ -50,14 +50,36 @@ export type Sound = {
+ 
+ type AudioContextClass = new () => AudioContext
+ 
++/** The events by which a page counts as activated by its reader, as the HTML standard lists them. */
++const activatingEvents = ['keydown', 'mousedown', 'pointerup', 'touchend']
++
+ /**
+- * Whether the reader has made a gesture on the page. A browser that cannot say (no userActivation)
+- * leaves it to its own autoplay policy, which keeps a context suspended until a gesture resumes it.
++ * Whether the reader has made a gesture on the page, from now on: navigator.userActivation where
++ * the browser has it, else the first activating event the page's document sees, which a browser
++ * without either never has.
+  */
+-function hasGesture(): boolean {
++function gestures(): () => boolean {
+     const activation = (globalThis.navigator as {userActivation?: {hasBeenActive: boolean}} | undefined)
+         ?.userActivation
+-    return activation === undefined || activation.hasBeenActive
++    if (activation !== undefined) {
++        return () => activation.hasBeenActive
++    }
++    const document = (globalThis as {document?: EventTarget}).document
++    if (document === undefined) {
++        return () => false
++    }
++    let seen = false
++    const options = {capture: true}
++    const seenNow = () => {
++        seen = true
++        for (const type of activatingEvents) {
++            document.removeEventListener(type, seenNow, options)
++        }
++    }
++    for (const type of activatingEvents) {
++        document.addEventListener(type, seenNow, options)
++    }
++    return () => seen
+ }
+ 
+ function readMuted(): boolean {
+@@ -109,11 +131,13 @@ function schedule(context: AudioContext, tone: Tone): void {
+ 
+ /**
+  * The player's sound, unmuted unless the reader muted it before. Its AudioContext is created on
+- * the first play after the reader's first gesture, and resumed when the browser has suspended it.
++ * the first play after the reader's first gesture, and resumed when the browser has suspended it;
++ * a tone is scheduled only while it runs.
+  */
+ export function createSound(): Sound {
+     let muted = readMuted()
+     let context: AudioContext | null = null
++    const hasGesture = gestures()
+     return {
+         play(kind) {
+             if (muted || !hasGesture()) {
+@@ -124,10 +148,15 @@ export function createSound(): Sound {
+                 return
+             }
+             try {
+-                if (context.state === 'suspended') {
+-                    context.resume().catch(() => {
+-                        // Still suspended: the next play, after a gesture, asks again.
+-                    })
++                // Tones scheduled on a suspended clock, which stands still, would all start at
++                // once when it resumes: while it is not running, play only asks it to.
++                if (context.state !== 'running') {
++                    if (context.state === 'suspended') {
++                        context.resume().catch(() => {
++                            // Still suspended: a later play asks again.
++                        })
++                    }
++                    return
+                 }
+                 schedule(context, tones[kind])
+             } catch {
+diff --git a/src/trace.ts b/src/trace.ts
+index 8317e4b..3b09a57 100644
+--- a/src/trace.ts
++++ b/src/trace.ts
+@@ -27,11 +27,31 @@ const traceChannel = 'webcpp_site_trace'
+ /** What the program writes, stdout and stderr alike. */
+ const logChannel = 'webcpp_site_log'
+ 
+-/** A sink whose events are numbered in the order they reach it, from 0. */
++/**
++ * A sink whose events are numbered in the order they reach it, from 0.
++ * Tip: a sink that throws loses its event and nothing else; its error is reported where the
++ * platform can (reportError), since a throw would cross the wasm's frames, which it compiles
++ * without exceptions, and leave its open scopes without their cpp_exit.
++ */
+ function numbered(sink: (event: TraceEvent) => void): Emit {
+     let next = 0
+     return event => {
+-        sink({...event, seq: next++} as TraceEvent)
++        try {
++            sink({...event, seq: next++} as TraceEvent)
++        } catch (error) {
++            (globalThis as {reportError?: (error: unknown) => void}).reportError?.(error)
++        }
++    }
++}
++
++/**
++ * Turns on the trace of a module that has one, the site's wasm (app/trace.cpp's
++ * webcpp_site_trace_listen), whose scopes call nothing until then.
++ */
++function listen(module: object): void {
++    const turnOn: unknown = (module as {_webcpp_site_trace_listen?: unknown})._webcpp_site_trace_listen
++    if (typeof turnOn === 'function') {
++        turnOn.call(module, 1)
+     }
+ }
+ 
+@@ -173,12 +193,21 @@ class Wrappers {
+     }
+ }
+ 
++/** The caller's own functions of each imports traced, before the trace replaced them. */
++const untraced = new WeakMap<Record<string, Function>, Record<string, Function>>()
++
+ /**
+- * Traces imports in place: each function already there becomes a wasm_to_js crossing, and the two
+- * channels of the trace's own are added, the C++ scopes' and the program's output.
++ * Traces imports in place: each function of the caller's becomes a wasm_to_js crossing, and the
++ * two channels of the trace's own are added, the C++ scopes' and the program's output. Imports
++ * traced again are traced from the caller's functions, for the new emit alone.
+  */
+ function traceImports(imports: Record<string, Function>, emit: Emit): void {
+-    for (const [name, fn] of Object.entries(imports)) {
++    let originals = untraced.get(imports)
++    if (originals === undefined) {
++        originals = {...imports}
++        untraced.set(imports, originals)
++    }
++    for (const [name, fn] of Object.entries(originals)) {
+         imports[name] = (...args: unknown[]) => crossing(emit, 'wasm_to_js', name, args, () => fn(...args))
+     }
+     imports[traceChannel] = (kind: number, name: string, file: string, line: number, args: string) => {
+@@ -198,19 +227,22 @@ function traceImports(imports: Record<string, Function>, emit: Emit): void {
+  * object one of them returns, is a js_to_wasm crossing; each call the module makes into imports, a
+  * wasm_to_js crossing; each followed by its return, whose result is `{error: message}` for a throw,
+  * which is rethrown. imports is changed in place, so the module, which reads it as it calls, calls
+- * the traced functions, and gains the channels app/trace.cpp and the program's output use.
++ * the traced functions, and gains the channels app/trace.cpp and the program's output use; a
++ * module with a trace of its own, the site's wasm, has it turned on.
+  */
+ export function traced<M extends object>(module: M, imports: Record<string, Function>,
+                                          sink: (e: TraceEvent) => void): M {
+     const emit = numbered(sink)
+     traceImports(imports, emit)
++    listen(module)
+     return new Wrappers(emit).root(module)
+ }
+ 
+ /**
+  * The emscripten module at url (MODULARIZE, EXPORT_ES6), instantiated and traced: its imports, the
+  * module option webcppSiteImports that app/trace.cpp reads, are traced before the module starts,
+- * and what the program writes is a log event, in one stream with every other.
++ * what the program writes is a log event, in one stream with every other, and the module's own
++ * trace is turned on once it starts.
+  */
+ export async function loadTraced<M extends object>(url: string, sink: (e: TraceEvent) => void,
+                                                    imports: Record<string, Function> = {}): Promise<M> {
+@@ -221,5 +253,6 @@ export async function loadTraced<M extends object>(url: string, sink: (e: TraceE
+     }
+     const factory = (await import(url)) as {default: (options: object) => Promise<M>}
+     const module = await factory.default({webcppSiteImports: imports, print: log, printErr: log})
++    listen(module)
+     return new Wrappers(emit).root(module)
+ }
+diff --git a/test/sound_test.mjs b/test/sound_test.mjs
+index fbb5466..592a8f8 100644
+--- a/test/sound_test.mjs
++++ b/test/sound_test.mjs
+@@ -187,20 +187,74 @@ test('no sound before the reader has made a gesture: the AudioContext is created
+         assert.equal(audio.contexts.length, 1)
+         assert.equal(audio.contexts[0].oscillators.length, 1)
+     })
+-    const older = fakeAudio()
+-    await withGlobals({...page(older), navigator: {value: {}}}, () => {
++})
++
++/** A document whose listeners are recorded, and fire(type) dispatches an event of type to them. */
++function fakeDocument() {
++    const listeners = []
++    return {
++        listeners,
++        addEventListener(type, listener, options) {
++            listeners.push({type, listener, options})
++        },
++        removeEventListener(type, listener) {
++            const index = listeners.findIndex(entry => entry.type === type && entry.listener === listener)
++            if (index >= 0) {
++                listeners.splice(index, 1)
++            }
++        },
++        fire(type) {
++            for (const {listener} of listeners.filter(entry => entry.type === type)) {
++                listener({type})
++            }
++        },
++    }
++}
++
++test('without userActivation, the first activating event on the page stands for the gesture', async () => {
++    const audio = fakeAudio()
++    const document = fakeDocument()
++    await withGlobals({...page(audio), navigator: {value: {}}, document: {value: document}}, () => {
++        const sound = createSound()
++        sound.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 0, 'no AudioContext before a gesture')
++        assert.ok(document.listeners.every(entry => entry.options?.capture === true))
++        document.fire('mousemove')
++        sound.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 0, 'a move is no gesture')
++        document.fire('keydown')
++        assert.deepEqual(document.listeners, [], 'every listener removed once the gesture is seen')
++        sound.play('js_to_wasm')
++        assert.equal(audio.contexts.length, 1)
++    })
++    const silent = fakeAudio()
++    await withGlobals({...page(silent), navigator: {value: {}}, document: {value: undefined}}, () => {
+         createSound().play('js_to_wasm')
+-        assert.equal(older.contexts.length, 1, "without userActivation, the browser's own policy decides")
++        assert.equal(silent.contexts.length, 0, 'no page, no gesture, no sound')
+     })
+ })
+ 
+-test('a suspended AudioContext is resumed, and a refused resume throws nothing', async () => {
+-    const audio = fakeAudio({state: 'suspended', resume: () => Promise.reject(new Error('not allowed'))})
++test('a suspended AudioContext is resumed, and nothing is scheduled until it runs', async () => {
++    let resumes = 0
++    const audio = fakeAudio({
++        state: 'suspended',
++        resume: () => {
++            resumes += 1
++            return Promise.reject(new Error('not allowed'))
++        },
++    })
+     await withGlobals(page(audio), async () => {
+         const sound = createSound()
+         sound.play('return')
+-        assert.equal(audio.contexts[0].resumed, 1)
++        sound.play('return')
++        assert.equal(resumes, 2)
++        const [context] = audio.contexts
++        assert.equal(context.oscillators.length, 0, 'tones held back while suspended would all start at once')
+         await new Promise(setImmediate)
++        context.state = 'running'
++        sound.play('return')
++        assert.equal(context.oscillators.length, 1)
++        assert.equal(resumes, 2, 'a running context is not resumed')
+     })
+ })
+ 
+diff --git a/test/trace_test.mjs b/test/trace_test.mjs
+index 1d951c5..1408d24 100644
+--- a/test/trace_test.mjs
++++ b/test/trace_test.mjs
+@@ -7,8 +7,8 @@
+ // src/trace.ts without the site's wasm: traced over fake modules, whose exports and imports stand
+ // for the wasm's. Each call across is recorded in order, with its arguments and its result, a throw
+ // as the error it carries; the C++ scopes and the program's output arrive through the channels
+-// traced adds to the imports; and what the module answers is never changed. test/wasm/trace.mjs
+-// runs the same on the wasm itself.
++// traced adds to the imports; and what the module answers is never changed, by a second trace of
++// the same imports or by a sink that throws. test/wasm/trace.mjs runs the same on the wasm itself.
+ 
+ import assert from 'node:assert/strict'
+ import test from 'node:test'
+@@ -147,3 +147,53 @@ test("loadTraced instantiates a module with traced's channels and its output as
+     ])
+     assert.deepEqual(events.map(event => event.seq), [0, 1, 2, 3, 4, 5])
+ })
++
++test('the same imports traced twice are traced once, for the latest sink', () => {
++    const first = recorder()
++    const second = recorder()
++    const imports = {now: () => 42}
++    traced({}, imports, first.sink)
++    const module = traced({stamp: () => imports.now()}, imports, second.sink)
++    assert.equal(module.stamp(), 42)
++    assert.deepEqual(first.events, [])
++    assert.deepEqual(unsequenced(second.events).map(event => [event.kind, event.name]), [
++        ['js_to_wasm', 'stamp'], ['wasm_to_js', 'now'], ['return', 'now'], ['return', 'stamp'],
++    ])
++    imports.webcpp_site_trace(0, 'scope', 'a.cpp', 1, '[]')
++    assert.deepEqual(first.events, [], "the first trace's channels are gone too")
++    assert.equal(second.events.at(-1).kind, 'cpp_enter')
++})
++
++test('a sink that throws changes nothing the module answers, and the next events still reach it', () => {
++    const events = []
++    let refusals = 0
++    const sink = event => {
++        if (event.kind === 'js_to_wasm' && refusals === 0) {
++            refusals += 1
++            throw new Error('the view is gone')
++        }
++        events.push(event)
++    }
++    const module = traced({add: (a, b) => a + b}, {}, sink)
++    assert.equal(module.add(1, 2), 3)
++    assert.equal(module.add(2, 3), 5)
++    assert.deepEqual(events.map(event => [event.seq, event.kind]), [
++        [1, 'return'], [2, 'js_to_wasm'], [3, 'return'],
++    ])
++})
++
++test("traced and loadTraced turn on the trace of a module that has one, outside the stream", async () => {
++    const {events, sink} = recorder()
++    const listened = []
++    const module = traced({_webcpp_site_trace_listen: on => listened.push(on)}, {}, sink)
++    assert.deepEqual(listened, [1])
++    assert.equal(typeof module._webcpp_site_trace_listen, 'function')
++    assert.deepEqual(events, [])
++
++    const source = `export default async function factory(options) {
++        return {listened: [], _webcpp_site_trace_listen(on) { this.listened.push(on) }}
++    }`
++    const loaded = await loadTraced(`data:text/javascript,${encodeURIComponent(source)}`, sink)
++    assert.deepEqual(loaded.listened, [1])
++    assert.deepEqual(events, [])
++})
+diff --git a/test/wasm/trace.mjs b/test/wasm/trace.mjs
+index 6aa29ca..0d94329 100644
+--- a/test/wasm/trace.mjs
++++ b/test/wasm/trace.mjs
+@@ -7,8 +7,9 @@
+ // The site's wasm, build/app/site-app.mjs, built with WEBCPP_SITE_TRACE, loaded by src/trace.ts's
+ // loadTraced and running the player's machine, machines/player.json: every call across between
+ // JavaScript and the wasm, and every C++ scope app/site_app.cpp marks, arrive as one ordered
+-// stream, each scope with its file, its line and its arguments; and the trace never changes what
+-// the machine answers, nor writes anything when nothing listens.
++// stream, each scope with its file, its line and its arguments, a refused config's scope closed
++// before its Error; and the trace never changes what the machine answers, nor, while nothing
++// listens, calls its import or writes anything.
+ //
+ // The npm script test:wasm runs it, never npm test, which needs no C++ build.
+ 
+@@ -108,3 +109,32 @@ test('the trace never changes what the machine answers, and is silent when nothi
+     }
+     assert.deepEqual(written, [])
+ })
++
++test('a refused config is a scope entered and left, then the return of its Error', async () => {
++    const trace = []
++    const app = await loadTraced(url(), event => trace.push(event))
++    assert.throws(() => app.MachineHost.create('{not json'), /^Error: MachineHost\.create refused the config: /)
++    const [, , , returned] = trace
++    assert.deepEqual(trace.map(({seq, kind, name}) => [seq, kind, name]), [
++        [0, 'js_to_wasm', 'MachineHost.create'],
++        [1, 'cpp_enter', 'machine_host::create'],
++        [2, 'cpp_exit', 'machine_host::create'],
++        [3, 'return', 'MachineHost.create'],
++    ])
++    assert.match(returned.result.error, /^MachineHost\.create refused the config: /)
++})
++
++test('while nothing listens, a scope calls no import; once the loader listens, every scope does', async () => {
++    const factory = (await import(url())).default
++    const calls = []
++    const app = await factory({webcppSiteImports: {webcpp_site_trace: (kind, name) => calls.push([kind, name])}})
++    run(app)
++    assert.deepEqual(calls, [], 'no import call, and so no argument built')
++    app._webcpp_site_trace_listen(1)
++    run(app)
++    const entered = calls.filter(([kind]) => kind === 0).map(([, name]) => name)
++    const left = calls.filter(([kind]) => kind === 1).map(([, name]) => name)
++    assert.deepEqual(entered.toSorted(), left.toSorted(), 'every scope entered is left')
++    assert.deepEqual(entered.filter(name => name.startsWith('machine_host::')),
++        ['machine_host::create', ...events.map(() => 'machine_host::send')])
++})
+-- 
+2.55.0
+
